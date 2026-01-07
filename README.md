@@ -86,6 +86,95 @@ The `configs_json` widget determines your grid. It accepts an array of objects. 
 ```
 *This example generates 8 images (2 samplers × 2 schedulers × 2 steps × 1 cfg).*
 
+
+## Here are some combos you can try!
+
+## 🏆 Group 1: The "Gold Standards" (Reliable Realism)
+
+*Tests the 5 most reliable industry-standard combinations.* 5 samplers x 2 schedulers x 2 step settings x 2 cfgs = 40 images
+
+    [
+      {
+        "sampler": ["dpmpp_2m", "dpmpp_2m_sde", "euler", "uni_pc", "heun"],
+        "scheduler": ["karras", "normal"],
+        "steps": [25, 30],
+        "cfg": [6.0, 7.0],
+        "lora": "None",
+        "str_model": 1.0,
+        "str_clip": 1.0
+      }
+    ]
+    
+
+## 🎨 Group 2: Artistic & Painterly
+
+*Tests 5 creative/soft combinations best for illustration and anime.* 5 samplers x 2 schedulers x 3 step settings x 3 cfgs = 90 images
+
+    [
+      {
+        "sampler": ["euler_ancestral", "dpmpp_sde", "dpmpp_2s_ancestral", "restart", "lms"],
+        "scheduler": ["normal", "karras"],
+        "steps": [20, 30, 40],
+        "cfg": [5.0, 6.0, 7.0],
+        "lora": "None",
+        "str_model": 1.0,
+        "str_clip": 1.0
+      }
+    ]
+    
+
+## ⚡ Group 3: Speed / Turbo / LCM
+
+*Tests 4 ultra-fast configs. (Note: Ensure you are using a Turbo/LCM capable model or LoRA).* 4 samplers x 3 schedulers x 4 step settings x 2 cfgs = 96 images
+
+    [
+      {
+        "sampler": ["lcm", "euler", "dpmpp_sde", "euler_ancestral"],
+        "scheduler": ["simple", "sgm_uniform", "karras"],
+        "steps": [4, 5, 6, 8],
+        "cfg": [1.0, 1.5],
+        "lora": "None",
+        "str_model": 1.0,
+        "str_clip": 1.0
+      }
+    ]
+    
+
+## 🦾 Group 4: Flux & SD3 Specials
+
+*Tests 4 configs specifically tuned for newer Rectified Flow models like Flux and SD3.* 2 samplers x 3 schedulers x 3 step settings x 2 cfgs = 36 images
+
+    [
+      {
+        "sampler": ["euler", "dpmpp_2m"],
+        "scheduler": ["simple", "beta", "normal"],
+        "steps": [20, 25, 30],
+        "cfg": [1.0, 4.5],
+        "lora": "None",
+        "str_model": 1.0,
+        "str_clip": 1.0
+      }
+    ]
+    
+
+## 🧪 Group 5: Experimental & Unique
+
+*Tests 6 weird/niche combinations for discovering unique textures.* 6 samplers x 4 schedulers x 5 step settings x 4 cfgs = 480 images
+
+    [
+      {
+        "sampler": ["dpmpp_3m_sde", "ddim", "ipndm", "heunpp2", "dpm_2_ancestral", "euler"],
+        "scheduler": ["exponential", "normal", "karras", "beta"],
+        "steps": [25, 30, 35, 40, 50],
+        "cfg": [4.5, 6.0, 7.0, 8.0],
+        "lora": "None",
+        "str_model": 1.0,
+        "str_clip": 1.0
+      }
+    ]
+
+    
+
 ### 3. Hybrid Inputs (Optional)
 The Generator node features built-in widgets for Model Selection and Prompts, but also has **Optional Inputs** for flexibility:
 * **Standalone Mode:** Use the dropdown menu to select a checkpoint and type prompts into the text boxes.
