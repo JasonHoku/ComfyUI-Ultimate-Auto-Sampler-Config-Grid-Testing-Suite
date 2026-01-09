@@ -76,6 +76,15 @@ class SamplerGridTester:
             except:
                 return [1.0]
 
+    # --- HELPER: PARSE STRING ARRAYS (PROMPTS) ---
+    def parse_string_input(self, input_str):
+        try:
+            val = json.loads(input_str.strip())
+            if isinstance(val, list):
+                return [str(x) for x in val]
+            return [str(val)]
+        except:
+            return [input_str]
 
     def run_tests(self, ckpt_name, positive_text, negative_text, seed, denoise, vae_batch_size, overwrite_existing, configs_json, resolutions_json, session_name, unique_id, optional_model=None, optional_clip=None, optional_vae=None, optional_positive=None, optional_negative=None, optional_latent=None):
         
@@ -113,56 +122,33 @@ class SamplerGridTester:
             raw_configs = parse_json_with_error(configs_json, "Configs JSON")
             resolutions = parse_json_with_error(resolutions_json, "Resolutions JSON")
             denoise_values = self.parse_float_input(str(denoise))
+            pos_prompts = self.parse_string_input(positive_text)
+            neg_prompts = self.parse_string_input(negative_text)
+
         except Exception as e: 
             raise ValueError(f"{e}")
 
-        # --- LOAD RESOURCES (FIXED LOGIC) ---
-        # 1. Model & Clip: Prioritize Optional, else load Checkpoint
+        # --- LOAD RESOURCES ---
         if optional_model is not None and optional_clip is not None:
             model = optional_model
             clip = optional_clip
             model_name_for_meta = "External Model"
-            # 'vae' is undefined here momentarily if not passed externally
         else:
             ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
             out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
             model, clip, vae = out[:3]
             model_name_for_meta = ckpt_name
 
-        # 2. VAE: Prioritize Optional, else ensure fallback
         if optional_vae is not None:
-            # User plugged in a VAE (Overrides everything)
             vae = optional_vae
         elif 'vae' not in locals():
-            # We are here if: External Model used, but NO External VAE provided.
-            # We must load the VAE from the selected checkpoint as a fallback.
             ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
             out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=False, embedding_directory=folder_paths.get_folder_paths("embeddings"))
             vae = out[2]
-        
-        # 3. Conditioning (Prompts)
-        if optional_positive is not None:
-            positive = optional_positive
-            pos_text_for_meta = "External Conditioning"
-        else:
-            tokens = clip.tokenize(positive_text)
-            cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
-            positive = [[cond, {"pooled_output": pooled}]]
-            pos_text_for_meta = positive_text
-
-        if optional_negative is not None:
-            negative = optional_negative
-            neg_text_for_meta = "External Conditioning"
-        else:
-            tokens = clip.tokenize(negative_text)
-            cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
-            negative = [[cond, {"pooled_output": pooled}]]
-            neg_text_for_meta = negative_text
 
         session_name = re.sub(r'[^\w\-]', '', session_name)
         if not session_name: session_name = "default_session"
         
-        # ... (Rest of the function remains exactly the same) ...
         base_dir = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name)
         img_dir = os.path.join(base_dir, "images")
         os.makedirs(img_dir, exist_ok=True)
@@ -179,8 +165,8 @@ class SamplerGridTester:
 
         existing_data["meta"] = {
             "model": model_name_for_meta,
-            "positive": pos_text_for_meta,
-            "negative": neg_text_for_meta,
+            "positive": "Multiple" if len(pos_prompts) > 1 else pos_prompts[0],
+            "negative": "Multiple" if len(neg_prompts) > 1 else neg_prompts[0],
             "updated": int(time.time())
         }
 
@@ -198,28 +184,36 @@ class SamplerGridTester:
             str_m = to_list(entry.get("str_model", 1.0))
             str_c = to_list(entry.get("str_clip", 1.0))
             
-            for combo in itertools.product(samplers, schedulers, steps_l, cfgs, loras, str_m, str_c, denoise_values):
+            for combo in itertools.product(samplers, schedulers, steps_l, cfgs, loras, str_m, str_c, denoise_values, pos_prompts, neg_prompts):
                 expanded.append({
                     "sampler": combo[0], "scheduler": combo[1], "steps": combo[2],
                     "cfg": combo[3], "lora": combo[4], "str_model": combo[5], "str_clip": combo[6],
-                    "denoise": combo[7]
+                    "denoise": combo[7],
+                    "positive": combo[8],
+                    "negative": combo[9]
                 })
+
+        # --- INTELLIGENT SORTING (OPTIMIZATION) ---
+        # Sort by: 1. LoRA (Expensive), 2. Prompt (Moderate), 3. Sampler/Settings (Cheap)
+        # This groups similar runs together to minimize model patching and text encoding.
+        expanded.sort(key=lambda x: (x['lora'], x['str_model'], x['str_clip'], x['positive'], x['negative']))
 
         print(f"[GridTester] Processing {len(expanded) * len(resolutions)} items...")
 
         cached_lora_key = None
         cached_model, cached_clip = None, None
-        pending_batch = []
         
+        # Condition Cache
+        cached_pos_key, cached_neg_key = None, None
+        cached_positive, cached_negative = None, None
+
+        pending_batch = []
         MATCH_KEYS = ["sampler", "scheduler", "steps", "cfg", "lora", "str_model", "str_clip", "denoise", "seed", "width", "height", "positive", "negative"]
 
         def flush_batch(batch_list):
             if not batch_list: return
             latents_to_decode = torch.cat([x[0] for x in batch_list], dim=0)
-            
-            # --- USE THE CORRECT VAE HERE ---
             decoded = vae.decode(latents_to_decode)
-            
             for i, img_tensor in enumerate(decoded):
                 img_np = 255. * img_tensor.cpu().numpy()
                 img = Image.fromarray(np.clip(img_np, 0, 255).astype(np.uint8))
@@ -250,13 +244,9 @@ class SamplerGridTester:
                         if k == "height": val_conf = h
                         if k == "seed": val_conf = seed
                         
-                        if k == "positive": val_conf = pos_text_for_meta
-                        if k == "negative": val_conf = neg_text_for_meta
-                        
                         if item.get(k) != val_conf:
                             is_match = False
                             break
-                    
                     if is_match:
                         match_index = idx
                         break
@@ -275,12 +265,13 @@ class SamplerGridTester:
                                     os.remove(old_path)
                         except Exception as e:
                             print(f"Error cleaning up old file: {e}")
-                        
                         existing_data["items"].pop(match_index)
 
-                # --- MODEL LOADING ---
+                # --- 1. OPTIMIZED MODEL LOADING ---
                 active_loras = self.parse_lora_definition(conf["lora"], conf["str_model"], conf["str_clip"])
                 current_lora_key = tuple(active_loras)
+                
+                # Only patch model if LoRA config changed
                 if current_lora_key == cached_lora_key and cached_model is not None:
                     curr_model, curr_clip = cached_model, cached_clip
                 else:
@@ -293,6 +284,35 @@ class SamplerGridTester:
                             curr_model, curr_clip = comfy.sd.load_lora_for_models(curr_model, curr_clip, lora_data, lstr_m, lstr_c)
                     cached_lora_key = current_lora_key
                     cached_model, cached_clip = curr_model, curr_clip
+                    # Reset conditioning cache because Clip model changed
+                    cached_positive, cached_negative = None, None 
+
+                # --- 2. OPTIMIZED CONDITIONING ---
+                if optional_positive is not None:
+                    positive = optional_positive
+                else:
+                    # Check cache
+                    if conf["positive"] == cached_pos_key and cached_positive is not None:
+                        positive = cached_positive
+                    else:
+                        tokens = curr_clip.tokenize(conf["positive"])
+                        cond, pooled = curr_clip.encode_from_tokens(tokens, return_pooled=True)
+                        positive = [[cond, {"pooled_output": pooled}]]
+                        cached_positive = positive
+                        cached_pos_key = conf["positive"]
+
+                if optional_negative is not None:
+                    negative = optional_negative
+                else:
+                    # Check cache
+                    if conf["negative"] == cached_neg_key and cached_negative is not None:
+                        negative = cached_negative
+                    else:
+                        tokens = curr_clip.tokenize(conf["negative"])
+                        cond, pooled = curr_clip.encode_from_tokens(tokens, return_pooled=True)
+                        negative = [[cond, {"pooled_output": pooled}]]
+                        cached_negative = negative
+                        cached_neg_key = conf["negative"]
 
                 # --- LATENT SETUP ---
                 if optional_latent is not None:
@@ -316,8 +336,7 @@ class SamplerGridTester:
                 duration = round(time.time() - t0, 3)
                 meta = conf.copy()
                 meta.update({
-                    "width": w, "height": h, "duration": duration, "seed": seed,
-                    "positive": pos_text_for_meta, "negative": neg_text_for_meta
+                    "width": w, "height": h, "duration": duration, "seed": seed
                 })
                 pending_batch.append((result[0]["samples"], meta))
                 
