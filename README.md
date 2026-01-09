@@ -13,7 +13,7 @@ Stop guessing which Sampler, Scheduler, or CFG value works best. This custom nod
 ## 🌟 Key Features
 
 ### 🚀 Powerful Grid Generation
-* **Cartesian Product Engine:** Automatically generates every permutation of your input settings. Test 2 Samplers × 3 Schedulers × 2 CFG scales in one go.
+* **Cartesian Product Engine:** Automatically generates every permutation of your input settings. Test unlimited Samplers, Schedulers,  CFG scales, Sizes, Prompts, Lora combinations all in one go.
 * **Smart Caching:** Intelligently skips model and LoRA reloading when consecutive runs share the same resources, making generation instant for parameter tweaks.
 * **VAE Batching:** Includes a `vae_batch_size` input to batch decode images, significantly speeding up large grid runs.
 
@@ -28,6 +28,7 @@ Stop guessing which Sampler, Scheduler, or CFG value works best. This custom nod
 * **Instant Tweak:** Adjust CFG, Steps, or Sampler for *just that specific image*.
 * **Generate New:** A "GENERATE NEW" button queues the new variation immediately without needing to disconnect wires or change the main batch.
 * **Similarity Reel:** The revision modal shows a side-scrolling reel of all other images that share the same seed, allowing for perfect A/B comparison.
+* **Multiple Prompts** Use an array to run multiple promps in one run without re-running your entire workflow: ["picture of a forrest", "mountains at night", "masterpiece, painting of dog"]
 
 ### 🧹 Curation & JSON Export
 * **Rejection System:** Click the red **"✕"** on bad generations to hide them.
