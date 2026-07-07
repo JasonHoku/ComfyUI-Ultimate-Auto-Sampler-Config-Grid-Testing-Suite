@@ -41,7 +41,7 @@ const LS_CACHE_KEY = "uscg_model_cache";
 const LS_COUNTS_KEY = "uscg_model_counts";
 // Bump this whenever the cache shape changes (new field added, structure tweaked).
 // Mismatched versions force a fresh fetch instead of restoring incomplete data.
-const LS_CACHE_VERSION = 2;
+const LS_CACHE_VERSION = 3;
 
 function _saveToLocalStorage() {
     try {
@@ -677,18 +677,29 @@ export function convertConfigsToConfigArrays(configs) {
             }
         });
 
-        let models = config.model;
+        // Accept both schemas:
+        // 1) runtime configs_json: model + model_type
+        // 2) builder-save schema: models[] entries (string or {path, type})
+        let models = config.models !== undefined ? config.models : config.model;
         if (!Array.isArray(models)) models = models ? [models] : ["None"];
 
-        // Determine model type from config
+        // Determine model type from config (runtime schema fallback)
         const loadedModelType = config.model_type || "checkpoint";
 
-        // Convert models to object format if non-checkpoint, keep string for checkpoint
-        if (loadedModelType !== "checkpoint") {
-            models = models.map(m => ({ path: normalizePath(m), type: loadedModelType }));
-        } else {
-            models = models.map(normalizePath);
-        }
+        models = models.map((m) => {
+            // Builder schema object entry: preserve explicit per-entry type
+            if (typeof m === "object" && m !== null) {
+                const path = normalizePath(m.path || "None");
+                const type = m.type || loadedModelType || "checkpoint";
+                return type === "checkpoint" ? path : { path, type };
+            }
+
+            // Primitive entry: use runtime model_type convention
+            const normalized = normalizePath(m);
+            return loadedModelType === "checkpoint"
+                ? normalized
+                : { path: normalized, type: loadedModelType };
+        });
 
         // Normalize loaded loras
         loras = loras.map(normalizePath);

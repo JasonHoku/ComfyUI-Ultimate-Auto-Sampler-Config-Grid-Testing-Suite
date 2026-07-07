@@ -320,6 +320,12 @@ class SamplerGridTester:
             if "session_name" in session_settings:
                 session_name = str(session_settings["session_name"])
                 print(f"[GridTester] ⚙️ session_name overridden by Builder UI: {session_name}")
+            if "add_random_seeds_to_gens" in session_settings:
+                try:
+                    add_random_seeds_to_gens = int(session_settings["add_random_seeds_to_gens"])
+                    print(f"[GridTester] ⚙️ add_random_seeds_to_gens overridden by Builder UI: {add_random_seeds_to_gens}")
+                except (TypeError, ValueError):
+                    pass
 
         return run_generation_loop(
             self,

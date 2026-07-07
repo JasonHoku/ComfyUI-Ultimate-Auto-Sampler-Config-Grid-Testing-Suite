@@ -1757,7 +1757,12 @@ def run_generation_loop(
             if job["latent"] is not None:
                 latent_in = {"samples": job["latent"]["samples"].clone()}
             else:
-                latent_in = {"samples": torch.zeros([1, latent_channels, h // 8, w // 8])}
+                latent_in = {
+                    "samples": torch.zeros([1, latent_channels, h // 8, w // 8]),
+                    # Mark the construction ratio so Comfy can remap to models
+                    # whose latent format uses a different spatial compression.
+                    "downscale_ratio_spacial": 8,
+                }
             
             result_latent = None
             try:
@@ -3143,7 +3148,12 @@ def _run_distributed_generation(
             if optional_latent is not None:
                 latent_in = {"samples": optional_latent["samples"].clone()}
             else:
-                latent_in = {"samples": torch.zeros([1, latent_channels, h // 8, w // 8])}
+                latent_in = {
+                    "samples": torch.zeros([1, latent_channels, h // 8, w // 8]),
+                    # Mark the construction ratio so Comfy can remap to models
+                    # whose latent format uses a different spatial compression.
+                    "downscale_ratio_spacial": 8,
+                }
 
             # --- Generate Image ---
             try:

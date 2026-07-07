@@ -3093,8 +3093,11 @@ function renderTextEncodersSection(node, container, configArray, arrayIdx, model
             teRow.appendChild(teBypassLabel);
         }
 
+        const teOptions = (modelLists.textEncoders && modelLists.textEncoders.length > 0)
+            ? modelLists.textEncoders
+            : ["None"];
         const teSearchable = createSearchableSelect(
-            modelLists.textEncoders || ["None"],
+            teOptions,
             te || "None",
             (value) => {
                 node.state.config_arrays[arrayIdx].text_encoders[teIdx] = normalizePath(value);
@@ -6878,6 +6881,7 @@ export function renderRunSettingsSection(node, container) {
     if (node.state.save_conditioning_cache_to_file === undefined) node.state.save_conditioning_cache_to_file = false;
     if (node.state.enable_model_cache === undefined) node.state.enable_model_cache = false;
     if (node.state.vae_batch_size === undefined) node.state.vae_batch_size = 1;
+    if (node.state.add_random_seeds_to_gens === undefined) node.state.add_random_seeds_to_gens = 0;
 
     const section = document.createElement("div");
     section.className = "cb-section full-width";
@@ -7035,6 +7039,8 @@ export function renderRunSettingsSection(node, container) {
         tooltip: "Experimental: intelligent model/LoRA caching with async background preloading. Speeds up generation when switching LoRAs frequently. Loads cached LoRAs from RAM instead of disk. Disable to reduce RAM/VRAM usage." });
     _addRunSetting(content, { stateKey: "vae_batch_size", label: "VAE Batch Size", kind: "int", min: -1, max: 64, defaultValue: 1,
         tooltip: "How many images to encode/decode per VAE pass. Lower = less VRAM. -1 = process all at once. Default: 4." });
+    _addRunSetting(content, { stateKey: "add_random_seeds_to_gens", label: "Additional Random Seeds", kind: "int", min: 0, max: 100, defaultValue: 0,
+        tooltip: "Generate this many extra images per config using additional random seeds. 0 = disabled." });
 
     section.appendChild(header);
     section.appendChild(content);

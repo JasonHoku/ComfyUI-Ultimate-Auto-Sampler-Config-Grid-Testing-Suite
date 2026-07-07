@@ -876,6 +876,10 @@ class UltimateConfigBuilder:
         # session_name moves into session_settings too so the Generator's
         # session_name widget can be removed (Phase 2).
         session_settings["session_name"] = str(state.get("session_name", "my_session"))
+        try:
+            session_settings["add_random_seeds_to_gens"] = int(state.get("add_random_seeds_to_gens", 0))
+        except (TypeError, ValueError):
+            session_settings["add_random_seeds_to_gens"] = 0
 
         if session_settings:
             output_obj["_session_settings"] = session_settings
@@ -1255,7 +1259,10 @@ async def get_model_lists_endpoint(request):
         checkpoints = folder_paths.get_filename_list("checkpoints")
         diffusion_models = folder_paths.get_filename_list("diffusion_models")
         text_encoders = folder_paths.get_filename_list("text_encoders")
-
+        try:
+            clip_models = folder_paths.get_filename_list("clip")
+        except (KeyError, Exception):
+            clip_models = []
         # GGUF lists - may not exist if ComfyUI-GGUF is not installed
         try:
             unet_gguf = folder_paths.get_filename_list("unet_gguf")
@@ -1266,16 +1273,40 @@ async def get_model_lists_endpoint(request):
         except (KeyError, Exception):
             clip_gguf = []
 
-        # CLIPType options (matching ComfyUI's CLIPLoader and DualCLIPLoader)
+        # CLIP type options: prefer ComfyUI runtime node definitions, fallback to known defaults.
         clip_types = [
             "stable_diffusion", "stable_cascade", "sd3", "stable_audio",
-            "mochi", "ltxv", "pixart", "cosmos", "lumina2", "wan",
+            "mochi", "ltxv", "pixart", "cosmos", "lumina2", "krea2", "wan",
             "hidream", "chroma", "ace", "flux", "flux2"
         ]
         dual_clip_types = [
             "sdxl", "sd3", "flux", "flux2", "hunyuan_video", "hidream",
             "hunyuan_image", "hunyuan_video_15"
         ]
+        try:
+            import nodes
+
+            def _extract_type_options(node_name):
+                node_cls = nodes.NODE_CLASS_MAPPINGS.get(node_name)
+                if not node_cls or not hasattr(node_cls, "INPUT_TYPES"):
+                    return None
+                input_types = node_cls.INPUT_TYPES() or {}
+                required = input_types.get("required") or {}
+                type_spec = required.get("type")
+                if isinstance(type_spec, (list, tuple)) and len(type_spec) > 0:
+                    options = type_spec[0]
+                    if isinstance(options, (list, tuple)):
+                        return [str(x) for x in options]
+                return None
+
+            runtime_clip_types = _extract_type_options("CLIPLoader")
+            runtime_dual_clip_types = _extract_type_options("DualCLIPLoader")
+            if runtime_clip_types:
+                clip_types = runtime_clip_types
+            if runtime_dual_clip_types:
+                dual_clip_types = runtime_dual_clip_types
+        except Exception:
+            pass
 
         # Upscale model list
         try:
@@ -1303,6 +1334,7 @@ async def get_model_lists_endpoint(request):
             "diffusion_models": diffusion_models,
             "unet_gguf": unet_gguf,
             "text_encoders": text_encoders,
+            "clip": clip_models,
             "clip_gguf": clip_gguf,
             "clip_types": clip_types,
             "dual_clip_types": dual_clip_types,

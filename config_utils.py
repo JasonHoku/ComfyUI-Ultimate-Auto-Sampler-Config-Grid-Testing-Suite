@@ -412,6 +412,20 @@ def _expand_ltx_entry(entry):
     else:
         input_image_axis = to_list(raw_input_image) if raw_input_image is not None else [None]
 
+    # positive / negative: run through parse_prompt_input_nested so that nested
+    # array syntax from the Config Builder's Cartesian prompt builder is expanded
+    # correctly. Mirrors the same logic used in expand_configs() for the image path.
+    # A plain string passes through unchanged; [["p1", "p2"]] (Config Builder output)
+    # is treated as a flat list of 2 option strings → 2 separate video runs.
+    def _expand_prompt_field(raw):
+        if isinstance(raw, (list, tuple)):
+            result = parse_prompt_input_nested(json.dumps(list(raw)))
+        elif isinstance(raw, str) and raw.strip():
+            result = parse_prompt_input_nested(raw)
+        else:
+            result = [""]
+        return [str(p) for p in result]
+
     # All other fields: simple to_list
     field_axes = {
         "model": to_list(e.get("model", "")),
@@ -433,8 +447,8 @@ def _expand_ltx_entry(entry):
         "img_compression": to_list(e.get("img_compression", 18)),
         "audio_mode": to_list(e.get("audio_mode", "on")),
         "lora": to_list(e.get("lora", "None")),
-        "positive": to_list(e.get("positive", "")),
-        "negative": to_list(e.get("negative", "")),
+        "positive": _expand_prompt_field(e.get("positive", "")),
+        "negative": _expand_prompt_field(e.get("negative", "")),
         "width": to_list(e.get("width", 446)),
         "height": to_list(e.get("height", 576)),
     }

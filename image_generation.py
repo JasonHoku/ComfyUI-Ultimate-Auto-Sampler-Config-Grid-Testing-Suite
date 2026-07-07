@@ -338,7 +338,12 @@ def generate_image(
             # Execute SamplerCustomAdvanced
             latent = latent_input.copy()
             latent_image = latent["samples"]
-            latent_image = comfy.sample.fix_empty_latent_channels(guider.model_patcher, latent_image)
+            latent_image = comfy.sample.fix_empty_latent_channels(
+                guider.model_patcher,
+                latent_image,
+                latent.get("downscale_ratio_spacial", None),
+                latent.get("downscale_ratio_temporal", None),
+            )
             latent["samples"] = latent_image
 
             noise_mask = latent.get("noise_mask")

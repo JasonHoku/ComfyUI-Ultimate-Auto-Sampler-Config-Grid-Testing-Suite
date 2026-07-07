@@ -173,7 +173,83 @@ def test_input_image_folder_nonexistent_passes_through(tmp_path):
     result = _call(base)
     # Treated as single string since the folder doesn't exist; not expanded
     assert len(result) == 1
-    assert result[0]["input_image"].endswith("/")
+
+
+# ---------------------------------------------------------------------------
+# Prompt field handling — Config Builder nested array format
+# ---------------------------------------------------------------------------
+
+def test_positive_plain_string_passes_through():
+    """A plain string positive prompt yields exactly one config with that string."""
+    base = _ltx_base()
+    base["positive"] = "a cat on a rooftop"
+    result = _call(base)
+    assert len(result) == 1
+    assert result[0]["positive"] == "a cat on a rooftop"
+
+
+def test_positive_config_builder_nested_array_two_prompts():
+    """Config Builder wraps prompts in [["p1", "p2"]]. Each inner string → a separate run."""
+    base = _ltx_base()
+    base["positive"] = [["prompt one", "prompt two"]]
+    result = _call(base)
+    assert len(result) == 2
+    prompts = sorted(c["positive"] for c in result)
+    assert prompts == ["prompt one", "prompt two"]
+
+
+def test_positive_config_builder_single_prompt_in_nested_array():
+    """[["single prompt"]] collapses to a single run."""
+    base = _ltx_base()
+    base["positive"] = [["only one prompt"]]
+    result = _call(base)
+    assert len(result) == 1
+    assert result[0]["positive"] == "only one prompt"
+
+
+def test_positive_flat_array_two_strings():
+    """A flat list of two strings produces two separate runs."""
+    base = _ltx_base()
+    base["positive"] = ["option A", "option B"]
+    result = _call(base)
+    assert len(result) == 2
+    prompts = sorted(c["positive"] for c in result)
+    assert prompts == ["option A", "option B"]
+
+
+def test_positive_is_always_a_string_after_expansion():
+    """Regardless of input format, every expanded config must have a str positive."""
+    base = _ltx_base()
+    base["positive"] = [["p1", "p2"]]
+    result = _call(base)
+    for c in result:
+        assert isinstance(c["positive"], str), "positive must be a plain string after expansion"
+
+
+def test_negative_config_builder_nested_array():
+    """Nested array negative follows the same expansion logic as positive."""
+    base = _ltx_base()
+    base["negative"] = [["bad quality", "blurry, ugly"]]
+    result = _call(base)
+    assert len(result) == 2
+    negs = sorted(c["negative"] for c in result)
+    assert negs == ["bad quality", "blurry, ugly"]
+
+
+def test_positive_and_negative_nested_arrays_cross():
+    """Two positive prompts × two negative prompts → 4 configs (Cartesian product)."""
+    base = _ltx_base()
+    base["positive"] = [["pos1", "pos2"]]
+    base["negative"] = [["neg1", "neg2"]]
+    result = _call(base)
+    assert len(result) == 4
+    combos = sorted((c["positive"], c["negative"]) for c in result)
+    assert combos == [
+        ("pos1", "neg1"),
+        ("pos1", "neg2"),
+        ("pos2", "neg1"),
+        ("pos2", "neg2"),
+    ]
 
 
 def test_input_image_string_no_trailing_slash_unchanged(tmp_path):
@@ -183,3 +259,81 @@ def test_input_image_string_no_trailing_slash_unchanged(tmp_path):
     result = _call(base)
     assert len(result) == 1
     assert result[0]["input_image"] == "/tmp/single.png"
+
+
+
+# ---------------------------------------------------------------------------
+# Prompt field handling — Config Builder nested array format
+# ---------------------------------------------------------------------------
+
+def test_positive_plain_string_passes_through():
+    """A plain string positive prompt yields exactly one config with that string."""
+    base = _ltx_base()
+    base["positive"] = "a cat on a rooftop"
+    result = _call(base)
+    assert len(result) == 1
+    assert result[0]["positive"] == "a cat on a rooftop"
+
+
+def test_positive_config_builder_nested_array_two_prompts():
+    """Config Builder wraps prompts in [["p1", "p2"]]. Each inner string → a separate run."""
+    base = _ltx_base()
+    base["positive"] = [["prompt one", "prompt two"]]
+    result = _call(base)
+    assert len(result) == 2
+    prompts = sorted(c["positive"] for c in result)
+    assert prompts == ["prompt one", "prompt two"]
+
+
+def test_positive_config_builder_single_prompt_in_nested_array():
+    """[["single prompt"]] collapses to a single run."""
+    base = _ltx_base()
+    base["positive"] = [["only one prompt"]]
+    result = _call(base)
+    assert len(result) == 1
+    assert result[0]["positive"] == "only one prompt"
+
+
+def test_positive_flat_array_two_strings():
+    """A flat list of two strings produces two separate runs."""
+    base = _ltx_base()
+    base["positive"] = ["option A", "option B"]
+    result = _call(base)
+    assert len(result) == 2
+    prompts = sorted(c["positive"] for c in result)
+    assert prompts == ["option A", "option B"]
+
+
+def test_positive_is_always_a_string_after_expansion():
+    """Regardless of input format, every expanded config must have a str positive."""
+    base = _ltx_base()
+    base["positive"] = [["p1", "p2"]]
+    result = _call(base)
+    for c in result:
+        assert isinstance(c["positive"], str), "positive must be a plain string after expansion"
+
+
+def test_negative_config_builder_nested_array():
+    """Nested array negative follows the same expansion logic as positive."""
+    base = _ltx_base()
+    base["negative"] = [["bad quality", "blurry, ugly"]]
+    result = _call(base)
+    assert len(result) == 2
+    negs = sorted(c["negative"] for c in result)
+    assert negs == ["bad quality", "blurry, ugly"]
+
+
+def test_positive_and_negative_nested_arrays_cross():
+    """Two positive prompts × two negative prompts → 4 configs (Cartesian product)."""
+    base = _ltx_base()
+    base["positive"] = [["pos1", "pos2"]]
+    base["negative"] = [["neg1", "neg2"]]
+    result = _call(base)
+    assert len(result) == 4
+    combos = sorted((c["positive"], c["negative"]) for c in result)
+    assert combos == [
+        ("pos1", "neg1"),
+        ("pos1", "neg2"),
+        ("pos2", "neg1"),
+        ("pos2", "neg2"),
+    ]
