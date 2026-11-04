@@ -123,7 +123,7 @@ def test_sort_popup_cycles_primary_sort(dashboard):
     page.locator("#sort-main-btn").click()
     expect(page.locator("#sort-popup")).to_be_visible()
     for label, gen_index, sort_id in steps:
-        expect(page.locator("#sort-list-primary .sort-option")).to_have_count(12)
+        expect(page.locator("#sort-list-primary .sort-option")).to_have_count(dashboard.ev("sortOptionsList.length"))
         page.locator("#sort-list-primary .sort-option").get_by_text(label, exact=True).click()
         expect(page.locator("#sort-primary-label")).to_contain_text(label)
         expect(page.locator("#sort-list-primary .sort-option.selected")).to_have_text(label)
