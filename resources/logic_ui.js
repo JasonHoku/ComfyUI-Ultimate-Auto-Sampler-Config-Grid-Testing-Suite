@@ -2778,3 +2778,55 @@ function showAnalyticsModal(title, results, type) {
         if (e.target === overlay) overlay.remove();
     });
 }
+
+
+// ============================================================
+// IMAGE METRICS FOR AN EXISTING SESSION (background job, CPU only)
+// ============================================================
+var _sessionMetricsJob = { id: null, timer: null };
+
+async function startSessionMetrics() {
+    const btn = document.getElementById('compute-metrics-btn');
+    const out = document.getElementById('compute-metrics-progress');
+    if (_sessionMetricsJob.id) {
+        // Second click while running = cancel
+        try {
+            await fetch('/config_tester/cancel_metrics', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job_id: _sessionMetricsJob.id })
+            });
+        } catch (e) { /* ignore */ }
+        if (out) out.textContent = 'Cancelling...';
+        return;
+    }
+    const sessionName = document.getElementById('session-input')?.value || '';
+    if (!sessionName) { alert('No session selected'); return; }
+    if (out) { out.style.display = 'block'; out.textContent = 'Starting...'; }
+    try {
+        const resp = await fetch('/config_tester/compute_metrics', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_name: sessionName })
+        });
+        const result = await resp.json();
+        if (result.error) { if (out) out.textContent = result.error; return; }
+        _sessionMetricsJob.id = result.job_id;
+        if (btn) btn.textContent = 'CANCEL (click again)';
+        _sessionMetricsJob.timer = setInterval(async () => {
+            try {
+                const st = await (await fetch('/config_tester/metrics_status?job_id=' + _sessionMetricsJob.id)).json();
+                if (out) out.textContent = 'Measuring ' + st.completed + '/' + st.total + '...';
+                if (st.status !== 'running') {
+                    clearInterval(_sessionMetricsJob.timer);
+                    _sessionMetricsJob = { id: null, timer: null };
+                    if (btn) btn.textContent = 'COMPUTE METRICS FOR THIS SESSION';
+                    if (out) out.textContent = st.status === 'error' ? ('Error: ' + (st.error || 'unknown'))
+                        : (st.status === 'cancelled' ? 'Cancelled at ' : 'Done: ') + st.completed + '/' + st.total
+                          + (st.failed ? ' (' + st.failed + ' skipped)' : '') + (st.status === 'complete' ? '. Reloading...' : '');
+                    if (st.status === 'complete' && typeof loadSession === 'function') loadSession();
+                }
+            } catch (e) { /* ignore poll errors */ }
+        }, 1500);
+    } catch (e) {
+        if (out) out.textContent = 'Failed to start: ' + e;
+    }
+}

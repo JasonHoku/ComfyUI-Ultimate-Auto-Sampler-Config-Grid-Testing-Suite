@@ -232,6 +232,20 @@
                 </div>
             </div>
 
+            <!-- Section 3b: Image metrics for this session (background job) -->
+            <div class="cog-panel-section">
+                <div class="cog-panel-section-title">IMAGE METRICS</div>
+                <button class="session-action-btn" id="compute-metrics-btn"
+                    style="background: #2b5f9e; width: 100%; font-size: 11px; padding: 10px;"
+                    onclick="startSessionMetrics()" title="Measure sharpness, entropy, colorfulness, contrast, luma and saturation for every image that has no metrics yet (CPU only)">
+                    COMPUTE METRICS FOR THIS SESSION
+                </button>
+                <div id="compute-metrics-progress" style="display: none; margin-top: 6px; font-size: 10px; color: #9ab;"></div>
+                <div style="font-size: 9px; color: #666; margin-top: 6px;">
+                    Adds sortable/filterable metrics to older sessions. Skips videos and images that already have metrics. Do not run it while this session is still generating.
+                </div>
+            </div>
+
             <!-- Section 4: Export Favorites -->
             <div class="cog-panel-section">
                 <div class="cog-panel-section-title">EXPORT FAVORITES</div>
