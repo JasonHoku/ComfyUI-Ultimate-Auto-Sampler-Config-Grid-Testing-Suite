@@ -2099,3 +2099,13 @@ body {
     background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 6px 12px; font-size: 11px; cursor: pointer;
 }
 .sb-actions button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Compare on phones: the panes handle swipes themselves (nothing in them scrolls) */
+#cmp-panes { touch-action: none; }
+.cmp-pane.cmp-swipe-pick { border-color: var(--accent, #0af); }
+.cmp-play {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 64px; height: 64px; border-radius: 50%; border: 2px solid #fff;
+    background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 26px; cursor: pointer;
+    pointer-events: auto; z-index: 3;
+}

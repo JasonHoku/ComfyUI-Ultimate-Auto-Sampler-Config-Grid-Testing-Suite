@@ -27,6 +27,16 @@ var CMP_EXCLUDED_KEYS = new Set([
 ]);
 var CMP_EXCLUDED_RE = /^upscale_|^hires_prompt_|_hash$|^worker|^_/;
 
+// Phone swipe-to-vote: which side a finger gesture picks (same mapping as ArrowLeft = A, ArrowRight = B).
+var CMP_SWIPE = { minPx: 60, frac: 0.15, ratio: 1.5, maxMs: 800 };
+function cmpSwipeSide(dx, dy, ms, width) {   // 'a' | 'b' | null
+    var adx = Math.abs(dx), ady = Math.abs(dy);
+    var min = Math.max(CMP_SWIPE.minPx, CMP_SWIPE.frac * (width || 0));
+    if (adx < min || adx < CMP_SWIPE.ratio * ady) return null;
+    if (ms > CMP_SWIPE.maxMs && adx < 2 * min) return null;   // a slow drag must be long
+    return dx < 0 ? 'a' : 'b';
+}
+
 // ---------------------------------------------------------------------------
 // Normalisers
 // ---------------------------------------------------------------------------
@@ -533,6 +543,7 @@ function scoreboardToCSV(sb) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         CMP_AXES: CMP_AXES, CMP_DIFF_AXES: CMP_DIFF_AXES, CMP_MODES: CMP_MODES,
+        CMP_SWIPE: CMP_SWIPE, cmpSwipeSide: cmpSwipeSide,
         CMP_EXCLUDED_KEYS: CMP_EXCLUDED_KEYS, CMP_EXCLUDED_RE: CMP_EXCLUDED_RE,
         fmtNum: fmtNum, normalizeAxis: normalizeAxis, itemSig: itemSig, axisDiff: axisDiff,
         mergeComparisons: mergeComparisons, cmpVoteKey: cmpVoteKey, cmpPairKey: cmpPairKey,

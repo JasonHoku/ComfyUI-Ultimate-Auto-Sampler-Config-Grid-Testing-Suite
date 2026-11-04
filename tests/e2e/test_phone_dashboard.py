@@ -124,3 +124,85 @@ def test_session_picker_switches_session(phone_dashboard):
     rows.filter(has_text="other").locator("span").first.tap()
     page.wait_for_function("window._uscgLoadedSession === 'other'")
     assert page.evaluate("location.search") == "?session=other"
+
+
+# ---- E5: swipe to vote -----------------------------------------------------
+
+COMPARE_SETTINGS = ("localStorage.setItem('ultimate_grid_compare',"
+                    " JSON.stringify({mode: 'random', reveal: 0}));")
+
+
+def _open_compare(d):
+    _open_lightbox(d)
+    d.page.locator("#modal-compare-btn").tap()
+    d.page.wait_for_function("_cmp.open && _cmp.current")
+
+
+def _drag(page, dx, dy, steps=8, total_ms=200):
+    """One-finger drag from the middle of #cmp-panes through raw CDP touch events."""
+    box = page.locator("#cmp-panes").bounding_box()
+    x0, y0 = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x0, "y": y0}]})
+    for i in range(1, steps + 1):
+        page.wait_for_timeout(total_ms // steps)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove",
+                 "touchPoints": [{"x": x0 + dx * i / steps, "y": y0 + dy * i / steps}]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    page.wait_for_timeout(60)
+    cdp.detach()
+
+
+def test_compare_swipe_votes(phone_dashboard):
+    d = phone_dashboard(init_scripts=[COMPARE_SETTINGS])
+    page = d.page
+    _open_compare(d)
+    votes = lambda: page.evaluate("_cmp.undoStack.length")
+    last = lambda: page.evaluate("_cmp.undoStack.at(-1).winner")
+    ready = lambda: page.wait_for_function("_cmp.current && !_cmp.revealing")
+    page.locator("#cmp-pane-b").tap()    # a plain tap still votes for B
+    page.wait_for_function("_cmp.undoStack.length === 1")
+    assert last() == "b"
+    page.wait_for_timeout(600)           # outside the tap-after-swipe suppression window
+    ready()
+    _drag(page, -200, 0)
+    assert votes() == 2 and last() == "a"
+    ready()
+    _drag(page, 200, 0)
+    assert votes() == 3 and last() == "b"
+    ready()
+    _drag(page, 0, 200)          # vertical: nothing
+    _drag(page, 20, 0)           # too short: nothing, and no tap vote follows it
+    page.wait_for_timeout(600)
+    assert votes() == 3
+    with page.expect_request(lambda r: r.url.endswith("/config_tester/save_comparisons")) as sent:
+        page.evaluate("closeCompareMode()")
+    body = sent.value.post_data_json
+    assert [c["winner"] for c in body["append"]] == ["b", "a", "b"]
+    page.wait_for_timeout(200)
+    assert len(d.comparisons) == 3
+
+
+# ---- E6: videos autoplay muted, in the document, inline --------------------
+
+STUB_PLAY = """window.__plays = [];
+const origPlay = HTMLMediaElement.prototype.play;
+HTMLMediaElement.prototype.play = function () {
+    window.__plays.push({connected: this.isConnected, muted: this.muted, pi: this.hasAttribute('playsinline')});
+    return Promise.resolve();
+};"""
+
+
+def test_compare_videos_set_up_for_autoplay(phone_dashboard):
+    from tests.e2e.conftest import make_manifest
+    manifest = make_manifest()
+    manifest["items"] = manifest["items"][:4]
+    for it in manifest["items"]:
+        it["media_type"] = "video"
+        it["file"] = it["file"].replace(".png", ".mp4")
+    d = phone_dashboard(manifest=manifest, init_scripts=[COMPARE_SETTINGS, STUB_PLAY], n_items=4)
+    d.ev("openCompareMode()")   # video items have no REVISE button, so open compare directly
+    d.page.wait_for_function("_cmp.open && _cmp.current")
+    d.page.wait_for_function("window.__plays.length >= 2")
+    plays = d.ev("window.__plays.slice(0, 2)")
+    assert all(p["connected"] and p["muted"] and p["pi"] for p in plays), plays

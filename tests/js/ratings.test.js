@@ -285,3 +285,14 @@ test('per-image fields never make two items different settings (F2)', () => {
     assert.strictEqual(df.ctxEqual, true, JSON.stringify(df.ctxKeys));
     assert.deepStrictEqual(df.axes, ['cfg']);
 });
+
+test('cmpSwipeSide decisions', () => {
+    assert.strictEqual(R.cmpSwipeSide(-80, 5, 200, 412), 'a');
+    assert.strictEqual(R.cmpSwipeSide(80, 5, 200, 412), 'b');
+    assert.strictEqual(R.cmpSwipeSide(40, 0, 200, 412), null);      // too short
+    assert.strictEqual(R.cmpSwipeSide(80, 70, 200, 412), null);     // diagonal
+    assert.strictEqual(R.cmpSwipeSide(-80, 0, 1500, 412), null);    // slow and short
+    assert.strictEqual(R.cmpSwipeSide(-130, 0, 1500, 412), 'a');    // slow but long
+    assert.strictEqual(R.cmpSwipeSide(-200, 0, 200, 1600), null);   // width 1600 needs 240 px
+    assert.strictEqual(R.cmpSwipeSide(-250, 0, 200, 1600), 'a');
+});
