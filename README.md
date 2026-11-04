@@ -528,7 +528,7 @@ The Generator node features built-in widgets for Model Selection and Prompts, bu
   - Connect `optional_positive` and `optional_negative` for pre-encoded conditioning
   - The node automatically detects latent channel count (4 for SD1.5/SDXL, 16 for SD3/Flux/Z-Image)
   - Skip detection uses conditioning tensor hashing to properly detect prompt changes
-* **Latent Input:** Connect a `LATENT` to use img2img or upscaling workflows.
+* **Latent Input:** Connect a `LATENT` to use img2img or upscaling workflows. The image size is the latent size times the model's latent ratio (8 px per cell for SD/SDXL/Flux.1, 16 for Flux.2/MOSS-Image/Krea 2), so the manifest and upscale target sizes are right for every family.
   - For SD3/Flux: Use `EmptySD3LatentImage` instead of `EmptyLatentImage`
   - Latent dimensions are automatically preserved
 
@@ -1634,6 +1634,8 @@ Master (your machine):
   6. Master saves everything to the session manifest
 ```
 
+**Upscales:** with upscaling enabled, the master upscales after all workers have finished, only the images made by this run, one model/LoRA/VAE group at a time (each group loads its own model; worker images are matched back to their job config). **Latent input:** remote workers never receive the latent and render an empty latent at the placeholder size; only the master honours it.
+
 ### Master Text Encoding
 
 When enabled, the master pre-encodes ALL unique positive/negative prompts for every (model, LoRA) combination before distributing jobs. Workers receive the encoded conditionings in their job claim response and skip CLIP encoding entirely.
@@ -1774,6 +1776,10 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 ---
 
 ## 📝 Changelog
+
+### Update 11/4/26 (fixes): Distributed upscales, latent-input size
+* 🌐 **Distributed upscales work:** the post-run upscale phase on the master used to crash on every distributed run with upscaling on. It now upscales this run's images (master and worker made), per model/LoRA/VAE group, with HiRes-prompt adjustment encoded per model.
+* 📐 **Latent input size:** a connected latent's image size was always cells x 8; it is now cells x the loaded model's latent ratio (16 for Flux.2/MOSS-Image/Krea 2).
 
 ### Update 11/4/26: Standalone dashboard, pairwise review, image metrics, preview pass, workflow sweeps
 * 📱 **Standalone Dashboard + Run API:** open the dashboard as a normal web page at `/config_tester/dashboard?session=<name>` (phone, second monitor) with live updates over its own websocket. `POST /config_tester/run` and `GET /config_tester/run_status` start and track headless runs (Discord bot, curl) without any workflow JSON.

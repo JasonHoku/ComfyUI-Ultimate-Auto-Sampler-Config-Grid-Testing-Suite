@@ -785,13 +785,18 @@ def expand_configs(raw_configs, pos_prompts, neg_prompts, denoise_values, seed, 
     return expanded
 
 
-def prepare_input_jobs(optional_latent, resolutions):
+def prepare_input_jobs(optional_latent, resolutions, downscale_ratio=8):
     """
     Prepare input jobs from either optional latent or resolution list.
+
+    For a latent input, width/height are a placeholder (cells x downscale_ratio) until the
+    model is known; "latent_cells" carries (cells_w, cells_h) and the orchestrator resolves
+    the real pixel size per job with latent_job_pixel_size() once that job's model is loaded.
     
     Args:
         optional_latent: Optional latent tensor input
         resolutions: List of [width, height] pairs
+        downscale_ratio: placeholder pixels per latent cell (default 8)
         
     Returns:
         List of job dictionaries with label, width, height, latent, batch_idx
@@ -802,10 +807,12 @@ def prepare_input_jobs(optional_latent, resolutions):
         batch_count = optional_latent["samples"].shape[0]
         for i in range(batch_count):
             single_sample = optional_latent["samples"][i].unsqueeze(0)
+            cells_w, cells_h = int(single_sample.shape[3]), int(single_sample.shape[2])
             input_jobs.append({
                 "label": f"Input {i+1}",
-                "width": single_sample.shape[3] * 8,
-                "height": single_sample.shape[2] * 8,
+                "width": cells_w * downscale_ratio,
+                "height": cells_h * downscale_ratio,
+                "latent_cells": (cells_w, cells_h),
                 "latent": {"samples": single_sample},
                 "batch_idx": i
             })
@@ -820,6 +827,15 @@ def prepare_input_jobs(optional_latent, resolutions):
             })
     
     return input_jobs
+
+
+def latent_job_pixel_size(job, downscale_ratio):
+    """(w, h) in pixels of an input job. Latent-input jobs: cells x the model's latent ratio (8 SD/SDXL/Flux.1, 16 Flux.2/MOSS/Krea 2); resolution jobs: unchanged."""
+    cells = job.get("latent_cells") if isinstance(job, dict) else None
+    if not cells:
+        return job["width"], job["height"]
+    r = int(downscale_ratio) if downscale_ratio else 8
+    return int(cells[0]) * r, int(cells[1]) * r
 
 
 def sanitize_session_name(session_name):
