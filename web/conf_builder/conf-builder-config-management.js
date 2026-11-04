@@ -6958,6 +6958,10 @@ export function renderRunSettingsSection(node, container) {
     if (node.state.enable_model_cache === undefined) node.state.enable_model_cache = false;
     if (node.state.vae_batch_size === undefined) node.state.vae_batch_size = 1;
     if (node.state.add_random_seeds_to_gens === undefined) node.state.add_random_seeds_to_gens = 0;
+    if (node.state.job_order === undefined) node.state.job_order = "as_written";
+    if (node.state.preview_pass === undefined) node.state.preview_pass = { enabled: false, steps: 8, scale: 0.5, cfg_override: null };
+    if (node.state.skip_rejected_previews === undefined) node.state.skip_rejected_previews = true;
+    if (node.state.only_favorited_previews === undefined) node.state.only_favorited_previews = false;
 
     const section = document.createElement("div");
     section.className = "cb-section full-width";
@@ -7117,6 +7121,101 @@ export function renderRunSettingsSection(node, container) {
         tooltip: "How many images to encode/decode per VAE pass. Lower = less VRAM. -1 = process all at once. Default: 4." });
     _addRunSetting(content, { stateKey: "add_random_seeds_to_gens", label: "Additional Random Seeds", kind: "int", min: 0, max: 100, defaultValue: 0,
         tooltip: "Generate this many extra images per config using additional random seeds. 0 = disabled." });
+
+    // --- Job order + preview pass (coarse-to-fine grids) ---------------------------
+    // Small local row helper with the same look as _addRunSetting; handles labelled selects and the
+    // nested preview_pass fields, which _addRunSetting (flat keys only) cannot bind.
+    function _addRunRow(labelText, tooltip, buildInput) {
+        const row = document.createElement("div");
+        row.style.cssText = "margin-top: 10px; display: flex; align-items: center; gap: 8px;";
+        const label = document.createElement("label");
+        label.textContent = labelText + ":";
+        label.style.cssText = "font-size: 12px; color: #ccc; white-space: nowrap;";
+        const help = document.createElement("span");
+        help.textContent = "?";
+        help.title = tooltip;
+        help.style.cssText = "display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #2a2a2a; color: #8af; font-size: 10px; font-weight: bold; cursor: help; user-select: none;";
+        row.appendChild(label);
+        row.appendChild(help);
+        row.appendChild(buildInput());
+        content.appendChild(row);
+        return row;
+    }
+    const _inputCss = "background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; font-size: 12px;";
+    const _pv = () => {
+        if (!node.state.preview_pass || typeof node.state.preview_pass !== "object") {
+            node.state.preview_pass = { enabled: false, steps: 8, scale: 0.5, cfg_override: null };
+        }
+        return node.state.preview_pass;
+    };
+
+    _addRunRow("Job Order", "As written = resolution passes run one after another (the order used before this option existed). Minimize reloads = group jobs so each model, LoRA stack and VAE loads as few times as possible (resolutions interleave, which is free). Note: Start At Job # numbers follow the chosen order. Ignored in distributed mode.", () => {
+        const sel = document.createElement("select");
+        sel.style.cssText = _inputCss;
+        [["as_written", "As written (default)"], ["minimize_reloads", "Minimize model/LoRA reloads"]].forEach(([v, t]) => {
+            const o = document.createElement("option");
+            o.value = v; o.textContent = t;
+            if (v === (node.state.job_order || "as_written")) o.selected = true;
+            sel.appendChild(o);
+        });
+        sel.onchange = () => { node.state.job_order = sel.value; node.saveState(); };
+        return sel;
+    });
+
+    _addRunRow("Preview Pass", "Render every cell cheaply first (fewer steps, smaller image, no upscales). Reject the losers on the Dashboard, then untick this and queue again: only the survivors render at full quality, and each full image replaces its preview in the Dashboard. Not used when a latent input is connected. Ignored in distributed mode.", () => {
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!_pv().enabled;
+        cb.style.cssText = "transform: scale(1.2); cursor: pointer;";
+        cb.onchange = () => { _pv().enabled = cb.checked; node.saveState(); };
+        return cb;
+    });
+    _addRunRow("  Preview Steps", "Sampling steps used for preview renders (1-200).", () => {
+        const inp = document.createElement("input");
+        inp.type = "number"; inp.min = 1; inp.max = 200;
+        inp.value = _pv().steps !== undefined ? _pv().steps : 8;
+        inp.style.cssText = _inputCss + " width: 70px;";
+        inp.onchange = () => {
+            const v = parseInt(inp.value);
+            _pv().steps = isNaN(v) ? 8 : Math.min(200, Math.max(1, v));
+            inp.value = _pv().steps;
+            node.saveState();
+        };
+        return inp;
+    });
+    _addRunRow("  Preview Scale", "Preview resolution as a fraction of each job's resolution (snapped to the model's latent grid).", () => {
+        const sel = document.createElement("select");
+        sel.style.cssText = _inputCss;
+        [0.25, 0.33, 0.5, 0.75].forEach(v => {
+            const o = document.createElement("option");
+            o.value = String(v); o.textContent = "x" + v;
+            if (v === Number(_pv().scale)) o.selected = true;
+            sel.appendChild(o);
+        });
+        sel.onchange = () => { _pv().scale = parseFloat(sel.value); node.saveState(); };
+        return sel;
+    });
+    _addRunRow("  Preview CFG Override", "Optional CFG for preview renders. Leave blank to use each config's own CFG.", () => {
+        const inp = document.createElement("input");
+        inp.type = "number"; inp.step = "0.1"; inp.min = 0;
+        inp.placeholder = "config CFG";
+        inp.value = (_pv().cfg_override === null || _pv().cfg_override === undefined) ? "" : _pv().cfg_override;
+        inp.style.cssText = _inputCss + " width: 90px;";
+        inp.onchange = () => {
+            const v = parseFloat(inp.value);
+            _pv().cfg_override = (inp.value === "" || isNaN(v)) ? null : v;
+            node.saveState();
+        };
+        return inp;
+    });
+    _addRunSetting(content, { stateKey: "skip_rejected_previews", label: "Skip Rejected Previews", kind: "bool",
+        tooltip: "Applies when Preview pass is OFF: cells whose preview you rejected are skipped (also after Delete Rejected)." });
+    _addRunSetting(content, { stateKey: "only_favorited_previews", label: "Only Favorited Previews", kind: "bool",
+        tooltip: "Applies when Preview pass is OFF: stricter than the option above. Cells that have a preview are rendered only if that preview is favorited. Cells with no preview at all are still rendered." });
+    const _pvHint = document.createElement("div");
+    _pvHint.style.cssText = "margin-top: 6px; font-size: 11px; color: #888;";
+    _pvHint.textContent = "Full pass: untick Preview Pass and queue again (or use the Dashboard's Full pass for survivors button).";
+    content.appendChild(_pvHint);
 
     section.appendChild(header);
     section.appendChild(content);
