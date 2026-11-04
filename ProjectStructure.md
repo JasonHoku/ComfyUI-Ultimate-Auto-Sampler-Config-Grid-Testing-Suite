@@ -85,6 +85,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_utils.js           # Helpers (Export, Scan, Session loading) (1073 lines)
 │   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable) (538 lines)
 │   ├── logic_wfparams.js        # Workflow Sweep wf_params helpers (keys, numeric detection, match, short labels); Quick/Logic Filter + label overlay use them (pure, node-testable)
+│   ├── logic_dragdrop.js        # Revise-modal image drag/send helpers (issue #22): uscgImageRef, asset-info + uri-list + DownloadURL carriers, annotated `[output]` path (no DOM, node-testable)
 │   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (2907 lines)
 │   ├── logic_upscale_modal.js   # Dashboard upscale modal (inline config, presets, async upscale) (1163 lines)
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (1092 lines)
@@ -324,7 +325,7 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id)` — reads all `/resources/` files, inlines into `template.html`
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_dragdrop.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests — everything inlined
 
@@ -937,5 +938,6 @@ __init__.py
 | `logic_pipeline.js` | `updateDataPipeline()`, `executePipeline()`, `processNewData()`, `incrementalFilter()` |
 | `logic_wfparams.js` | `wfParamKeys()`, `wfParamValue/Number()`, `wfParamMatches()`, `wfShortLabel()`, `wfDisplay()` (pure; tests in `tests/js/wfparams.test.js`) |
 | `logic_ratings.js` | `computeBradleyTerry()`, `buildPairSource()`, `nextPair()`, `axisDiff()`, `computeScoreboard()` (pure; tests in `tests/js/ratings.test.js`, run `node --test tests/js/*.test.js`) |
+| `logic_dragdrop.js` | `uscgImageRef()`, `uscgImageAssetInfo()`, `uscgAnnotatedPath()`, `uscgFillDragData()`, `USCG_DRAG_UPLOAD` (pure; tests in `tests/js/dragdrop.test.js`). Used by `logic_ui.js` (`dragstart` on `#m-img`, `sendModalToLoadImage()`). Parent bridge: iframe posts `uscg_send_to_load_image` {url, filename, subfolder, imageType, upload, node_id}, `web/dashboard.js` fills the selected/only/new LoadImage and answers `uscg_send_to_load_image_result` {ok, message} |
 | `logic_compare.js` | `openCompareMode()`, `cmpVoteSide()`, `cmpUndo()`, `openScoreboard()`, `getItemRating()`, `compareRatings()`, `onComparisonsReplaced()` |
 | `logic_events.js` | Message handler for `progress_update`, `update_data`, `distribution_status` |

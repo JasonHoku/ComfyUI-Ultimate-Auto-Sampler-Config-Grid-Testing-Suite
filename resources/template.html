@@ -862,13 +862,18 @@
             <span class="modal-kbd-hint" style="font-size: 9px; color: #444; margin-left: 8px;">← → Space navigate &nbsp;|&nbsp; 1-9 favorite</span>
         </div>
         <div class="modal-main">
-            <div class="preview"><img id="m-img" src=""><div id="m-preview-note" style="display: none; font-size: 11px; color: #cdb26a; padding: 4px 8px; text-align: center;"></div></div>
+            <div class="preview"><img id="m-img" src="" draggable="true" title="Drag onto a Load Image node or the canvas"><div id="m-preview-note" style="display: none; font-size: 11px; color: #cdb26a; padding: 4px 8px; text-align: center;"></div></div>
             <div class="controls">
               <div id="m-revise-controls" style="display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;">
                 <h2 style="margin:0 0 10px 0; color:#fff;">Revise & Generate</h2>
                 <button class="modal-action-btn copy-comfy-btn" onclick="copyConfigsAsComfyNodes(window.currentModalId)"
                     style="background: #6366f1; margin-top: 10px;">
                     📋 Copy Configs To Clipboard As Comfy Nodes
+                </button>
+                <button id="modal-send-loadimage-btn" class="modal-action-btn" onclick="sendModalToLoadImage()"
+                    title="Put this image into a Load Image node (the selected one, the only one, or a new one)"
+                    style="background: #2b6cb0; margin-top: 6px;">
+                    🖼 Send to Load Image
                 </button>
                 <div class="field"><label>Model</label><input id="f-model"></div>
                 <div class="field"><label>Seed</label><input id="f-seed" type="number">

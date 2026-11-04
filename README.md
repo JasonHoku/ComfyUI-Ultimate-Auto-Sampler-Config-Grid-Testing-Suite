@@ -267,6 +267,7 @@ If you'd rather build the graph yourself:
 * **Complete Metadata View:** Shows model, seed, prompts (with trigger words), and all generation parameters.
 * **Instant Tweak:** Adjust CFG, Steps, or Sampler for *just that specific image*.
 * **Generate New:** A "GENERATE NEW" button queues the new variation immediately without needing to disconnect wires or change the main batch.
+* **Drag Into Load Image:** Drag the big image in the Revise view onto a Load Image node (sets its `image` widget) or onto empty canvas (creates a Load Image node), or click **Send to Load Image** (the selected Load Image, the only one, or a new one beside the dashboard). A node drop and the button *reference* the file as `benchmarks/<session>/images/<file> [output]` (no copy in `input/`, but the workflow then depends on that folder; a canvas drop is made by ComfyUI's frontend, which uploads a copy). To always copy instead, set `USCG_DRAG_UPLOAD = true` in `resources/logic_dragdrop.js`. On the standalone page the button is **Download image**.
 * **Similarity Reel:** The revision modal shows a side-scrolling reel of all other images that share the same seed, allowing for perfect A/B comparison.
 * **Multiple Prompts:** Use an array to run multiple prompts in one run without re-running your entire workflow: `["picture of a forest", "mountains at night", "masterpiece, painting of dog"]`
 

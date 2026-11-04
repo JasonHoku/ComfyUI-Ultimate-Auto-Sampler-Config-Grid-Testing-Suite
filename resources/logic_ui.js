@@ -1471,6 +1471,88 @@ function _setModalWorkflowMode(d) {
     });
 }
 
+// ---- Revise-modal image: drag onto a Load Image node / canvas, or "Send to Load Image" (issue #22) ----
+// The drag carries ComfyUI's own asset-info JSON + a same-origin URL (what its Assets panel sends), so a node
+// drop references the file in output/ and a canvas drop creates a Load Image node. Helpers: logic_dragdrop.js.
+function _uscgModalRef() {
+    const d = activeData.find(x => x.id === window.currentModalId);
+    return d ? uscgImageRef(d) : null;
+}
+
+async function _uscgPrefetchDragFile(ref, id) {
+    if (!USCG_DRAG_UPLOAD || !ref) return;
+    if (window._uscgDragFile && window._uscgDragFile.id === id) return;
+    try {
+        const blob = await (await fetch(ref.absUrl)).blob();
+        if (window.currentModalId === id) window._uscgDragFile = { id: id, file: new File([blob], ref.filename, { type: blob.type || ref.mime }) };
+    } catch (e) { /* no File: the URL carriers still work */ }
+}
+
+function _uscgInstallModalDrag() {
+    if (window._uscgDragInstalled) return;
+    const img = document.getElementById('m-img');
+    if (!img) return;
+    window._uscgDragInstalled = true;
+    img.addEventListener('dragstart', function (e) {
+        const ref = _uscgModalRef();
+        if (!ref || !e.dataTransfer) { e.preventDefault(); return; }
+        const f = window._uscgDragFile && window._uscgDragFile.id === window.currentModalId ? window._uscgDragFile.file : null;
+        uscgFillDragData(e.dataTransfer, ref, USCG_DRAG_UPLOAD ? f : null);
+    });
+}
+
+function _uscgSyncModalDrag(d) {
+    _uscgInstallModalDrag();
+    const ref = uscgImageRef(d);
+    const img = document.getElementById('m-img');
+    if (img) img.draggable = !!ref;
+    const btn = document.getElementById('modal-send-loadimage-btn');
+    if (btn) {
+        btn.style.display = ref ? '' : 'none';
+        btn.textContent = (typeof USCG_STANDALONE !== 'undefined' && USCG_STANDALONE)
+            ? '\u2B07 Download image' : '\uD83D\uDDBC Send to Load Image';
+    }
+    window._uscgDragFile = null;
+    _uscgPrefetchDragFile(ref, d.id);
+}
+
+function _uscgAskParentLoadImage(ref, upload) {
+    return new Promise(function (resolve) {
+        if (!window.parent || window.parent === window) { resolve(null); return; }
+        var done = false;
+        var onMsg = function (ev) {
+            if (!ev.data || ev.data.type !== 'uscg_send_to_load_image_result') return;
+            done = true;
+            window.removeEventListener('message', onMsg);
+            resolve({ ok: !!ev.data.ok, message: ev.data.message || '' });
+        };
+        window.addEventListener('message', onMsg);
+        window.parent.postMessage({
+            type: 'uscg_send_to_load_image', url: ref.absUrl, filename: ref.filename, subfolder: ref.subfolder,
+            imageType: ref.type, upload: !!upload, node_id: TARGET_NODE_ID
+        }, '*');
+        setTimeout(function () {
+            if (done) return;
+            window.removeEventListener('message', onMsg);
+            resolve(null);
+        }, 8000);
+    });
+}
+
+async function sendModalToLoadImage() {
+    const ref = _uscgModalRef();
+    if (!ref) { _uscgToast('This item is not an image.', false); return; }
+    if (typeof USCG_STANDALONE !== 'undefined' && USCG_STANDALONE) {
+        const a = document.createElement('a');
+        a.href = ref.absUrl; a.download = ref.filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        return;
+    }
+    const res = await _uscgAskParentLoadImage(ref, USCG_DRAG_UPLOAD);
+    if (res) { _uscgToast(res.message || (res.ok ? 'Sent to Load Image.' : 'Could not send.'), res.ok); return; }
+    _uscgToast('The ComfyUI tab did not answer. Drag the image onto a Load Image node instead.', false);
+}
+
 // Open Revision Modal
 function openM(id) {
     window.currentModalId = id;
@@ -1478,6 +1560,7 @@ function openM(id) {
     if (!d) return;
     document.getElementById('m-img').src = d.file;
     _setModalWorkflowMode(d);
+    _uscgSyncModalDrag(d);
     const previewNote = document.getElementById('m-preview-note');
     if (previewNote) {
         if (d.preview) {

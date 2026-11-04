@@ -49,6 +49,7 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `resources/logic_ui.js` | 2907 | Dashboard DOM: cards, modals, `buildComfyNodesWorkflow()`, analytics |
 | `resources/logic_virtual.js` | 1092 | Virtual scroller: renders only visible cards from thousands |
 | `resources/logic_ratings.js`, `resources/logic_compare.js` | 538, 824 | Pairwise review: pure Bradley-Terry / pairing / scoreboard logic, and the compare overlay that uses it |
+| `resources/logic_wfparams.js`, `resources/logic_dragdrop.js` | 81, small | Pure helpers (node-testable): Workflow Sweep `wf_params` keys/matching/labels; Revise-image drag payload + `[output]` path for Load Image |
 | `resources/logic_standalone.js` | 170 | Standalone-page mode (own websocket, run-API GENERATE NEW); loaded last |
 
 ## One Source of Truth for Config JSON
@@ -164,4 +165,4 @@ Images saved as WebP at `output/benchmarks/{session}/images/img_{id}.webp`
 **Modify dashboard UI:**
 1. Edit files in `resources/` (HTML in `template.html`, JS in `logic_*.js`, CSS in `report.css`)
 2. Remember: changes require HTML regeneration to take effect
-3. JS load order is `html_generator.js_files`: logic_state.js → logic_utils.js → logic_ratings.js → logic_ui.js → logic_upscale_modal.js → logic_virtual.js → logic_pipeline.js → logic_compare.js → logic_events.js → logic_init.js → logic_standalone.js (last). All of them share ONE inlined script scope, so top-level names must be unique
+3. JS load order is `html_generator.js_files`: logic_state.js → logic_utils.js → logic_ratings.js → logic_wfparams.js → logic_dragdrop.js → logic_ui.js → logic_upscale_modal.js → logic_virtual.js → logic_pipeline.js → logic_compare.js → logic_events.js → logic_init.js → logic_standalone.js (last). All of them share ONE inlined script scope, so top-level names must be unique
