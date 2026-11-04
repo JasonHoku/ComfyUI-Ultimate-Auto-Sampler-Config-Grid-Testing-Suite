@@ -48,7 +48,7 @@ ALLOWED_FILES = {
     "uscg-z-image-turbo.json": {"z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors"},
     "uscg-krea2-turbo.json": {"krea2_turbo_fp8_scaled.safetensors", "qwen3vl_4b_fp8_scaled.safetensors", "qwen_image_vae.safetensors"},
     "uscg-flux2-klein-9b.json": {"flux-2-klein-9b-fp8.safetensors", "qwen_3_8b_fp8mixed.safetensors", "flux2-vae.safetensors"},
-    "uscg-moss-image.json": {"moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"},
+    "uscg-moss-image.json": {"moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae.safetensors"},
 }
 
 

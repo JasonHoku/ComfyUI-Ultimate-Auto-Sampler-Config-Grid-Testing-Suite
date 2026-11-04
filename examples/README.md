@@ -75,11 +75,11 @@ Times are approximate on an RTX 5060 Ti 16 GB, not counting the first model load
 |---|---|
 | `moss_image_sft_int8_convrot.safetensors` | `models/diffusion_models/` |
 | `qwen3.5_9b_w4a8_gptq.safetensors` | `models/text_encoders/` |
-| `flux2-vae_small.safetensors` | `models/vae/` |
+| `flux2-vae.safetensors` | `models/vae/` |
 
 * **What the grid tests:** two config arrays with the same prompt and settings (er_sde / simple, 25 steps, cfg 2.5): one with Skip Layer Guidance on, one off. **2 images**
 * **Time:** TBD
-* **Notes:** SLG uses the official recipe, single block 22 for the first 0-50 % of the steps. Compare the two images to see what it does. CLIP type `moss_image`. The 9B text encoder is large; on a 16 GB card expect model swapping.
+* **Notes:** SLG uses the official recipe, single block 22 for the first 0-50 % of the steps. Compare the two images to see what it does. CLIP type `moss_image`. A smaller `flux2-vae_small.safetensors` VAE also exists and can be picked in the Builder instead. The 9B text encoder is large; on a 16 GB card expect model swapping.
 
 ## Make your own
 
