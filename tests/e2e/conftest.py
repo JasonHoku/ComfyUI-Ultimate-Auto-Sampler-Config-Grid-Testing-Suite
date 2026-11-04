@@ -25,9 +25,9 @@ def load_real_html_generator():
     return mod
 
 
-def build_dashboard_page(manifest, node_id="7"):
-    """The exact HTML string the Dashboard node shows in its iframe srcdoc."""
-    return load_real_html_generator().get_html_template(SESSION, manifest, node_id)
+def build_dashboard_page(manifest, node_id="7", title=SESSION):
+    """The exact HTML string the Dashboard node shows in its iframe srcdoc (a lazy shell: no items inlined)."""
+    return load_real_html_generator().get_html_template(title, manifest, node_id)
 
 
 def make_item(i, model, sampler, scheduler, cfg, steps, lora):
@@ -101,6 +101,34 @@ class Dashboard:
         self.sessions = []         # payload of /config_tester/list_sessions
         self.comparisons = []      # votes echoed back by /config_tester/save_comparisons
         self.pageerrors = []
+        # GET /config_tester/manifest (the lazy-manifest route): ETag W/"v<manifest_version>",
+        # 304 on a matching If-None-Match. Bump manifest_version after changing self.manifest.
+        self.manifest_version = 1
+        self.manifest_requests = []   # {"session", "if_none_match"} per request
+        self.title = SESSION          # session name baked into the shell ("" = landing page)
+        self.view_manifest_hits = 0   # old-style /view?filename=manifest.json requests (must stay 0 on boot)
+        self.known_sessions = None    # None: every session name exists (like the old /view); else a set
+        self.hold_manifest = False    # True: park manifest requests until release_manifest()
+        self.held = []
+
+    def release_manifest(self):
+        self.hold_manifest = False
+        held, self.held = self.held, []
+        for route in held:
+            self._serve_manifest(route, route.request.url.partition("?")[2], None)
+
+    def _serve_manifest(self, route, query, _unused):
+        from urllib.parse import parse_qs
+        sess = (parse_qs(query).get("session") or [""])[0]
+        inm = route.request.headers.get("if-none-match")
+        self.manifest_requests.append({"session": sess, "if_none_match": inm})
+        if self.known_sessions is not None and sess not in self.known_sessions:
+            return route.fulfill(status=404, content_type="application/json", body='{"error": "not found"}')
+        etag = f'W/"v{self.manifest_version}"'
+        if inm and etag in [p.strip() for p in inm.split(",")]:
+            return route.fulfill(status=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps(self.manifest),
+                             headers={"ETag": etag, "Cache-Control": "no-cache"})
 
     make_item = staticmethod(make_item)
 
@@ -126,11 +154,17 @@ class Dashboard:
         self.request_log.append((req.method, path, body))
         if path == "/":
             return route.fulfill(status=200, content_type="text/html; charset=utf-8",
-                                 body=build_dashboard_page(self.manifest))
+                                 body=build_dashboard_page(self.manifest, title=self.title))
+        if path == "/config_tester/manifest":
+            if self.hold_manifest:
+                self.held.append(route)
+                return None
+            return self._serve_manifest(route, query, None)
         if path == "/view":
             params = dict(kv.partition("=")[::2] for kv in query.split("&") if kv)
             name = params.get("filename", "")
             if name == "manifest.json":
+                self.view_manifest_hits += 1
                 return route.fulfill(status=200, content_type="application/json",
                                      body=json.dumps(self.manifest))
             return route.fulfill(status=200, content_type="image/png", body=png_bytes(name))

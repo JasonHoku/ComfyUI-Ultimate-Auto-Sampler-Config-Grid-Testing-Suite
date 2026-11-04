@@ -166,6 +166,8 @@ if (USCG_STANDALONE) {
             var isProgress = (name === 'ultimate_grid.progress');
             if (!isUpdate && !isProgress) return;
 
+            if (window._uscgBootPending) return;  // the first manifest fetch is still in flight
+
             // Landing page: follow a newly started session (mirrors the node bridge's "no session loaded" case).
             if (!window._uscgLoadedSession) {
                 if (name === 'ultimate_grid.update' && data.session_name) {
@@ -201,9 +203,14 @@ if (USCG_STANDALONE) {
             resyncTimer = setTimeout(function () {
                 resyncTimer = null;
                 if (navigator.onLine === false) return;
-                // a background resync must not close the settings panel / session picker the user has open
+                // a background resync must not close the settings panel / session picker the user has open,
+                // nor reset filters/viewport: conditional fetch (304 = nothing to do), then a non-destructive swap
                 window._uscgResyncing = true;
-                Promise.resolve(loadSession()).finally(function () { window._uscgResyncing = false; });
+                var sess = window._uscgLoadedSession;
+                Promise.resolve(fetchManifest(sess, { ifChanged: true })).then(function (res) {
+                    if (res.status === 200 && res.data && window._uscgLoadedSession === sess) applyManifestReplace(res.data, res.data.meta);
+                }).catch(function () { /* offline / session gone: keep showing what we have */ })
+                  .finally(function () { window._uscgResyncing = false; });
             }, 2000);
         }
 

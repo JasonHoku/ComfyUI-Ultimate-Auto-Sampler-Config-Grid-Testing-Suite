@@ -988,6 +988,7 @@ http://<comfyui-host>:8188/config_tester/dashboard?session=<session_name>
 - It opens its own ComfyUI websocket, so new images and the ETA bar update live while a run is going. After your phone sleeps, it reloads the session when you come back, without duplicating cards. Reverse proxies that do not upgrade websockets (some Tailscale Serve / nginx setups) lose live updates; the **R** key and the resume reload still work.
 - Touch screens get 44px buttons, and the lightbox gets a bottom bar (Prev / Favorite / Reject / Revise / Next). The in-node view is unchanged apart from the extra header button.
 - **GENERATE NEW** in the lightbox queues through the run API below, into the session you are viewing. "Pack workflow" in export needs the ComfyUI tab and is disabled here.
+- **Lazy loading:** the page itself is only the dashboard code (~500 KB, ~115 KB gzipped); the image data comes from `GET /config_tester/manifest?session=<name>` (compact JSON, gzip, `ETag`). A 1000-image session is about 160 KB over the wire instead of 3.7 MB of page plus 3.5 MB of `manifest.json`, and a phone that wakes up and finds nothing new pays one 304. Both the page and the manifest answer `If-None-Match`, so a reload with nothing changed is nearly free. `--enable-compress-response-body` is not needed.
 - Like ComfyUI itself, the page has no authentication. Only expose it on a network you trust.
 
 ---
@@ -1525,6 +1526,7 @@ Bot pattern: `POST /run`, post `dashboard_url` to the channel, poll `run_status`
 |---|---|---|
 | POST | `/configbuilder/preview` | Body `{state}` (the Builder state); returns `{configs_json}` from the same function the node uses (what the JSON Preview panel shows) |
 | GET | `/config_tester/dashboard` | The Dashboard as a standalone page, optional `?session=` |
+| GET | `/config_tester/manifest` | A session's manifest as compact JSON `?session=<name>` (gzip, ETag / 304); what the Dashboard fetches |
 | POST | `/config_tester/save_comparisons` | Append / remove Pairwise Review votes `{session_name, append, remove}` |
 | POST | `/config_tester/clear_comparisons` | Delete every vote of a session `{session_name}` |
 | POST | `/config_tester/compute_metrics` | Start the background metrics job for a session `{session_name, overwrite?}`; returns `{job_id, total_images}` |
@@ -1712,7 +1714,7 @@ Tests live in `tests/` and must not contain network or process-spawning code (no
 
 2. **One config-to-JSON implementation**: `UltimateConfigBuilder.state_to_configs_json` in `config_builder_node.py` is the single source of truth. The Builder preview POSTs the state to `/configbuilder/preview`, which runs the same function; there is no JS converter any more.
 
-3. **Dashboard runs in an iframe** — The dashboard HTML is set via `iframe.srcdoc`. All JS/CSS is inlined (no external requests). Communication between the parent ComfyUI page and the iframe uses `postMessage()`. The `dashboard.js` file bridges server events to iframe messages.
+3. **Dashboard runs in an iframe** — The dashboard HTML is set via `iframe.srcdoc`. All JS/CSS is inlined (no external code requests); the manifest is fetched from `/config_tester/manifest` (the page is a lazy shell with no item data). Communication between the parent ComfyUI page and the iframe uses `postMessage()`. The `dashboard.js` file bridges server events to iframe messages.
 
 4. **Dashboard auto-loads on node creation** — `web/dashboard.js` calls `forceLoadSession()` with a 500ms delay when a dashboard node is created. The `get_session_html` API endpoint returns a full HTML template with empty manifest for non-existent sessions (NOT a 404).
 
@@ -1782,7 +1784,7 @@ __init__.py
 
 ### Testing Changes
 
-After modifying backend Python files, restart ComfyUI. After modifying `web/` JS files, refresh the browser (Ctrl+F5). After modifying `resources/` JS/CSS/HTML files, the dashboard HTML must be regenerated — either re-run the sampler node or call the `/config_tester/get_session_html` endpoint.
+After modifying backend Python files, restart ComfyUI. After modifying `web/` JS files, refresh the browser (Ctrl+F5). After modifying `resources/` JS/CSS/HTML files, reload the dashboard (F5 on `/config_tester/dashboard`, or the node's RELOAD button); the page is rebuilt from `resources/` on every request and fetches its data from `/config_tester/manifest`.
 
 ---
 

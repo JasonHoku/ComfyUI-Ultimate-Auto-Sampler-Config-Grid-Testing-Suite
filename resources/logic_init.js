@@ -84,6 +84,9 @@ function init() {
             restoredPosition = restoreViewportPosition();
         }
 
+        // (a lazy-shell boot has no data yet: its loadSession auto-fits once the data is in, unless this is true)
+        window._uscgViewportRestored = restoredPosition;
+
         // Only auto-fit if we didn't restore a saved position
         if (!restoredPosition) {
             setTimeout(() => {

@@ -38,7 +38,7 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `model_cache.py` | 935 | 3-tier cache: LoRA files → incremental states → patched models. Async preloading |
 | `manifest_utils.py` | 316 | Load/save/merge manifest. `save_manifest()` reloads from disk first to preserve concurrent user edits (favorites, votes, metrics) |
 | `metadata_packer.py` | 561 | PNG metadata embedding for CivitAI. `pack_metadata_into_image()` accepts `workflow_data` kwarg |
-| `run_api.py` | 144 | Pure helpers behind `POST /config_tester/run` and `GET /config_tester/run_status` |
+| `run_api.py` | 196 | Pure helpers behind `POST /config_tester/run`, `GET /config_tester/run_status` and `GET /config_tester/manifest` (`load_manifest_for_fetch`) |
 | `image_metrics.py`, `metrics_runner.py` | 668, 167 | Optional per-image metrics at save time; background job that backfills them for old sessions |
 | `workflow_sweep.py`, `workflow_sweep_runner.py`, `workflow_sweep_collect.py` | 1106, 1027, 281 | Workflow Sweep: pure expansion core, in-process queue feeder (never blocks the executor), `USCGSweepCollect` / `USCGSweepCollectVideo` output nodes |
 | `web/conf_builder/conf-builder-main.js` | 779 | Node registration. Default state and its migration blocks define ALL fields including upscaling/cooldown |
@@ -144,7 +144,7 @@ Images saved as WebP at `output/benchmarks/{session}/images/img_{id}.webp`
 
 - **Python files:** Restart ComfyUI
 - **`web/` JS files:** Refresh browser (Ctrl+F5)
-- **`resources/` files:** Must regenerate dashboard HTML — re-run sampler or call `/config_tester/get_session_html`
+- **`resources/` files:** Reload the dashboard (F5 on `/config_tester/dashboard`, or the node's RELOAD button). The page is a lazy shell: data comes from `GET /config_tester/manifest` (ETag/304, gzip); only code is inlined
 - **New state fields:** Add migration in `conf-builder-main.js` `onConfigure`
 
 ## Common Tasks

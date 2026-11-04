@@ -1,9 +1,20 @@
 import os
 import json
 
-def get_html_template(title, manifest_data, node_id, standalone=False):
+def get_html_template(title, manifest_data, node_id, standalone=False, inline_manifest=False):
+    """Build the dashboard page.
+
+    By default the page is a SHELL: no item data is inlined (an empty `fullManifest` flagged
+    `__uscg_lazy__`), and the SPA fetches `/config_tester/manifest?session=<title>` itself. That
+    keeps the HTML (and ComfyUI's `executed` websocket message / history entry, which carries the
+    whole string) ~500 KB instead of growing with the session. `manifest_data` is only used when
+    `inline_manifest=True` (old behaviour; offline export / tests).
+    """
     # 1. Normalize Data
-    if isinstance(manifest_data, list):
+    if not inline_manifest:
+        manifest_data = {"items": [], "meta": {"model": "", "positive": "", "negative": ""},
+                         "session_name": str(title), "__uscg_lazy__": True}
+    elif isinstance(manifest_data, list):
         manifest_data = {"items": manifest_data, "meta": {"model": "", "positive": "", "negative": ""}}
     
     # Indent JSON for readability

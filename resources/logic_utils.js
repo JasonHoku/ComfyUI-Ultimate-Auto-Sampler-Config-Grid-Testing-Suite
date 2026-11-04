@@ -50,10 +50,33 @@ async function saveState() {
     } catch (e) { console.error("Save failed", e); }
 }
 
-// Load session from disk
-async function loadSession() {
+/**
+ * Fetch a session's manifest from the lazy route (GET /config_tester/manifest?session=).
+ * Compact JSON, gzip, ETag. With {ifChanged:true} it sends If-None-Match for the ETag of the
+ * last manifest fetched for THIS session, so an unchanged manifest costs one 304 (data = null).
+ * cache:'no-store' plus a hand-set If-None-Match makes the browser hand the 304 to us instead of
+ * quietly turning it into a 200. {track:false} leaves the stored ETag alone (merge fetches).
+ * Returns {status, data, etag}; status is the HTTP status (200 / 304 / 404 / ...).
+ */
+async function fetchManifest(sess, opts) {
+    opts = opts || {};
+    const prev = window._uscgManifestEtag;
+    const headers = {};
+    if (opts.ifChanged && prev && prev.session === sess && prev.etag) headers['If-None-Match'] = prev.etag;
+    const r = await fetch('/config_tester/manifest?session=' + encodeURIComponent(sess), { cache: 'no-store', headers: headers });
+    if (r.status === 304) return { status: 304, data: null, etag: prev ? prev.etag : null };
+    if (!r.ok) return { status: r.status, data: null, etag: null };
+    const data = await r.json();
+    const etag = r.headers.get('ETag');
+    if (etag && opts.track !== false) window._uscgManifestEtag = { session: sess, etag: etag };
+    return { status: 200, data: data, etag: etag };
+}
+
+// Load session from disk (opts.boot: first load of a lazy shell; a missing session just shows the landing page)
+async function loadSession(prefetched, opts) {
+    const boot = !!(opts && opts.boot);
     const sessInput = document.getElementById('session-input');
-    if (!sessInput) return;
+    if (!sessInput) { if (boot) window._uscgBootPending = false; return; }
     const sess = sessInput.value;
 
     console.log(`[Load] 🔄 Loading session: ${sess}`);
@@ -63,9 +86,20 @@ async function loadSession() {
     if (grid) grid.style.opacity = '0.5';
 
     try {
-        const r = await fetch(`/view?filename=manifest.json&type=output&subfolder=benchmarks/${sess}&t=${Date.now()}`);
-        if (!r.ok) throw new Error("Session not found");
-        const data = await r.json();
+        let data = prefetched;
+        if (!data) {
+            const res = await fetchManifest(sess);
+            if (res.status !== 200) throw new Error("Session not found");
+            data = res.data;
+        }
+
+        // Boot only: live items that arrived (update_data) while the first fetch was in flight sit in
+        // the still-empty fullManifest; keep the ones the fetched copy does not have.
+        if (boot && fullManifest && Array.isArray(fullManifest.items) && fullManifest.items.length) {
+            const have = new Set((data.items || []).map(function (it) { return it.id; }));
+            const early = fullManifest.items.filter(function (it) { return !have.has(it.id); });
+            if (early.length) data.items = early.concat(data.items || []);
+        }
 
         console.log(`[Load] 📊 Loaded ${data.items?.length || 0} items`);
 
@@ -173,11 +207,26 @@ async function loadSession() {
 
         console.log('[Load] ✅ Session loaded successfully');
 
+        // Boot: init() ran its auto-fit on an empty grid; do it now unless a saved viewport was restored
+        if (boot && !window._uscgViewportRestored && typeof autoFitZoom === 'function') autoFitZoom();
 
     } catch (e) {
         console.error('[Load] ❌ Load failed:', e);
         if (grid) grid.style.opacity = '1';
-        alert("Load Error: " + e.message);
+        if (boot) {
+            // unknown/unreadable session on first load: the landing page, no alert
+            window._uscgBootPending = false;
+            if (typeof showSessionLandingIfEmpty === 'function') showSessionLandingIfEmpty();
+        } else {
+            alert("Load Error: " + e.message);
+        }
+    } finally {
+        if (boot) {
+            const wasPending = window._uscgBootPending;
+            window._uscgBootPending = false;
+            // success path (the failure path already refreshed the landing page): populate the session picker now
+            if (wasPending && typeof fetchAndShowSessions === 'function') fetchAndShowSessions();
+        }
     }
 }
 
@@ -191,9 +240,9 @@ async function mergeSession(sessionName) {
     console.log(`[Merge] 🔄 Merging session: ${sessionName}`);
 
     try {
-        const r = await fetch(`/view?filename=manifest.json&type=output&subfolder=benchmarks/${sessionName}&t=${Date.now()}`);
-        if (!r.ok) throw new Error("Session not found: " + sessionName);
-        const data = await r.json();
+        const res = await fetchManifest(sessionName, { track: false });
+        if (res.status !== 200) throw new Error("Session not found: " + sessionName);
+        const data = res.data;
         const newItems = data.items || [];
 
         if (newItems.length === 0) {
@@ -354,12 +403,15 @@ async function fetchAndShowSessions() {
 
 // Show session landing page if no data is loaded
 function showSessionLandingIfEmpty() {
-    const hasData = fullManifest && fullManifest.items && fullManifest.items.length > 0;
+    // a lazy shell is still fetching its manifest: do not flash the landing cards meanwhile
+    const hasData = window._uscgBootPending || (fullManifest && fullManifest.items && fullManifest.items.length > 0);
     const landing = document.getElementById('session-landing');
     const viewport = document.getElementById('viewport');
 
-    // Always populate session picker dropdown and landing cards
-    fetchAndShowSessions();
+    // Always populate session picker dropdown and landing cards. While the first manifest fetch is in
+    // flight the list waits (loadSession fetches it right after): /list_sessions scans every session
+    // folder on the server's event loop and would hold up the manifest response behind it.
+    if (!window._uscgBootPending) fetchAndShowSessions();
 
     if (!hasData && landing && viewport) {
         landing.style.display = 'block';

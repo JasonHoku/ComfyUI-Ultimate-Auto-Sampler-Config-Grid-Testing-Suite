@@ -242,7 +242,8 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 | POST | `/config_tester/clear_comparisons` | `__init__.py` | `{session_name}` | Delete all votes of a session |
 | POST | `/config_tester/save_manifest` | `__init__.py` | `{session_name, manifest}` | Full merge save (keeps server-side `meta` and `comparisons`) |
 | POST | `/config_tester/get_session_html` | `__init__.py` | `{session_name, node_id}` | Generate the dashboard HTML on demand (empty manifest for an unknown session, not a 404) |
-| GET | `/config_tester/dashboard` | `__init__.py` | `?session=` (optional) | Dashboard SPA as a top-level page (standalone mode, `USCG_STANDALONE`, own websocket via `resources/logic_standalone.js`) |
+| GET | `/config_tester/dashboard` | `__init__.py` | `?session=` (optional) | Dashboard SPA as a top-level page (standalone mode, `USCG_STANDALONE`, own websocket via `resources/logic_standalone.js`). A lazy shell (no manifest inlined); gzip + content ETag (304 on `If-None-Match`) |
+| GET | `/config_tester/manifest` | `__init__.py` | `?session=` | A session's manifest as compact JSON for the SPA (lazy loading). Takes a session NAME, never a path. Weak `ETag` (mtime+size) + `If-None-Match` -> 304, gzip when accepted, `Cache-Control: no-cache`; 400 empty name, 403 outside benchmarks, 404 unknown, 503 + `Retry-After` for a torn read (`save_manifest` is not atomic; 3 retries first). Logic in `run_api.load_manifest_for_fetch` |
 | POST | `/config_tester/run` | `__init__.py` | `{configs_json or config_name, session_name?, overwrite_existing?, force? (default true), front?, client_id?}` | Headless run: builds the Generator+Dashboard prompt and enqueues it in-process like `/prompt`. Helpers in `run_api.py` |
 | GET | `/config_tester/run_status` | `__init__.py` | `?prompt_id=` | `pending`, `running`, `success` or `error` + session / dashboard_url / item_count |
 | POST | `/config_tester/export_favorites` | `__init__.py` | `{session_name, pack_metadata?, organize_by_prompt?, organize_by_lora?, export_prompt_txt?, copy_manifest? (default true), pack_workflow?, pack_nodes_workflow?, workflow_data?, nodes_workflows?}` | Export favorited images with options (metadata, workflow, organize) |
@@ -329,10 +330,10 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 
 
 * **`html_generator.py`** (57 lines)
-  * `get_html_template(title, manifest_data, node_id)` — reads all `/resources/` files, inlines into `template.html`
+  * `get_html_template(title, manifest_data, node_id, standalone=False, inline_manifest=False)` — reads all `/resources/` files, inlines them into `template.html`. By default the page is a **lazy shell**: `fullManifest` is empty and flagged `__uscg_lazy__`, `manifest_data` is ignored, and the SPA fetches `GET /config_tester/manifest?session=<title>` itself (`inline_manifest=True` restores the old inlined data; used by tests)
   * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_dragdrop.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
-  * Zero external HTTP requests — everything inlined
+  * Zero external HTTP requests for code (JS/CSS inlined); the manifest comes from `/config_tester/manifest`
 
 ---
 
@@ -438,7 +439,7 @@ The distribution code (job queue, worker thread, `/uscg-distribution/*` routes, 
 
 ### **4. The Frontend: Dashboard SPA (`resources/`)**
 
-The Dashboard is a standalone single-page app rendered inside an iframe. All files are inlined by `html_generator.py`.
+The Dashboard is a standalone single-page app rendered inside an iframe. All code files are inlined by `html_generator.py`; the manifest data is fetched lazily from `GET /config_tester/manifest` (boot in `logic_pipeline.js` `uscgBootLoad`, `fetchManifest`/`loadSession` in `logic_utils.js`, `reload_manifest` + `applyManifestReplace` in `logic_events.js`).
 
 * **`template.html`** (662 lines)
   * HTML skeleton with settings panel (cog icon), export options, analytics
@@ -825,7 +826,7 @@ __init__.py
 
 3. **onNodeCreated Must Be Synchronous** — In `conf-builder-main.js` line 51, `onNodeCreated` MUST remain synchronous. Async initialization runs inside a fire-and-forget `(async () => { ... })()` IIFE. Making `onNodeCreated` itself async breaks widget registration.
 
-4. **Resources Are Inlined** — `html_generator.py` reads all `/resources/` files and bakes them into one HTML string. Zero external HTTP requests. Changes to dashboard JS/CSS require re-generating the HTML (re-run the sampler node or call `/config_tester/get_session_html`).
+4. **Resources Are Inlined, Data Is Not** — `html_generator.py` reads all `/resources/` files and bakes them into one HTML string (~500 KB; the same string rides ComfyUI's `executed` websocket message and history, so it must not grow with the session). The manifest is NOT in it: the page is a lazy shell and `loadSession()` fetches `/config_tester/manifest` (compact, gzip, ETag). Changes to dashboard JS/CSS: F5 on `/config_tester/dashboard` or the node's RELOAD button rebuild the page from `resources/` on every request; a node that is already showing a page keeps the old JS until RELOAD. The Generator's `executed` message carries a shell, so `web/dashboard.js` turns it into a `reload_manifest` postMessage (conditional re-fetch) instead of parsing data out of the HTML.
 
 5. **Manifest Merge on Save** — `manifest_utils.py` `save_manifest()` calls `merge_manifest_user_changes()` which reloads from disk before saving. This preserves user favorites/rejected/notes that changed concurrently while generation was running. Also, `flush_batch_with_vae()` (image_generation.py line 657) does its own disk sync.
 
@@ -904,7 +905,7 @@ __init__.py
 
 - **Python backend files:** Restart ComfyUI
 - **`web/` JS files:** Refresh browser (Ctrl+F5) — served via `/extensions/` with cache-busting
-- **`resources/` JS/CSS/HTML files:** Dashboard HTML must be regenerated — re-run the sampler node or call `/config_tester/get_session_html`
+- **`resources/` JS/CSS/HTML files:** Reload the dashboard (F5 on `/config_tester/dashboard`, or the node's RELOAD button); a page that is already open keeps its old JS
 - **Config Builder state fields:** Also update migration checks in `conf-builder-main.js` `onConfigure`
 - **New config fields:** `state_to_configs_json()` in Python is the only converter (the JS preview calls `/configbuilder/preview`); then follow the checklist in gotcha 1
 

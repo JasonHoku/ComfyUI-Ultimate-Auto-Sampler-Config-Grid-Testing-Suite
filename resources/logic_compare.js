@@ -697,6 +697,10 @@ function cmpKeyHandler(e) {
 
 function openCompareMode() {
     if (_cmp.open) return;
+    if (window._uscgBootPending) {  // lazy shell: the manifest is still being fetched
+        cmpSetStatus('Loading session...');
+        return;
+    }
     if (!fullManifest || !(fullManifest.items || []).length) {
         cmpSetStatus('Load a session with images first', true);
         return;

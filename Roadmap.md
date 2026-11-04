@@ -166,7 +166,9 @@ STARTED (11/4/26): the Pairwise Review scoreboard (per-axis win % + ratings) cov
 * **Milestone 3:** Hot-reload in dev — JS changes visible on browser refresh without re-running sampler
 Biggest architectural leverage: eliminates the #1 developer friction point.
 
-STARTED (11/4/26): `/config_tester/dashboard` serves the SPA as a standalone page with its own websocket; the manifest is still inlined by html_generator (Milestones 1-3 open).
+STARTED (11/4/26): `/config_tester/dashboard` serves the SPA as a standalone page with its own websocket.
+DONE (11/4/26) Milestone 1: the page is a lazy shell (`html_generator`, `__uscg_lazy__`); the SPA fetches `GET /config_tester/manifest?session=` (compact JSON, gzip, ETag/304; the route is named `manifest`, not `get_manifest`). The node's `executed` message no longer carries the manifest (`web/dashboard.js` sends `reload_manifest`). Milestone 3 comes free for F5 / RELOAD (the page is rebuilt from `resources/` on every request); a node already showing a page keeps its old JS until RELOAD.
+Milestone 2 is blocked as written: ComfyUI's frontend imports every `web/**/*.js` as an extension module, so the `logic_*.js` files in `WEB_DIRECTORY` would run inside the ComfyUI page. Sketch of the cheap alternative: fixed path-less routes `GET /config_tester/dashboard_bundle_js?v=<hash>` / `..._css?v=<hash>` serving the concatenated files with ETag, `Cache-Control: public, max-age=31536000, immutable` and gzip, referenced from the shell with `<script src>` / `<link>` (the shell drops to ~70 KB and repeat loads to ~0 KB). Needs: rework `test_concatenated_script_parses_as_one_script`, the e2e fake origin serving the bundle, a script-order check.
 
 #### **28. Onboarding Wizard & Tutorial**
 * **Milestone 1:** First-run wizard in Builder UI — walks through: create session → pick model → add LoRA → run → view dashboard (5 interactive steps)
