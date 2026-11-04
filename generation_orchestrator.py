@@ -1036,7 +1036,9 @@ def run_generation_loop(
             remote_vae_endpoint, save_conditioning_cache_to_file,
             enable_model_cache, optional_model, optional_clip, optional_vae,
             optional_positive, optional_negative, optional_latent, model_cache,
-            session_settings=session_settings
+            session_settings=session_settings,
+            job_order=job_order, preview_on=preview_on, pv_steps=pv_steps, pv_scale=pv_scale,
+            pv_cfg=pv_cfg, meta_run=_meta_run
         )
 
     # The schedule above used `expanded`; the main loop walks job_plan, so the smart cache needs
@@ -3018,6 +3020,25 @@ def _send_distribution_status(manager):
         pass
 
 
+def _distributed_run_meta(existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+                          configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
+                          pv_scale, pv_cfg, meta_run):
+    """Manifest meta for a distributed run: the same keys the normal loop writes, so the preview
+    tombstones (rejected_preview_fps), job order and the run-API session_settings survive. The distributed
+    path used to overwrite meta with a short dict, which erased all of them."""
+    return {
+        "positive": positive_text, "negative": negative_text,
+        "model": ckpt_name, "seed": seed,
+        "vae_batch_size": vae_batch_size,
+        "configs_json": configs_json, "resolutions_json": resolutions_json,
+        "image_format": image_format,
+        "job_order": job_order,
+        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+        **(meta_run or {})
+    }
+
+
 def _run_distributed_generation(
     self, distribution_config, expanded, input_jobs, existing_data,
     overwrite_existing, has_optional_inputs, lora_triggerwords_mode,
@@ -3027,7 +3048,9 @@ def _run_distributed_generation(
     remote_vae_endpoint, save_conditioning_cache_to_file,
     enable_model_cache, optional_model, optional_clip, optional_vae,
     optional_positive, optional_negative, optional_latent, model_cache,
-    session_settings=None
+    session_settings=None,
+    job_order="as_written", preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
+    meta_run=None
 ):
     """
     Run generation in distributed mode.
@@ -3073,6 +3096,12 @@ def _run_distributed_generation(
     if image_format != "webp":
         print(f"[GridTester] 🖼️ Image save format (distributed master): {image_format}")
 
+    def _write_meta():
+        existing_data["meta"] = _distributed_run_meta(
+            existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+            configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
+            pv_scale, pv_cfg, meta_run)
+
     manager.populate_jobs(
         expanded, input_jobs, existing_data,
         overwrite_existing, has_optional_inputs, lora_triggerwords_mode
@@ -3111,13 +3140,7 @@ def _run_distributed_generation(
         manager.deactivate()
         distribution.clear_active_manager()
 
-        existing_data["meta"] = {
-            "positive": positive_text, "negative": negative_text,
-            "model": ckpt_name, "seed": seed,
-            "vae_batch_size": vae_batch_size,
-            "configs_json": configs_json, "resolutions_json": resolutions_json,
-            "image_format": image_format
-        }
+        _write_meta()
         save_manifest(paths["manifest"], existing_data)
 
         html = get_html_template(session_name, existing_data, unique_id)
@@ -3474,13 +3497,7 @@ def _run_distributed_generation(
             remote_vae_worker.wait_completion()
             remote_vae_worker.stop()
 
-        existing_data["meta"] = {
-            "positive": positive_text, "negative": negative_text,
-            "model": ckpt_name, "seed": seed,
-            "vae_batch_size": vae_batch_size,
-            "configs_json": configs_json, "resolutions_json": resolutions_json,
-            "image_format": image_format
-        }
+        _write_meta()
         save_manifest(paths["manifest"], existing_data)
 
         loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -3534,13 +3551,7 @@ def _run_distributed_generation(
                         remote_vae_worker.wait_completion()
                         remote_vae_worker.stop()
 
-                    existing_data["meta"] = {
-                        "positive": positive_text, "negative": negative_text,
-                        "model": ckpt_name, "seed": seed,
-                        "vae_batch_size": vae_batch_size,
-                        "configs_json": configs_json, "resolutions_json": resolutions_json,
-                        "image_format": image_format
-                    }
+                    _write_meta()
                     save_manifest(paths["manifest"], existing_data)
 
                     loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -3640,13 +3651,7 @@ def _run_distributed_generation(
         else:
             print(f"[Distribution] ℹ️ No items to upscale")
 
-    existing_data["meta"] = {
-        "positive": positive_text, "negative": negative_text,
-        "model": ckpt_name, "seed": seed,
-        "vae_batch_size": vae_batch_size,
-        "configs_json": configs_json, "resolutions_json": resolutions_json,
-        "image_format": image_format
-    }
+    _write_meta()
     save_manifest(paths["manifest"], existing_data)
 
     print(f"[Distribution] 🧹 Cleaning up...")
