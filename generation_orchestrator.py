@@ -3159,7 +3159,7 @@ def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, exist
     (populate_from_plan), else the companion's legacy nested loop (job order / preview ignored)."""
     if job_plan is not None and hasattr(manager, "populate_from_plan"):
         # The master decides order, skips, preview promotion and fingerprints; workers just render.
-        _pv = None  # preview pass in distributed mode arrives in the next commit
+        _pv = {"steps": pv_steps, "scale": pv_scale, "cfg": pv_cfg} if preview_on else None
         entries, _counts = _distributed_plan_entries(
             job_plan, existing_data, overwrite_existing=overwrite_existing,
             has_optional_inputs=has_optional_inputs, lora_triggerwords_mode=lora_triggerwords_mode,
@@ -3536,6 +3536,10 @@ def _run_distributed_generation(
             latent_channels = get_latent_channels(loaded_model, optional_latent)
             latent_ratio = get_latent_downscale_ratio(loaded_model)
             gen_w, gen_h = w, h
+            _pv_scale = (ux.get("render") or {}).get("preview_scale")
+            if _pv_scale and optional_latent is None:
+                from .config_utils import preview_dims
+                gen_w, gen_h = preview_dims(w, h, _pv_scale, latent_ratio)
             if optional_latent is not None:
                 latent_in = {"samples": optional_latent["samples"].clone()}
             else:
