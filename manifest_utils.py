@@ -5,6 +5,7 @@ Handles saving and merging manifest.json with user modifications
 
 import json
 import os
+import re
 import threading
 
 # Thread-safe lock for manifest file writes.
@@ -123,9 +124,8 @@ def load_existing_manifest(manifest_path):
 def _item_file_path(manifest_path, item):
     """Local path of an item's image, derived from its /view URL, confined to <session>/images."""
     try:
-        from urllib.parse import urlparse, parse_qs
-        q = parse_qs(urlparse(item.get("file", "")).query)
-        filename = os.path.basename((q.get("filename") or [""])[0])
+        m = re.search(r"[?&]filename=([^&]+)", str(item.get("file", "")))
+        filename = os.path.basename(m.group(1)) if m else ""
         if not filename:
             return None
         images_dir = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), "images")

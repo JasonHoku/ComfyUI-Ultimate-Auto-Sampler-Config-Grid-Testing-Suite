@@ -46,6 +46,20 @@ except ImportError:
 from .html_generator import get_html_template
 
 
+def _workflow_configs(configs_json):
+    """The configs list when configs_json holds Workflow Sweep entries (model_type "workflow"), else None."""
+    if not isinstance(configs_json, str) or "workflow" not in configs_json:
+        return None
+    try:
+        parsed = json.loads(configs_json)
+    except (TypeError, ValueError):
+        return None
+    configs = parsed.get("configs") if isinstance(parsed, dict) else parsed
+    if isinstance(configs, list) and any(isinstance(c, dict) and c.get("model_type") == "workflow" for c in configs):
+        return configs
+    return None
+
+
 class SamplerGridTester:
     @classmethod
     def INPUT_TYPES(s):
@@ -95,6 +109,11 @@ class SamplerGridTester:
             "optional_model", "optional_clip", "optional_vae",
             "optional_positive", "optional_negative", "optional_latent"
         ]
+
+        # Workflow Sweep configs: a re-queue must restart/resume the sweep (finished jobs are skipped by
+        # fingerprint), never hit ComfyUI's node cache
+        if _workflow_configs(kwargs.get("configs_json")):
+            return float("NaN")
 
         # Check if any optional input is connected (not None and present in kwargs)
         has_optional = any(
@@ -326,6 +345,29 @@ class SamplerGridTester:
                     print(f"[GridTester] ⚙️ add_random_seeds_to_gens overridden by Builder UI: {add_random_seeds_to_gens}")
                 except (TypeError, ValueError):
                     pass
+
+        # Workflow Sweep: hand the template + bindings to the sweep runner and return the dashboard
+        # immediately. The sweep prompts go through ComfyUI's own queue AFTER this prompt finishes, so
+        # this node never waits on them (a node waiting on a prompt it queued would deadlock the executor).
+        wf_configs = _workflow_configs(configs_json)
+        if wf_configs is not None:
+            if any(x is not None for x in (optional_model, optional_clip, optional_vae,
+                                           optional_positive, optional_negative, optional_latent)):
+                print("[GridTester] ⚠️ Workflow Sweep ignores the optional_* inputs (the workflow has its own loaders)")
+            from .workflow_sweep_runner import start_sweep, SweepBusy
+            from .workflow_sweep import read_manifest_items, session_paths
+            settings = dict(session_settings or {})
+            settings["session_name"] = session_name
+            settings["overwrite_existing"] = overwrite_existing
+            settings["add_random_seeds_to_gens"] = add_random_seeds_to_gens
+            try:
+                sweep = start_sweep(wf_configs, settings, origin_node=unique_id)
+            except SweepBusy as e:
+                raise RuntimeError(str(e))
+            manifest = read_manifest_items(session_paths(sweep.session)["manifest"])
+            manifest.setdefault("session_name", sweep.session)
+            manifest.setdefault("meta", {})
+            return (get_html_template(sweep.session, manifest, unique_id),)
 
         return run_generation_loop(
             self,

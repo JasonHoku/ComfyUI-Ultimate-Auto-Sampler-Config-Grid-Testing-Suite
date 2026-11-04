@@ -14,6 +14,7 @@ from .config_builder_node import UltimateConfigBuilder
 from .json_text_node import SmartJSONTextNode
 from .metadata_packer import pack_metadata_into_image
 from .directory_scanner import scan_directory_for_images
+from .workflow_sweep_collect import USCGSweepCollect
 import sys
 
 # Register a sys.modules alias for cross-companion imports.
@@ -1120,6 +1121,79 @@ async def cancel_upscale(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+# =============================================================================
+# API: WORKFLOW SWEEP (sweep any API-format workflow through ComfyUI's own executor)
+# JSON bodies only, no path parameters: workflow JSON is request-body data, never a filesystem path.
+# =============================================================================
+
+@server.PromptServer.instance.routes.post("/config_tester/sweep/parse")
+async def sweep_parse(request):
+    """Describe an API-format workflow for the Builder (nodes, outputs, image sources, suggested bindings)."""
+    try:
+        data = await request.json()
+        from .workflow_sweep import parse_for_ui
+        return web.json_response(parse_for_ui(data.get("api_json")))
+    except ValueError as e:
+        return web.json_response({"ok": False, "errors": [str(e)], "error": str(e)}, status=400)
+    except Exception as e:
+        print(f"[ConfigTester] Error parsing workflow: {e}")
+        return web.json_response({"ok": False, "errors": [str(e)], "error": str(e)}, status=500)
+
+@server.PromptServer.instance.routes.post("/config_tester/sweep/dry_run")
+async def sweep_dry_run(request):
+    """First N concrete prompts (with collector) + validation of job 1. Nothing is queued."""
+    try:
+        data = await request.json()
+        from .workflow_sweep_runner import dry_run
+        return web.json_response(await dry_run(data))
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        print(f"[ConfigTester] Error in sweep dry run: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+@server.PromptServer.instance.routes.post("/config_tester/sweep/start")
+async def sweep_start(request):
+    """Start a workflow sweep from the Builder (no Generator node needed; also the resume path)."""
+    try:
+        data = await request.json()
+        from .workflow_sweep_runner import api_start
+        status, body = await api_start(data)
+        return web.json_response(body, status=status)
+    except Exception as e:
+        print(f"[ConfigTester] Error starting sweep: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+@server.PromptServer.instance.routes.get("/config_tester/sweep/status")
+async def sweep_status(request):
+    from .workflow_sweep_runner import get_status
+    status = get_status(request.query.get("sweep_id") or None, request.query.get("session_name") or None)
+    if status is None:
+        return web.json_response({"error": "No such sweep"}, status=404)
+    return web.json_response(status)
+
+async def _sweep_control(request, action):
+    try:
+        data = await request.json()
+        from . import workflow_sweep_runner as runner
+        ok, state = getattr(runner, action)(data.get("sweep_id", ""))
+        return web.json_response({"ok": ok, "state": state}, status=200 if ok else 409)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@server.PromptServer.instance.routes.post("/config_tester/sweep/pause")
+async def sweep_pause(request):
+    return await _sweep_control(request, "pause")
+
+@server.PromptServer.instance.routes.post("/config_tester/sweep/resume")
+async def sweep_resume(request):
+    return await _sweep_control(request, "resume")
+
+@server.PromptServer.instance.routes.post("/config_tester/sweep/cancel")
+async def sweep_cancel(request):
+    return await _sweep_control(request, "cancel")
+
+
 def _create_image_links(source_dir, link_dir, items):
     """
     Create symlinks (or copies on Windows) from source images and videos into
@@ -1173,7 +1247,8 @@ NODE_CLASS_MAPPINGS = {
     "UltimateSamplerGrid": SamplerGridTester,
     "UltimateGridDashboard": SamplerConfigDashboardViewer,
     "UltimateConfigBuilder": UltimateConfigBuilder,
-    "SmartJSONText": SmartJSONTextNode
+    "SmartJSONText": SmartJSONTextNode,
+    "USCGSweepCollect": USCGSweepCollect,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1181,6 +1256,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "UltimateGridDashboard": "Ultimate Grid Dashboard (Viewer)",
     "UltimateConfigBuilder": "Ultimate Config Builder",
     "SmartJSONText": "Smart JSON Text",
+    "USCGSweepCollect": "USCG Sweep Collect",
 }
 
 WEB_DIRECTORY = "./web"

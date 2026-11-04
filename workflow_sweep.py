@@ -950,3 +950,20 @@ def build_collect_item(conf, width, height, duration, batch_idx, gen_index, crea
 
 def new_item_id():
     return int(time.time() * 100000) + random.randint(0, 1000)
+
+
+def parse_for_ui(api_json, class_info=comfy_class_info):
+    """Response body of POST /config_tester/sweep/parse. Raises ValueError for unusable input."""
+    prompt = parse_api_workflow(api_json)
+    sources = find_image_sources(prompt, class_info)
+    default = sources[0] if sources else None
+    suggestions = suggest_bindings(prompt, default, class_info) if default else []
+    warnings = []
+    nodes_ = describe_nodes(prompt, class_info)
+    missing = sorted({n["class_type"] for n in nodes_ if n["missing_class"]})
+    if missing:
+        warnings.append("These node types are not installed in this ComfyUI: " + ", ".join(missing))
+    if not sources:
+        warnings.append("No IMAGE output was found; pick the image socket to collect manually.")
+    return {"ok": True, "nodes": nodes_, "outputs": find_output_nodes(prompt, class_info),
+            "image_sources": sources, "suggestions": suggestions, "warnings": warnings, "errors": []}
