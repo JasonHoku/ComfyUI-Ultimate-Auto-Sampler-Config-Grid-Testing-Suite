@@ -170,12 +170,20 @@ def calculate_clip_hash(clip_model):
         return "unknown"
 
 
-def check_if_job_completed(existing_items, conf, seed, width, height, batch_idx, positive_prompt, negative_prompt, has_optional_inputs=False):
+def check_if_job_completed(existing_items, conf, seed, width, height, batch_idx, positive_prompt, negative_prompt, has_optional_inputs=False, *, preview=False):
     """Independent check to see if a specific generation job already exists.
 
     When has_optional_inputs is True, we cannot reliably detect changes from
     upstream nodes (models, LoRAs, conditionings, latents), so we disable
     skip detection entirely and return -1 (no match) to force re-generation.
+
+    ``preview`` (keyword-only): preview-pass items (``item["preview"] is True``) and
+    full items never match each other. A preview job matches on the FULL width/height
+    stored in ``full_width``/``full_height`` (the preview's own latent size depends on
+    the model's latent ratio, which is unknown before the model loads); callers pass a
+    conf whose steps/cfg are the preview values. Legacy items have no ``preview`` key
+    and count as full. The distributed companion calls this positionally, so full
+    behaviour is the default.
     """
     # When optional inputs are connected, we can't reliably match on model,
     # lora, prompts, or latents because those may come from upstream nodes
@@ -186,9 +194,14 @@ def check_if_job_completed(existing_items, conf, seed, width, height, batch_idx,
     FLOAT_TOLERANCE = 0.0001
 
     for idx, item in enumerate(existing_items):
+        if bool(item.get("preview", False)) != preview: continue
         if item.get("seed") != seed: continue
-        if item.get("width") != width: continue
-        if item.get("height") != height: continue
+        if preview:
+            if item.get("full_width", item.get("width")) != width: continue
+            if item.get("full_height", item.get("height")) != height: continue
+        else:
+            if item.get("width") != width: continue
+            if item.get("height") != height: continue
         if item.get("batch_idx", 0) != batch_idx: continue
         if item.get("sampler") != conf["sampler"]: continue
         if item.get("scheduler") != conf["scheduler"]: continue
@@ -614,6 +627,10 @@ def run_deferred_upscales(
                     upscaled_meta["filename"] = upscaled_filename
                     upscaled_meta["upscaled"] = True
                     upscaled_meta["upscale_pipeline"] = pipeline_name
+                    if job.get("config_fp"):
+                        from .config_utils import config_fingerprint as _cfp
+                        upscaled_meta["base_fp"] = job["config_fp"]
+                        upscaled_meta["config_fp"] = _cfp(conf, pipe_w, pipe_h, conf.get("seed"), pipeline_name)
                     upscaled_meta["upscale_mode"] = mode
                     upscaled_meta["upscale_ratio"] = up_ratio
                     upscaled_meta["upscale_denoise"] = up_denoise
@@ -813,7 +830,36 @@ def run_generation_loop(
         parse_json_with_error, parse_float_input, parse_prompt_input_nested, derive_extra_seeds,
         expand_configs, prepare_input_jobs
     )
-    
+    from .config_utils import (
+        JOB_ORDERS, build_job_plan, order_job_plan, count_switches, config_fingerprint,
+        preview_dims, build_preview_index, should_skip_for_previews, build_full_fp_set
+    )
+
+    # ==== JOB ORDER / PREVIEW PASS SETTINGS (defaults reproduce the old behaviour) ====
+    _ss = session_settings or {}
+    job_order = _ss.get("job_order", "as_written")
+    if job_order not in JOB_ORDERS:
+        job_order = "as_written"
+    pv = _ss.get("preview_pass") or {}
+    preview_on = bool(pv.get("enabled"))
+    if preview_on and optional_latent is not None:
+        print(f"[GridTester] ⚠️ Preview pass ignored: a latent input is connected (its size is fixed)")
+        preview_on = False
+    try:
+        pv_steps = max(1, int(pv.get("steps", 8)))
+    except (TypeError, ValueError):
+        pv_steps = 8
+    try:
+        pv_scale = min(1.0, max(0.05, float(pv.get("scale", 0.5))))
+    except (TypeError, ValueError):
+        pv_scale = 0.5
+    try:
+        pv_cfg = None if pv.get("cfg_override") in (None, "") else float(pv.get("cfg_override"))
+    except (TypeError, ValueError):
+        pv_cfg = None
+    skip_rejected_previews = bool(_ss.get("skip_rejected_previews", True))
+    only_favorited_previews = bool(_ss.get("only_favorited_previews", False))
+
     raw_configs = parse_json_with_error(configs_json, "configs")
     denoise_values = parse_float_input(denoise)
     resolutions = parse_json_with_error(resolutions_json, "resolutions")
@@ -898,8 +944,23 @@ def run_generation_loop(
     configs_without_res = len(expanded) - configs_with_res
     total_jobs = configs_with_res + (configs_without_res * len(input_jobs))
 
+    # ==== FLAT JOB PLAN (+ optional reload-minimising order) ====
+    # One entry per job, in exactly the order the old nested loop visited them
+    # (resolution outer, configs inner) unless job_order says otherwise.
+    _plan_as_written = build_job_plan(expanded, input_jobs)
+    job_plan = order_job_plan(_plan_as_written, job_order, get_model_cache_key)
+    if len(job_plan) != total_jobs:
+        print(f"[GridTester] ⚠️ Job plan has {len(job_plan)} entries but total_jobs is {total_jobs}")
+    if job_order == "minimize_reloads":
+        _sw_before = count_switches(_plan_as_written, get_model_cache_key)
+        _sw_after = count_switches(job_plan, get_model_cache_key)
+        print(f"[GridTester] 🧭 Job order: minimize_reloads | model loads {_sw_before['model_loads']} -> {_sw_after['model_loads']}, "
+              f"LoRA switches {_sw_before['lora_switches']} -> {_sw_after['lora_switches']}")
+
     print(f"{'='*80}")
     print(f"[GridTester] 🚀 GENERATION START")
+    if job_order != "as_written":
+        print(f"[GridTester] 🧭 Job order: {job_order} (Start At Job numbers follow this order)")
     if configs_with_res > 0:
         print(f"[GridTester] 📋 {configs_with_res} configs with per-config resolutions + "
               f"{configs_without_res} configs × {len(input_jobs)} resolutions = {total_jobs} total jobs")
@@ -944,6 +1005,9 @@ def run_generation_loop(
 
     if dist_enabled:
         print(f"[GridTester] 🌐 ENTERING DISTRIBUTED MODE with {len(distribution_config.get('worker_urls', []))} worker(s)")
+        if (job_order != "as_written" or preview_on
+                or any(it.get("preview") is True for it in existing_data.get("items", []))):
+            print(f"[GridTester] ⚠️ job_order / preview pass / preview promotion are not supported in distributed mode yet - ignored")
         # Upscaling in distributed mode: workers generate base images, master runs upscales after collection
         if session_settings and session_settings.get("upscaling", {}).get("enabled", False):
             print(f"[GridTester] ℹ️ Upscaling enabled — workers will generate base images, master will run upscales after all generation completes.")
@@ -958,6 +1022,19 @@ def run_generation_loop(
             optional_positive, optional_negative, optional_latent, model_cache,
             session_settings=session_settings
         )
+
+    # The schedule above used `expanded`; the main loop walks job_plan, so the smart cache needs
+    # plan positions (identical to the old behaviour when there is one resolution and as_written).
+    if model_cache:
+        model_cache.register_schedule([pj["conf"] for pj in job_plan])
+
+    # ==== PREVIEW PASS: no upscaling at all (one change point covers inline, deferred, HiRes pre-encode) ====
+    if preview_on:
+        session_settings = {**(session_settings or {}), "upscaling": {"enabled": False}}
+        print(f"[GridTester] 🔎 Preview pass: {pv_steps} steps, x{pv_scale} scale"
+              f"{'' if pv_cfg is None else f', cfg {pv_cfg}'}, upscales skipped")
+        if any(c.get("model_type") == "ltx_video" for c in expanded):
+            print(f"[GridTester] ℹ️ Preview pass does not apply to LTX video configs - they render normally")
 
     # ==== OPTIONAL CONDITIONING SETUP ====
     if optional_positive or optional_negative:
@@ -1021,6 +1098,51 @@ def run_generation_loop(
     current_remote_vae_url = None
     config_overrides_vae = False  # True when config explicitly sets a non-Default VAE (overrides sampler node's remote_vae_endpoint)
 
+    # ==== SKIP PREDICATE (single source of truth for "does this plan entry still need work?") ====
+    # `_pstate` holds the preview index (rebuilt lazily whenever the item list changes, i.e. after
+    # every flush/save, so dashboard rejects/favourites merged in by save_manifest are seen mid-run).
+    _pstate = {"sig": None, "pindex": {}, "full_fps": set()}
+
+    def _have_history():
+        return bool(existing_data.get("items")) or bool((existing_data.get("meta") or {}).get("rejected_preview_fps"))
+
+    def _refresh_pstate():
+        items = existing_data.get("items", [])
+        sig = (len(items), id(items[0]) if items else None)
+        if sig == _pstate["sig"]:
+            return
+        _pstate["sig"] = sig
+        _pstate["pindex"] = build_preview_index(items, (existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+        _pstate["full_fps"] = build_full_fp_set(items) if preview_on else set()
+
+    def _effective_conf(c):
+        """The conf a PREVIEW job actually samples with (fewer steps, optional cfg override)."""
+        return {**c, "steps": pv_steps, "cfg": c["cfg"] if pv_cfg is None else pv_cfg}
+
+    def _promotion_status(c, fp):
+        """'rejected_preview' / 'no_favorited_preview' (full run) or 'full_exists' (preview run) or None."""
+        if has_optional_inputs or c.get("model_type") == "ltx_video" or fp is None:
+            return None
+        _refresh_pstate()
+        if preview_on:
+            return "full_exists" if fp in _pstate["full_fps"] else None
+        return should_skip_for_previews(fp, _pstate["pindex"], skip_rejected_previews, only_favorited_previews)
+
+    def _job_status(pj):
+        """'exists' | 'rejected_preview' | 'no_favorited_preview' | 'full_exists' | 'todo'."""
+        c = pj["conf"]
+        is_pv = preview_on and c.get("model_type") != "ltx_video"
+        pos_, _ = build_prompt_with_triggers(c, lora_triggerwords_mode)
+        if check_if_job_completed(
+            existing_data["items"], _effective_conf(c) if is_pv else c, c["seed"],
+            pj["w"], pj["h"], pj["batch_idx"], pos_, c["negative"],
+            has_optional_inputs=has_optional_inputs, preview=is_pv
+        ) != -1:
+            return "exists"
+        if has_optional_inputs or c.get("model_type") == "ltx_video":
+            return "todo"
+        return _promotion_status(c, config_fingerprint(c, pj["w"], pj["h"], c["seed"])) or "todo"
+
     # ==== PRE-ENCODING STAGE ====
     unique_model_keys = set(get_model_cache_key(conf) for conf in expanded)
 
@@ -1029,7 +1151,7 @@ def run_generation_loop(
     all_ltx = expanded and all(c.get("model_type") == "ltx_video" for c in expanded)
 
     if not all_ltx and not (optional_positive and optional_negative) and expanded and len(unique_model_keys) == 1:
-        first_conf = expanded[0]
+        first_conf = job_plan[0]["conf"] if job_plan else expanded[0]
         target_model_name = first_conf["model"]
 
         print(f"[GridTester] ✅ Single model detected ({target_model_name}) - enabling pre-encoding")
@@ -1092,25 +1214,16 @@ def run_generation_loop(
         # Filter configs to only collect prompts from jobs that actually need to run
         # This avoids wasting time encoding prompts for jobs that will be skipped in resume mode
         print(f"[GridTester] 🧠 Collecting unique prompts...")
-        if not overwrite_existing and existing_data.get("items"):
+        if not overwrite_existing and _have_history():
             configs_needing_work = []
-            for conf in expanded:
-                conf_positive, _ = build_prompt_with_triggers(conf, lora_triggerwords_mode)
-                conf_negative = conf["negative"]
-                conf_seed = conf["seed"]
-                # Check if ANY resolution/batch needs this config
-                needs_work = False
-                for job in input_jobs:
-                    if check_if_job_completed(
-                        existing_data["items"], conf, conf_seed,
-                        job["width"], job["height"], job["batch_idx"],
-                        conf_positive, conf_negative,
-                        has_optional_inputs=has_optional_inputs
-                    ) == -1:
-                        needs_work = True
-                        break
-                if needs_work:
-                    configs_needing_work.append(conf)
+            _seen_need = set()
+            # A config needs work if ANY of its plan entries (resolution/batch) is still todo
+            for _npj in job_plan:
+                if id(_npj["conf"]) in _seen_need:
+                    continue
+                if _job_status(_npj) == "todo":
+                    _seen_need.add(id(_npj["conf"]))
+                    configs_needing_work.append(_npj["conf"])
 
             skippable = len(expanded) - len(configs_needing_work)
             if skippable > 0:
@@ -1211,49 +1324,30 @@ def run_generation_loop(
     # in the running ETA line so the user knows how much real work is left.
     # Only useful when overwrite_existing is False (otherwise nothing is skipped).
     existing_count = 0
-    if not overwrite_existing and not has_optional_inputs and existing_data.get("items"):
+    _pf_ran = False
+    if not overwrite_existing and not has_optional_inputs and _have_history():
+        _pf_ran = True
         _pf_total = total_jobs
         print(f"[GridTester] 🔍 Pre-flight scan: checking which of {_pf_total} configs already exist...")
         _pf_checked = 0
-        for _pf_job in input_jobs:
-            _pf_w, _pf_h = _pf_job["width"], _pf_job["height"]
-            _pf_batch_idx = _pf_job["batch_idx"]
-            for _pf_job_idx_outer, _pf_job2 in enumerate(input_jobs):
-                if _pf_job2 is not _pf_job:
-                    continue
-                _pf_outer_idx = _pf_job_idx_outer
-                break
-            else:
-                _pf_outer_idx = 0
-            for _pf_conf in expanded:
-                # Mirror the per-config resolution override from the main loop
-                _pf_use_w, _pf_use_h, _pf_use_batch_idx = _pf_w, _pf_h, _pf_batch_idx
-                if _pf_conf.get("resolution") is not None:
-                    if _pf_outer_idx > 0:
-                        continue  # Processed only at job_idx == 0 in the main loop
-                    _pf_use_w, _pf_use_h = _pf_conf["resolution"]
-                    _pf_use_batch_idx = 0
-                # Use conf seed (randomize-behavior seeds won't match existing items — correct)
-                _pf_seed = _pf_conf["seed"]
-                _pf_pos, _ = build_prompt_with_triggers(_pf_conf, lora_triggerwords_mode)
-                _pf_neg = _pf_conf["negative"]
-                _pf_match = check_if_job_completed(
-                    existing_data["items"],
-                    _pf_conf,
-                    _pf_seed,
-                    _pf_use_w, _pf_use_h,
-                    _pf_use_batch_idx,
-                    _pf_pos,
-                    _pf_neg,
-                    has_optional_inputs=False
-                )
-                if _pf_match != -1:
-                    existing_count += 1
-                _pf_checked += 1
-                if _pf_checked % 1000 == 0:
-                    print(f"[GridTester] 🔍  ...scanned {_pf_checked}/{_pf_total} ({existing_count} exist so far)")
+        _pf_reasons = {}
+        # Same job_plan the main loop walks (per-config resolutions already applied by build_job_plan)
+        for _pf_pj in job_plan:
+            _pf_st = _job_status(_pf_pj)
+            if _pf_st != "todo":
+                existing_count += 1
+                _pf_reasons[_pf_st] = _pf_reasons.get(_pf_st, 0) + 1
+            _pf_checked += 1
+            if _pf_checked % 1000 == 0:
+                print(f"[GridTester] 🔍  ...scanned {_pf_checked}/{_pf_total} ({existing_count} exist so far)")
         _pf_new = _pf_total - existing_count
         print(f"[GridTester] ✅ Pre-flight: {existing_count}/{_pf_total} already exist; {_pf_new} new to generate")
+        if _pf_reasons.get("rejected_preview"):
+            print(f"[GridTester] ⏭️ {_pf_reasons['rejected_preview']} cells skipped because their preview was rejected")
+        if _pf_reasons.get("no_favorited_preview"):
+            print(f"[GridTester] ⏭️ {_pf_reasons['no_favorited_preview']} cells skipped because their preview is not favorited")
+        if _pf_reasons.get("full_exists"):
+            print(f"[GridTester] ⏭️ {_pf_reasons['full_exists']} cells skipped in the preview pass because a full image already exists")
 
     # Send initial dashboard progress so the user sees "X/N already done"
     # even before the first new gen completes. Clears any stale values from a prior run.
@@ -1279,24 +1373,18 @@ def run_generation_loop(
 
     _ltx_preflight_done = [False]  # Mutable cell so inner branch can set it
 
-    for job_idx, job in enumerate(input_jobs):
-        w, h = job["width"], job["height"]
-        batch_idx = job["batch_idx"]
-        
-        for conf_idx, conf in enumerate(expanded):
-            # Per-config resolution override: if this config has its own resolution,
-            # use it instead of the global input_job's resolution. Only process once
-            # (at job_idx == 0) to avoid duplicating work across input_jobs.
-            if conf.get("resolution") is not None:
-                if job_idx > 0:
-                    continue  # Already processed at job_idx=0
-                w, h = conf["resolution"]
-                batch_idx = 0
+    _promo_skips = 0
+    for plan_idx, pj in enumerate(job_plan):
+        # The per-config resolution override (and its batch_idx reset) now lives in build_job_plan,
+        # so w/h/batch_idx are fresh for every entry and can no longer leak into later configs.
+        conf, conf_idx, job_idx, job = pj["conf"], pj["conf_idx"], pj["job_idx"], pj["job"]
+        w, h, batch_idx = pj["w"], pj["h"], pj["batch_idx"]
 
+        if True:  # body below keeps its original indentation (it used to sit inside the nested loops)
             # ==== CHECK FOR INTERRUPT ====
             # ==== UPDATE CURRENT STEP ====
             if model_cache:
-                model_cache.set_current_step(conf_idx)
+                model_cache.set_current_step(plan_idx)
 
             try:
                 import comfy.model_management as mm
@@ -1323,7 +1411,10 @@ def run_generation_loop(
                         "vae_batch_size": vae_batch_size,
                         "configs_json": configs_json,
                         "resolutions_json": resolutions_json,
-                        "image_format": image_format
+                        "image_format": image_format,
+                        "job_order": job_order,
+                        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+                        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
                     }
                     save_manifest(paths["manifest"], existing_data)
 
@@ -1345,6 +1436,15 @@ def run_generation_loop(
             if conf.get("seed_behavior") == "randomize":
                 import random
                 current_seed = random.randint(0, 2**63 - 1)
+            # Fingerprint of this cell (configured seed, FULL resolution); LTX items are not fingerprinted.
+            job_fp = None
+            if conf.get("model_type") != "ltx_video":
+                job_fp = config_fingerprint(conf, w, h, conf["seed"])
+                if not preview_on and not has_optional_inputs and conf.get("seed_behavior") == "randomize":
+                    _refresh_pstate()
+                    _pe = _pstate["pindex"].get(job_fp)
+                    if _pe and _pe.get("seed") is not None:
+                        current_seed = _pe["seed"]  # re-render the survivor with the seed the user approved
             current_job += 1
             
             if pbar:
@@ -1413,8 +1513,14 @@ def run_generation_loop(
                 continue
 
             progress_pct = int((current_job / total_jobs) * 100)
-            print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
-                  f"{conf['sampler']} @ {conf['steps']} steps | {w}x{h}")
+            _is_pv = preview_on  # LTX configs never reach this point (dispatched above)
+            eff_conf = _effective_conf(conf) if _is_pv else conf
+            if _is_pv:
+                print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
+                      f"{conf['sampler']} @ PREVIEW {pv_steps} steps | {w}x{h} x{pv_scale}")
+            else:
+                print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
+                      f"{conf['sampler']} @ {conf['steps']} steps | {w}x{h}")
             
             actual_positive_prompt, lora_triggers = build_prompt_with_triggers(
                 conf, lora_triggerwords_mode
@@ -1426,16 +1532,30 @@ def run_generation_loop(
                 skipped_count += 1
                 continue
 
+            # ==== PREVIEW PROMOTION SKIP ====
+            # Full run: skip cells whose preview was rejected (or not favorited). Preview run: skip cells
+            # that already have a full image. A rejection is an explicit user signal, so overwrite_existing
+            # does not override it; it still overrides the "full image exists" skip.
+            _promo_why = _promotion_status(conf, job_fp)
+            if _promo_why and not (_promo_why == "full_exists" and overwrite_existing):
+                skipped_count += 1
+                if _promo_why != "full_exists":
+                    _promo_skips += 1
+                    if _promo_skips % 50 == 0:
+                        print(f"[GridTester] ⏭️ skipped {_promo_skips} jobs whose preview was rejected")
+                continue
+
             # ==== CHECK EXISTING MATCH ====
             match_index = check_if_job_completed(
                 existing_data["items"],
-                conf,
+                eff_conf,
                 current_seed,
                 w, h,
                 batch_idx,
                 actual_positive_prompt,
                 actual_negative_prompt,
-                has_optional_inputs=has_optional_inputs
+                has_optional_inputs=has_optional_inputs,
+                preview=_is_pv
             )
 
             if match_index != -1:
@@ -1567,26 +1687,19 @@ def run_generation_loop(
                     _seen_positives = set()
                     _seen_negatives = set()
 
-                    for future_idx in range(conf_idx, len(expanded)):
-                        future_conf = expanded[future_idx]
+                    for future_idx in range(plan_idx, len(job_plan)):
+                        future_conf = job_plan[future_idx]["conf"]
+                        if get_model_cache_key(future_conf) != target_model_key:
+                            break  # the contiguous run of this model in the plan
                         if get_model_cache_key(future_conf) == target_model_key:
                             future_positive, _ = build_prompt_with_triggers(
                                 future_conf, lora_triggerwords_mode
                             )
                             # Skip encoding prompts for configs that are already completed
                             # (avoids wasting time on prompts only used by skipped jobs)
-                            if not overwrite_existing and existing_data.get("items"):
-                                future_seed = future_conf["seed"]
-                                all_done = True
-                                for fj in input_jobs:
-                                    if check_if_job_completed(
-                                        existing_data["items"], future_conf, future_seed,
-                                        fj["width"], fj["height"], fj["batch_idx"],
-                                        future_positive, future_conf["negative"],
-                                        has_optional_inputs=has_optional_inputs
-                                    ) == -1:
-                                        all_done = False
-                                        break
+                            if not overwrite_existing and _have_history():
+                                # this plan entry (conf @ resolution) is already done or skipped
+                                all_done = _job_status(job_plan[future_idx]) != "todo"
                                 if all_done:
                                     continue
                             if future_positive not in _seen_positives:
@@ -1645,7 +1758,10 @@ def run_generation_loop(
                                 "vae_batch_size": vae_batch_size,
                                 "configs_json": configs_json,
                                 "resolutions_json": resolutions_json,
-                                "image_format": image_format
+                                "image_format": image_format,
+                                "job_order": job_order,
+                                "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+                                "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
                             }
                             save_manifest(paths["manifest"], existing_data)
 
@@ -1699,16 +1815,12 @@ def run_generation_loop(
             # ==== 🚀 ASYNC LOOK-AHEAD PRE-FETCHING (CORRECTED) ====
             # =========================================================
             if model_cache is not None and model_cache.async_preload:
-                current_overall_index = (job_idx * len(expanded)) + conf_idx
-                
-                # Check if next job exists
-                if current_overall_index + 1 < total_jobs:
-                    next_idx = current_overall_index + 1
-                    next_job_idx = next_idx // len(expanded)
-                    next_conf_idx = next_idx % len(expanded)
-                    
-                    if next_job_idx < len(input_jobs):
-                        next_conf = expanded[next_conf_idx]
+                # Check if next job exists (the plan carries it directly, no index arithmetic)
+                if plan_idx + 1 < len(job_plan):
+                    next_idx = plan_idx + 1
+
+                    if next_idx < len(job_plan):
+                        next_conf = job_plan[next_idx]["conf"]
                         
                         # RESOLVE cache keys for next conf
                         next_model_key = get_model_cache_key(next_conf)
@@ -1769,6 +1881,9 @@ def run_generation_loop(
                                 model_cache.preload_base_model(next_model_key, _preload_diff_worker)
             # =========================================================
 
+            # Preview pass renders a snapped, scaled-down latent; full jobs use w x h unchanged.
+            gen_w, gen_h = preview_dims(w, h, pv_scale, latent_ratio) if _is_pv else (w, h)
+
             # Generate image
             if job["latent"] is not None:
                 latent_in = {"samples": job["latent"]["samples"].clone()}
@@ -1776,7 +1891,7 @@ def run_generation_loop(
                 # Pixels-per-cell comes from the model's latent format (8 for SD/SDXL/Flux.1,
                 # 16 for the Flux.2 family incl. MOSS-Image). Hardcoding 8 here made 16x
                 # models render at 2x size and ~10x slower.
-                latent_in = make_empty_latent(latent_channels, w, h, latent_ratio)
+                latent_in = make_empty_latent(latent_channels, gen_w, gen_h, latent_ratio)
             
             result_latent = None
             try:
@@ -1796,7 +1911,7 @@ def run_generation_loop(
                     print(f"[GridTester] ⚙️ Extra options: {', '.join(extra_opts)}")
 
                 result_latent, duration = generate_image(
-                    patched_model, current_seed, conf["steps"], conf["cfg"],
+                    patched_model, current_seed, eff_conf["steps"], eff_conf["cfg"],
                     conf["sampler"], conf["scheduler"], final_positive, final_negative,
                     latent_in, conf["denoise"], attention_mode=attention_mode,
                     model_sampling_override=conf.get("model_sampling_override", "none"),
@@ -1820,8 +1935,8 @@ def run_generation_loop(
                     slg_single_layers=conf.get("slg_single_layers", "22"),
                     slg_start_percent=conf.get("slg_start_percent", 0.0),
                     slg_end_percent=conf.get("slg_end_percent", 0.5),
-                    width=w,
-                    height=h
+                    width=gen_w,
+                    height=gen_h
                 )
 
                 # ==== UPSCALING (pipeline-based with sequential steps) ====
@@ -1850,6 +1965,7 @@ def run_generation_loop(
                             "actual_positive_prompt": actual_positive_prompt,
                             "actual_negative_prompt": actual_negative_prompt,
                             "gen_index": gen_index_offset + total_generated,
+                            "config_fp": job_fp,
                         })
                         # Clear pipelines so the inline loop below becomes a no-op
                         upscale_pipelines = []
@@ -1989,6 +2105,8 @@ def run_generation_loop(
                                         )
                                         sentinel_meta.update({
                                             "id": sentinel_id,
+                                            "base_fp": job_fp,
+                                            "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
                                             "upscaled": False,
                                             "florence2_no_detection": True,
                                             "florence2_text_input": step_result.get("florence2_text_input", ""),
@@ -2025,6 +2143,8 @@ def run_generation_loop(
                                     )
                                     upscaled_meta.update({
                                         "id": upscale_id,
+                                        "base_fp": job_fp,
+                                        "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
                                         "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
                                         "filename": upscaled_filename,
                                         "rejected": False,
@@ -2088,6 +2208,8 @@ def run_generation_loop(
                                     upscaled_meta = dict(meta)
                                     upscaled_meta.update({
                                         "id": upscale_id,
+                                        "base_fp": job_fp,
+                                        "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
                                         "gen_index": len(existing_data["items"]),
                                         "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
                                         "filename": upscaled_filename,
@@ -2252,6 +2374,8 @@ def run_generation_loop(
                                     upscaled_meta["id"] = upscale_id
                                     upscaled_meta["upscaled"] = True
                                     upscaled_meta["upscale_pipeline"] = pipeline_name
+                                    upscaled_meta["base_fp"] = job_fp
+                                    upscaled_meta["config_fp"] = config_fingerprint(conf, w, h, conf["seed"], pipeline_name)
 
                                     # Include HiRes prompt adjustment info in manifest
                                     if hires_prompt_active:
@@ -2338,7 +2462,8 @@ def run_generation_loop(
                 total_duration = duration + total_upscale_duration
                 new_completed += 1
                 job_durations.append(total_duration)
-                eta_info = calculate_eta(job_durations, current_job, total_jobs)
+                # With the pre-flight scan, jobs that will be skipped later must not count as remaining work
+                eta_info = calculate_eta(job_durations, (existing_count + new_completed) if _pf_ran else current_job, total_jobs)
                 if eta_info:
                     print_generation_progress(current_job, total_jobs, conf, w, h, total_duration, eta_info)
                     # Compact single-line ETA summary — uses effective progress (existing + newly completed)
@@ -2385,10 +2510,17 @@ def run_generation_loop(
                 # Unless save_pre_upscale is enabled, in which case save both
                 if not upscale_produced or save_pre_upscale:
                     meta = create_image_metadata(
-                        conf, w, h, total_duration, current_seed, batch_idx,
+                        eff_conf, gen_w, gen_h, total_duration, current_seed, batch_idx,
                         actual_positive_prompt, actual_negative_prompt,
                         gen_index=gen_index_offset + total_generated
                     )
+                    meta["config_fp"] = job_fp
+                    if _is_pv:
+                        meta.update({
+                            "preview": True, "preview_of": job_fp,
+                            "full_steps": conf["steps"], "full_cfg": conf["cfg"],
+                            "full_width": w, "full_height": h, "preview_scale": pv_scale,
+                        })
                     if pos_hash or neg_hash:
                         meta["conditioning_pos_hash"] = pos_hash
                         meta["conditioning_neg_hash"] = neg_hash
@@ -2442,7 +2574,10 @@ def run_generation_loop(
                         "vae_batch_size": vae_batch_size,
                         "configs_json": configs_json,
                         "resolutions_json": resolutions_json,
-                        "image_format": image_format
+                        "image_format": image_format,
+                        "job_order": job_order,
+                        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+                        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
                     }
                     save_manifest(paths["manifest"], existing_data)
 
@@ -2548,7 +2683,10 @@ def run_generation_loop(
         "vae_batch_size": vae_batch_size,
         "configs_json": configs_json,
         "resolutions_json": resolutions_json,
-        "image_format": image_format
+        "image_format": image_format,
+        "job_order": job_order,
+        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
     }
     save_manifest(paths["manifest"], existing_data)
 

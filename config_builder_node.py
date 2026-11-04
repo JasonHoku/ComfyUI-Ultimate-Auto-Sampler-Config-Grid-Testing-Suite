@@ -943,6 +943,35 @@ class UltimateConfigBuilder:
         except (TypeError, ValueError):
             session_settings["add_random_seeds_to_gens"] = 0
 
+        # Job order + preview pass (coarse-to-fine grids) — always emitted so older workflows get the
+        # defaults (as_written, preview off) and the Builder UI stays authoritative.
+        job_order = str(state.get("job_order", "as_written"))
+        session_settings["job_order"] = job_order if job_order in ("as_written", "minimize_reloads") else "as_written"
+        pv_state = state.get("preview_pass")
+        if not isinstance(pv_state, dict):
+            pv_state = {}
+        try:
+            pv_steps = max(1, int(pv_state.get("steps", 8)))
+        except (TypeError, ValueError):
+            pv_steps = 8
+        try:
+            pv_scale = min(1.0, max(0.05, float(pv_state.get("scale", 0.5))))
+        except (TypeError, ValueError):
+            pv_scale = 0.5
+        pv_cfg = pv_state.get("cfg_override")
+        try:
+            pv_cfg = None if pv_cfg is None or str(pv_cfg).strip() == "" else float(pv_cfg)
+        except (TypeError, ValueError):
+            pv_cfg = None
+        session_settings["preview_pass"] = {
+            "enabled": bool(pv_state.get("enabled", False)),
+            "steps": pv_steps,
+            "scale": pv_scale,
+            "cfg_override": pv_cfg,
+        }
+        session_settings["skip_rejected_previews"] = bool(state.get("skip_rejected_previews", True))
+        session_settings["only_favorited_previews"] = bool(state.get("only_favorited_previews", False))
+
         if session_settings:
             output_obj["_session_settings"] = session_settings
 

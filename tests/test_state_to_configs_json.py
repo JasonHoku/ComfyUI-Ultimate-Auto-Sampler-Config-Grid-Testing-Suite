@@ -218,3 +218,46 @@ def test_te_batch_size_defaults_off_and_is_clamped():
     assert _te_batch_size_for(te_batch_size=None) == 1
     assert _te_batch_size_for(te_batch_size=0) == 1
     assert _te_batch_size_for(te_batch_size=-3) == 1
+# ---- job order + preview pass run settings -----------------------------------
+
+def _ss(**state_extra):
+    state = make_state()
+    state.update(state_extra)
+    return json.loads(UltimateConfigBuilder.state_to_configs_json(state))["_session_settings"]
+
+
+def test_preview_and_job_order_defaults_are_emitted():
+    ss = _ss()
+    assert ss["job_order"] == "as_written"
+    assert ss["preview_pass"] == {"enabled": False, "steps": 8, "scale": 0.5, "cfg_override": None}
+    assert ss["skip_rejected_previews"] is True
+    assert ss["only_favorited_previews"] is False
+
+
+def test_preview_settings_are_coerced():
+    ss = _ss(job_order="minimize_reloads",
+             preview_pass={"enabled": 1, "steps": "12", "scale": "0.33", "cfg_override": "3.5"},
+             skip_rejected_previews=0, only_favorited_previews=1)
+    assert ss["job_order"] == "minimize_reloads"
+    assert ss["preview_pass"] == {"enabled": True, "steps": 12, "scale": 0.33, "cfg_override": 3.5}
+    assert ss["skip_rejected_previews"] is False
+    assert ss["only_favorited_previews"] is True
+
+
+def test_preview_bad_types_fall_back_and_clamp():
+    ss = _ss(preview_pass={"enabled": True, "steps": "abc", "scale": "x", "cfg_override": "nope"})
+    assert ss["preview_pass"] == {"enabled": True, "steps": 8, "scale": 0.5, "cfg_override": None}
+    ss = _ss(preview_pass={"steps": 0, "scale": 7})
+    assert ss["preview_pass"]["steps"] == 1 and ss["preview_pass"]["scale"] == 1.0
+    assert _ss(preview_pass={"scale": 0})["preview_pass"]["scale"] == 0.05
+    assert _ss(preview_pass="garbage")["preview_pass"]["enabled"] is False
+
+
+def test_cfg_override_blank_is_null_and_zero_is_kept():
+    assert _ss(preview_pass={"cfg_override": ""})["preview_pass"]["cfg_override"] is None
+    assert _ss(preview_pass={"cfg_override": None})["preview_pass"]["cfg_override"] is None
+    assert _ss(preview_pass={"cfg_override": 0})["preview_pass"]["cfg_override"] == 0.0
+
+
+def test_unknown_job_order_becomes_as_written():
+    assert _ss(job_order="alphabetical")["job_order"] == "as_written"

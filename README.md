@@ -230,6 +230,7 @@ If you'd rather build the graph yourself:
 * **Unified Settings Panel:** Gear icon (⚙️) opens a consolidated settings panel with Session management, Grid Display controls, Export Favorites, and Scan External Directory — replacing the old separate SESSION button.
 * **Scan External Directory:** Load image sessions from any folder (including other ComfyUI instances) into the dashboard for viewing and filtering. Reads PNG metadata for full config display.
 * **Export Favorites:** Copy all favorited images to a dedicated export folder with optional CivitAI metadata packing for sharing.
+* **Preview Pass support:** preview images carry an amber `PREVIEW` badge, a **Pass** filter row (Preview / Full, shown once previews exist) separates them, and a preview whose cell now has a full image is hidden by default (isolate `Preview` in the Pass row to see them). A bar under the header counts previews and offers **Full pass for survivors (N)**, which switches Preview Pass off in the matching Config Builder and queues the workflow (falls back to instructions if the ComfyUI frontend does not allow it).
 
 ### ⚡ The "Revise & Generate" Workflow
 * **One-Click Revision:** Click "REVISE" on any image to open a detail view.
@@ -790,6 +791,15 @@ This expands into all combinations (3 × 2 × 2 = 12 prompts):
 
 The editor provides a visual chip interface for building and editing these variation groups. Each group is displayed as a clickable chip that can be expanded to add/remove options. Multiple groups can be nested for exponential prompt variation.
 
+### Job Order & Preview Pass (Run Settings)
+Both live in the **Run Settings** section of the Config Builder and default to the old behaviour.
+
+* **Job Order:** `As written (default)` runs one resolution pass after another, exactly as before. `Minimize model/LoRA reloads` re-orders the whole job list so each model, LoRA stack and VAE loads as few times as possible (resolutions interleave, which costs nothing; only a new empty latent). Example: 3 models x 3 LoRA stacks x 3 resolutions loads 9 models and patches 27 LoRA stacks as written, but 3 and 9 with Minimize. The log prints the before/after counts. **Start At Job #** numbers follow the chosen order. Ignored in distributed mode (a warning is logged).
+* **Preview Pass:** renders every cell cheaply first (fewer **Preview Steps**, smaller image via **Preview Scale** x0.25/0.33/0.5/0.75 snapped to the model's latent grid, optional **Preview CFG Override**, upscaling skipped) so you see the whole grid in a fraction of the time. Preview images carry a `PREVIEW` badge on the Dashboard. Reject the losers, then **untick Preview Pass and queue again**: only the surviving cells render at full quality, and each full image replaces its preview in the default Dashboard view. Interrupted preview passes resume (previews already done are skipped), and a preview pass skips cells that already have a full image. Not used when a latent input is connected; LTX video configs always render normally; ignored in distributed mode.
+* **Skip Rejected Previews** (default on) and **Only Favorited Previews**: apply when Preview Pass is OFF. Cells whose preview you rejected are skipped, including after **Delete Rejected** (the rejection is remembered in `meta.rejected_preview_fps`). With *Only Favorited*, a cell that has a preview is rendered only if that preview is favorited; cells with no preview are still rendered. `Overwrite Existing` does not override a rejection.
+* A cell is identified by a **config fingerprint** (model, LoRA stack, VAE, text encoders, sampler, scheduler, CFG, denoise, seed, raw prompts, full resolution, plus advanced-sampling/SLG/deep-shrink settings; *not* steps). Cells whose seed is re-randomised on every run (`random_before`, extra random seeds) cannot be matched to a preview and simply render again.
+* ETA: preview and full jobs cost roughly 10x apart and the rolling average lags when slow models are grouped together; treat the ETA as approximate under Minimize.
+
 ---
 
 ## 🖥️ Dashboard Interface
@@ -846,6 +856,7 @@ The editor provides a visual chip interface for building and editing these varia
 * **Bottom Right:** Generation time in seconds.
 * **Top Left (on hover):** Red ✕ button to reject/hide image.
 * **Top Right (on hover):** Gold ⭐ button to favorite image, and green "REVISE" button to open studio view.
+* **Bottom Center:** amber `PREVIEW · N st` badge on preview-pass images (hover for the full-quality size/steps it stands in for).
 
 ### JSON Bars (Bottom — Horizontal Layout)
 * **Green Bar (Left — Accepted):** Contains optimized JSON of all currently visible images. Click to select all, then copy-paste back into the `configs_json` widget to refine your batch.
@@ -1599,6 +1610,8 @@ Tests live in `tests/` and must not contain network or process-spawning code (no
 11. **claim_timeout default is 600** — This value appears in `distribution_manager.py`, `config_builder_node.py`, `conf-builder-distribution.js`, and `conf-builder-main.js`. Keep all four in sync.
 
 12. **ComfyUI Registry security** — No `import requests`, no `subprocess`/`eval`/`exec`, no custom file-serving endpoints. Use `urllib.request` for HTTP and ComfyUI's `/view` endpoint for serving files. See `ProjectStructure.md` for full rules.
+
+13. **Job plan and config fingerprint** — `run_generation_loop` walks a flat `job_plan` (`config_utils.build_job_plan`, one entry per job, binding `conf, conf_idx, job_idx, job, w, h, batch_idx`) instead of nested resolution x config loops; `order_job_plan` reorders it for `job_order: minimize_reloads` (stable sort on first-appearance ranks). `check_if_job_completed(..., preview=False)` keeps its positional signature (the distributed companion calls it positionally); the new `preview` flag is keyword-only and previews/full items never match each other. `config_fingerprint()` is the identity of a grid cell (stored as `config_fp` on every new item; preview items add `preview`, `preview_of`, `full_*`; upscaled items add `base_fp`). Bump `FP_VERSION` (and keep the old reader) if you ever change its payload; a golden-value test pins it. The main-loop body still sits under an `if True:` only to keep its indentation (diff size) after flattening. Preview/promotion/job-order features are ignored by the distributed path.
 
 ### File Dependencies (Import Graph)
 

@@ -321,6 +321,7 @@ All routes registered via `PromptServer.instance.routes`.
   * `prepare_input_jobs()` — final job list preparation
   * `parse_lora_definition()` — parses `"name:model_str:clip_str"` format
   * `sanitize_session_name()`, `get_files_from_folder()`
+  * Job plan + preview helpers (pure Python, unit-tested): `build_job_plan()`, `order_job_plan()` (as_written / minimize_reloads), `count_switches()`, `config_fingerprint()` / `item_fingerprint()`, `preview_dims()`, `build_preview_index()`, `should_skip_for_previews()`, `build_full_fp_set()`, `collect_rejected_preview_fps()`
 
 * **`manifest_utils.py`** (120 lines)
   * `load_existing_manifest()`, `save_manifest()`, `merge_manifest_user_changes()`

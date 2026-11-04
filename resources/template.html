@@ -539,6 +539,15 @@
     </div>
 
 
+    <!-- PREVIEW PASS BAR (shown only when the session holds preview images) -->
+    <div id="preview-bar" style="display: none; align-items: center; gap: 10px; padding: 4px 12px; background: #2a2418; border-bottom: 1px solid #443a22; font-size: 11px; color: #cdb26a;">
+        <span style="font-weight: bold;">PREVIEW PASS</span>
+        <span id="preview-bar-text" style="flex: 1;">--</span>
+        <button id="full-pass-btn" onclick="runFullPassForSurvivors()"
+            title="Render the survivors at full quality: turns Preview pass off in the Config Builder and queues the workflow"
+            style="background: #3a2f12; border: 1px solid #8a7330; color: #ffd76a; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">&#9654; Full pass for survivors</button>
+    </div>
+
     <div id="filters-popup" class="filters-popup" style="display: none;">
         <div class="filters-popup-header">
             <h3>Filters & Info</h3>
@@ -717,6 +726,10 @@
                     <span class="filter-label">Type</span>
                     <div id="filter-mediaType" class="filter-buttons-container"></div>
                 </div>
+                <div class="filter-row" style="display: none;">
+                    <span class="filter-label">Pass</span>
+                    <div id="filter-passType" class="filter-buttons-container"></div>
+                </div>
             </div>
 
         </div>
@@ -820,7 +833,7 @@
             <span class="modal-kbd-hint" style="font-size: 9px; color: #444; margin-left: 8px;">← → Space navigate &nbsp;|&nbsp; 1-9 favorite</span>
         </div>
         <div class="modal-main">
-            <div class="preview"><img id="m-img" src=""></div>
+            <div class="preview"><img id="m-img" src=""><div id="m-preview-note" style="display: none; font-size: 11px; color: #cdb26a; padding: 4px 8px; text-align: center;"></div></div>
             <div class="controls">
                 <h2 style="margin:0 0 10px 0; color:#fff;">Revise & Generate</h2>
                 <button class="modal-action-btn copy-comfy-btn" onclick="copyConfigsAsComfyNodes(window.currentModalId)"

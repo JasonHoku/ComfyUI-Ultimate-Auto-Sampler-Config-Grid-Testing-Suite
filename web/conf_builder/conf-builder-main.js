@@ -212,7 +212,11 @@ app.registerExtension({
                     enable_model_cache: false,
                     vae_batch_size: 1,
                     add_random_seeds_to_gens: 0,
-                    te_batch_size: 1
+                    te_batch_size: 1,
+                    job_order: "as_written",
+                    preview_pass: { enabled: false, steps: 8, scale: 0.5, cfg_override: null },
+                    skip_rejected_previews: true,
+                    only_favorited_previews: false
                 };
 
                 // Create HTML container immediately
@@ -325,6 +329,10 @@ app.registerExtension({
                             if (this.state.vae_batch_size === undefined) this.state.vae_batch_size = 1;
                             if (this.state.add_random_seeds_to_gens === undefined) this.state.add_random_seeds_to_gens = 0;
                             if (this.state.te_batch_size === undefined) this.state.te_batch_size = 1;
+                            if (this.state.job_order === undefined) this.state.job_order = "as_written";
+                            if (this.state.preview_pass === undefined) this.state.preview_pass = { enabled: false, steps: 8, scale: 0.5, cfg_override: null };
+                            if (this.state.skip_rejected_previews === undefined) this.state.skip_rejected_previews = true;
+                            if (this.state.only_favorited_previews === undefined) this.state.only_favorited_previews = false;
 
                             this.saveState();
                             this.renderUI();

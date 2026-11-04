@@ -32,8 +32,13 @@ var filters = filters || {
     steps: new Set(),
     cfg: new Set(),
     upscaleMethod: new Set(),
-    mediaType: new Set()
+    mediaType: new Set(),
+    passType: new Set()   // 'Preview' | 'Full'
 };
+
+// config_fp / base_fp of every non-preview item: a preview whose preview_of is in here has been superseded
+// by a full render and is hidden by default (see isSupersededPreview in logic_pipeline.js).
+var supersededFps = supersededFps || new Set();
 
 // Top-level filter toggles (true = show, false = hide)
 var topFilters = topFilters || {
