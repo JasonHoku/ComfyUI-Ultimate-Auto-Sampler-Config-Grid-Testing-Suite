@@ -3106,6 +3106,51 @@ def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, ha
     return entries, counts
 
 
+def _distributed_metrics_pass(existing_data, pre_ids, images_dir, image_path_for=None):
+    """Metrics for images that workers rendered. Run once on the master after collection.
+
+    Workers measure the builtins on the decoded GPU tensor (same numbers the master gets for its own images,
+    when their companion/main code is new enough); adapters (aesthetic scorer ...) only ever run here, so
+    workers do not need the scorer pack installed. An item with no metrics at all (older worker) gets
+    builtins from the saved file and its adapters. Master-rendered items already have everything and are
+    left alone. Returns ``{"adapters": n, "builtins_from_file": m}``; no-op without an active metrics run.
+    """
+    from . import image_metrics
+    spec = image_metrics.current_spec()
+    out = {"adapters": 0, "builtins_from_file": 0}
+    if not spec:
+        return out
+    if image_path_for is None:
+        from .metrics_runner import _image_path_for as image_path_for
+    from PIL import Image
+    adapter_names = list(spec.get("adapters") or [])
+    for item in existing_data.get("items", []):
+        if item.get("id") in pre_ids or item.get("upscaled") or item.get("media_type") == "video":
+            continue
+        have = item.get("metrics") or {}
+        need_builtins = bool(spec.get("builtins")) and not have
+        need_adapters = any(a not in have for a in adapter_names)
+        if not (need_builtins or need_adapters):
+            continue
+        path = image_path_for(item, images_dir)
+        if path is None:
+            continue
+        try:
+            with Image.open(path) as im:
+                pil = im.convert("RGB")
+        except Exception as e:
+            print(f"[Distribution] ⚠️ metrics skipped for item {item.get('id')}: {e}")
+            continue
+        if need_builtins:
+            image_metrics.attach(item, pil)
+            out["builtins_from_file"] += 1
+        else:
+            image_metrics.attach_adapters(item, pil)
+        if need_adapters:
+            out["adapters"] += 1
+    return out
+
+
 def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing,
                                   has_optional_inputs, lora_triggerwords_mode, *, job_order="as_written",
                                   preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
@@ -3126,7 +3171,9 @@ def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, exist
             print(f"[Distribution] 🧭 Job order {job_order}: jobs are claimed in the master's plan order")
         if preview_on:
             print(f"[GridTester] 🔎 Distributed preview pass: {pv_steps} steps, x{pv_scale} scale")
-        manager.populate_from_plan(entries, run_extras={})
+        _spec = image_metrics.current_spec()
+        manager.populate_from_plan(
+            entries, run_extras={"metrics_builtins": list(_spec.get("builtins") or [])} if _spec else {})
     else:
         if (job_order != "as_written" or preview_on
                 or any(it.get("preview") is True for it in existing_data.get("items", []))):
@@ -3221,6 +3268,7 @@ def _run_distributed_generation(
             configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
             pv_scale, pv_cfg, meta_run)
 
+    _pre_ids = {it.get("id") for it in existing_data.get("items", [])}
     _populate_distributed_manager(
         manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing, has_optional_inputs,
         lora_triggerwords_mode, job_order=job_order, preview_on=preview_on, pv_steps=pv_steps,
@@ -3752,6 +3800,14 @@ def _run_distributed_generation(
         remote_vae_worker.stop()
 
     print_incompatible_loras_summary(incompatible_loras)
+
+    # === Metrics for worker-rendered images (adapters only run here; see _distributed_metrics_pass) ===
+    if image_metrics.current_spec():
+        _mres = _distributed_metrics_pass(existing_data, _pre_ids, paths["images"])
+        if _mres["adapters"] or _mres["builtins_from_file"]:
+            save_manifest(paths["manifest"], existing_data)
+            print(f"[Distribution] 📏 measured {_mres['adapters']} worker image(s) on master "
+                  f"({_mres['builtins_from_file']} builtins from file)")
 
     # === Run deferred upscales on master after all distributed generation is complete ===
     if session_settings and session_settings.get("upscaling", {}).get("enabled", False):
