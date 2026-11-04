@@ -143,3 +143,23 @@ def test_no_detection_entry_does_not_carry_upscale_metadata():
     # They don't claim to be an upscale output
     assert entry["upscaled"] is False
     assert "upscale_mode" not in entry
+
+
+def test_base_dims_kwarg_lands_in_both_builders():
+    from florence2_hires import build_florence2_manifest_entry, build_florence2_no_detection_entry
+
+    step = {"status": "ok", "image_width": 1536, "image_height": 1536, "florence2_text_input": "face"}
+    kw = dict(session_name="s", pipeline_name="P", upscale_id=1, upscaled_filename="f.webp",
+              current_index=0, hires_denoise=0.5)
+    item = {"id": 9, "file": "/view?x", "filename": "x.webp"}
+    plain = build_florence2_manifest_entry(step, item, **kw)
+    assert "base_width" not in plain and "base_height" not in plain
+    dims = {"base_width": 1024, "base_height": 1024}
+    withd = build_florence2_manifest_entry(step, item, base_dims=dims, **kw)
+    assert withd["base_width"] == 1024 and withd["base_height"] == 1024
+    assert {k: v for k, v in withd.items() if not k.startswith("base_")} == plain
+
+    s_plain = build_florence2_no_detection_entry(step, item, sentinel_id=3, current_index=0)
+    assert "base_width" not in s_plain
+    s_dims = build_florence2_no_detection_entry(step, item, sentinel_id=3, current_index=0, base_dims=dims)
+    assert s_dims["base_width"] == 1024 and s_dims["florence2_no_detection"] is True

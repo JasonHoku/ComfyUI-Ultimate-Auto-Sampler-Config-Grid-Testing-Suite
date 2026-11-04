@@ -18,7 +18,7 @@ from PIL import Image as PILImage
 from .model_loader import load_checkpoint, load_vae_by_name
 from .batch_encoding import encode_prompt_with_combinators, encode_pair_cached
 from .image_generation import upscale_image, decode_latent_with_vae, create_image_metadata
-from .manifest_utils import save_manifest
+from .manifest_utils import save_manifest, base_dims_of
 from . import image_metrics
 
 import comfy.model_management as mm
@@ -346,6 +346,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 "width": up_w, "height": up_h,
                                 "duration": round(sv_duration, 2),
                                 "upscaled": True,
+                                **base_dims_of(item),
                                 "upscale_source": "dashboard",
                                 "upscale_pipeline": pipeline_name,
                                 "upscale_mode": "seedvr2",
@@ -420,6 +421,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 step_result, item,
                                 sentinel_id=sentinel_id,
                                 current_index=len(manifest_data["items"]),
+                                base_dims=base_dims_of(item),
                             )
                             manifest_data["items"].insert(0, entry)
                             upscale_combo_idx += 1
@@ -448,6 +450,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 upscaled_filename=upscaled_filename,
                                 current_index=len(manifest_data["items"]),
                                 hires_denoise=f2_config["hires_denoise"],
+                                base_dims=base_dims_of(item),
                             )
                             image_metrics.finalize(entry, result_pil, spec=item_metrics_spec)
                             manifest_data["items"].insert(0, entry)
@@ -561,6 +564,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                             "height": up_h,
                             "duration": round(upscale_duration, 2),
                             "upscaled": True,
+                            **base_dims_of(item),
                             "upscale_source": "dashboard",
                             "upscale_pipeline": pipeline_name,
                             "upscale_mode": mode,

@@ -270,3 +270,18 @@ test('mergeComparisons dedupes by ts:a:b', () => {
     const m = R.mergeComparisons([{ a: 1, b: 2, ts: 5 }], [{ a: 1, b: 2, ts: 5 }, { a: 1, b: 2, ts: 6 }, { a: 2, b: 1, ts: 5 }]);
     assert.strictEqual(m.length, 3);
 });
+
+// ---- wave 2 polish ----
+test('exact base dims win over a conflicting ratio guess; also on a non-upscaled item', () => {
+    const d = { width: 1248, height: 1824, upscaled: true, upscale_ratio: 1.5, base_width: 832, base_height: 1216 };
+    assert.strictEqual(R.normalizeAxis('resolution', d, {}).key, '832x1216');
+    assert.strictEqual(R.normalizeAxis('resolution', { width: 100, height: 100, base_width: 64, base_height: 96 }, {}).key, '64x96');
+});
+test('per-image fields never make two items different settings (F2)', () => {
+    const a = item({ config_fp: 'a', base_fp: 'x', metrics: { s: 1 }, preview_of: 5, source_relpath: 'p/a.png' });
+    const b = item({ cfg: 5, config_fp: 'b', base_fp: 'y', metrics: { s: 2 }, preview_of: 6, source_relpath: 'p/b.png',
+        florence2_bbox: [1, 2, 3, 4], florence2_detection_count: 2 });
+    const df = R.axisDiff(a, b, { withCtxKeys: true });
+    assert.strictEqual(df.ctxEqual, true, JSON.stringify(df.ctxKeys));
+    assert.deepStrictEqual(df.axes, ['cfg']);
+});

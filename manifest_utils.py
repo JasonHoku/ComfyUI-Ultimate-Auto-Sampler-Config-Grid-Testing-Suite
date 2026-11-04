@@ -3,6 +3,7 @@ Manifest File Management
 Handles saving and merging manifest.json with user modifications
 """
 
+import hashlib
 import json
 import os
 import re
@@ -314,3 +315,14 @@ def append_items(manifest_path, items, remove_ids=(), session_name=None, default
             json.dump(data, f, indent=4)
         os.replace(tmp, manifest_path)
         return data
+
+
+def base_dims_of(item):
+    """{"base_width","base_height"} of the generated image an upscale of `item` starts from ({} if unknown)."""
+    bw, bh = item.get("base_width"), item.get("base_height")
+    if bw and bh:
+        return {"base_width": bw, "base_height": bh}
+    if item.get("upscaled"):
+        return {}          # legacy upscaled source: let normResolution estimate
+    w, h = item.get("width"), item.get("height")
+    return {"base_width": w, "base_height": h} if w and h else {}

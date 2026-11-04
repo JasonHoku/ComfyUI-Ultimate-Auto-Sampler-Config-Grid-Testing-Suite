@@ -633,6 +633,7 @@ def run_deferred_upscales(
                     upscaled_meta["id"] = upscale_id
                     upscaled_meta["filename"] = upscaled_filename
                     upscaled_meta["upscaled"] = True
+                    upscaled_meta["base_width"], upscaled_meta["base_height"] = pipe_w, pipe_h
                     upscaled_meta["upscale_pipeline"] = pipeline_name
                     if job.get("config_fp"):
                         from .config_utils import config_fingerprint as _cfp
@@ -2112,6 +2113,7 @@ def run_generation_loop(
                                     )
                                     sentinel_meta.update({
                                         "id": sentinel_id,
+                                        "base_width": w, "base_height": h,
                                         "base_fp": job_fp,
                                         "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
                                         "upscaled": False,
@@ -2156,6 +2158,7 @@ def run_generation_loop(
                                     "filename": upscaled_filename,
                                     "rejected": False,
                                     "upscaled": True,
+                                    "base_width": w, "base_height": h,
                                     "upscale_source": "inline",
                                     "upscale_pipeline": pipeline_name,
                                     "upscale_mode": "florence2_hires",
@@ -2230,6 +2233,7 @@ def run_generation_loop(
                                     "width": up_w, "height": up_h,
                                     "duration": sv_duration,
                                     "upscaled": True,
+                                    "base_width": w, "base_height": h,
                                     "upscale_source": "inline",
                                     "upscale_pipeline": pipeline_name,
                                     "upscale_mode": "seedvr2",
@@ -2395,6 +2399,7 @@ def run_generation_loop(
                                 )
                                 upscaled_meta["id"] = upscale_id
                                 upscaled_meta["upscaled"] = True
+                                upscaled_meta["base_width"], upscaled_meta["base_height"] = w, h
                                 upscaled_meta["upscale_pipeline"] = pipeline_name
                                 upscaled_meta["base_fp"] = job_fp
                                 upscaled_meta["config_fp"] = config_fingerprint(conf, w, h, conf["seed"], pipeline_name)

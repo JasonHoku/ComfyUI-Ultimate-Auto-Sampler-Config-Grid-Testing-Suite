@@ -307,7 +307,7 @@ function cmpBuildPool() {
     var src = processedData || [];
     for (var i = 0; i < src.length; i++) {
         var d = src[i];
-        if (d && d.file && !d.rejected) out.push(d);   // a reject is a decision already made
+        if (d && d.file && !d.rejected && !d.florence2_no_detection) out.push(d);   // a reject is a decision already made
     }
     return out;
 }

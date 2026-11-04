@@ -20,7 +20,10 @@ var CMP_EXCLUDED_KEYS = new Set([
     'note', 'notes', 'positive', 'config_positive', 'negative', 'config_negative', 'seed',
     'width', 'height', 'base_width', 'base_height', 'model', 'lora', 'lora_expanded',
     'sampler', 'scheduler', 'cfg', 'steps', 'denoise', 'upscaled', 'source_file',
-    'image_path', 'preview_path', 'video_path', 'hash', 'hires_denoise'
+    'image_path', 'preview_path', 'video_path', 'hash', 'hires_denoise',
+    // per-image outcomes / bookkeeping, not settings
+    'config_fp', 'base_fp', 'metrics', 'preview_of', 'source_relpath',
+    'florence2_bbox', 'florence2_detection_count', 'florence2_no_detection'
 ]);
 var CMP_EXCLUDED_RE = /^upscale_|^hires_prompt_|_hash$|^worker|^_/;
 
@@ -89,6 +92,7 @@ function normResolution(d) {
     } else if (!d.upscaled) {
         k = d.width + 'x' + d.height;
     } else {
+        // legacy manifests (before base_width/base_height): estimate from upscale_ratio
         var r = cmpProduct(d.upscale_ratio);
         if (r > 0 && d.width > 0 && d.height > 0) {
             k = (Math.round(d.width / r / 8) * 8) + 'x' + (Math.round(d.height / r / 8) * 8);
