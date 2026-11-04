@@ -38,7 +38,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │
 ├── generation_orchestrator.py   # The "Conductor" (Loop Logic, 2281 lines)
 ├── image_generation.py          # KSampler & VAE Wrappers (748 lines)
-├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters
+├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters (ADAPTERS registry: node ids/signatures pinned to pack shas, loader defaults + `prefer`, `scale`, `max_batch`, `vram_mb`; `adapter_status()` reports `problem`)
 ├── metrics_runner.py            # Background job: compute metrics for an existing session (CPU, manifest lock)
 ├── model_loader.py              # Checkpoint/LoRA/VAE/GGUF Loading Logic (805 lines)
 ├── model_cache.py               # 3-Tier Model Caching System (900 lines)

@@ -7296,7 +7296,7 @@ export function renderRunSettingsSection(node, container) {
             const ads = (info && info.adapters) || [];
             if (!ads.length) { adList.textContent = "None available."; return; }
             ads.forEach(a => {
-                const usable = a.installed && a.enabled;
+                const usable = a.installed && a.enabled && !a.problem;
                 const l = document.createElement("label");
                 l.style.cssText = "font-size: 11px; color: " + (usable ? "#bbb" : "#777") + "; display: inline-flex; align-items: center; gap: 6px;";
                 const c = document.createElement("input");
@@ -7305,7 +7305,8 @@ export function renderRunSettingsSection(node, container) {
                 c.disabled = !usable;
                 c.onchange = () => { m.adapters[a.name] = c.checked; node.saveState(); };
                 const badge = a.installed
-                    ? (a.enabled ? "installed" : "installed (support not enabled yet)")
+                    ? (!a.enabled ? "installed (support not enabled yet)"
+                        : (a.problem ? "installed, but " + a.problem : "installed"))
                     : "not installed (install " + (a.pack_hint || "the scorer pack") + ")";
                 l.appendChild(c);
                 l.appendChild(document.createTextNode((a.label || a.name) + " - " + badge));
