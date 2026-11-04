@@ -72,7 +72,7 @@ ADAPTERS = {
         "max_batch": 1,
         "vram_mb": 2500,
         "pack_hint": "ComfyUI-ImageReward (pip image-reward==1.4; downloads ~1.8 GB on first use)",
-        "note": "signatures verified against ZaneA@5e9936d; not live-tested, so disabled",
+        "note": "signatures verified against ZaneA@5e9936d; disabled: image-reward 1.4 does not import under transformers 5 (needs a local med.py patch), see README",
     },
 }
 
