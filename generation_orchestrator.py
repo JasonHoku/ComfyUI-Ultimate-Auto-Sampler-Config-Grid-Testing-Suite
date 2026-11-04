@@ -16,7 +16,7 @@ import comfy.sd  # Required for async workers
 from comfy.model_management import InterruptProcessingException
 
 from .trigger_words import collect_unique_prompts_with_triggers, build_prompt_with_triggers, clear_trigger_caches
-from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators
+from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators, pinned_clip
 from .manifest_utils import load_existing_manifest, save_manifest
 from .model_loader import (
     load_checkpoint, load_loras, cleanup_model_references,
@@ -470,12 +470,13 @@ def run_deferred_upscales(
             print(f"[GridTester] ⚠️ Deferred upscale #{job_idx+1}: conditioning not in cache, re-encoding")
             try:
                 clip_skip = conf.get("clip_skip", 0)
-                if final_positive is None:
-                    final_positive = encode_prompt_with_combinators(patched_clip, actual_positive_prompt, clip_skip)
-                    conditioning_cache["positive"][actual_positive_prompt] = final_positive
-                if final_negative is None:
-                    final_negative = encode_prompt_with_combinators(patched_clip, actual_negative_prompt, clip_skip)
-                    conditioning_cache["negative"][actual_negative_prompt] = final_negative
+                with pinned_clip(patched_clip):  # one encoder load for both prompts
+                    if final_positive is None:
+                        final_positive = encode_prompt_with_combinators(patched_clip, actual_positive_prompt, clip_skip)
+                        conditioning_cache["positive"][actual_positive_prompt] = final_positive
+                    if final_negative is None:
+                        final_negative = encode_prompt_with_combinators(patched_clip, actual_negative_prompt, clip_skip)
+                        conditioning_cache["negative"][actual_negative_prompt] = final_negative
             except Exception as e:
                 print(f"[GridTester] ⚠️ Deferred upscale #{job_idx+1}: re-encode failed: {e}, skipping")
                 continue
@@ -1586,29 +1587,28 @@ def run_generation_loop(
 
                     if model_unique_positives:
                         print(f"[GridTester] 🧠 Batch encoding {len(model_unique_positives)} prompts for {target_model_name}")
-                        import comfy.model_management as mm_batch
-                        mm_batch.load_models_gpu([patched_clip.patcher])
 
                         clip_skip = conf.get("clip_skip", 0)
 
                         try:
-                            for prompt in model_unique_positives:
-                                # Check for interrupt before each prompt encoding
-                                if mm.processing_interrupted():
-                                    print(f"\n[GridTester] 🛑 INTERRUPTED during positive encoding - Stopping all encoding")
-                                    raise InterruptProcessingException()
+                            with pinned_clip(patched_clip, model_unique_positives + model_unique_negatives):
+                                for prompt in model_unique_positives:
+                                    # Check for interrupt before each prompt encoding
+                                    if mm.processing_interrupted():
+                                        print(f"\n[GridTester] 🛑 INTERRUPTED during positive encoding - Stopping all encoding")
+                                        raise InterruptProcessingException()
 
-                                if prompt not in conditioning_cache["positive"]:
-                                    conditioning_cache["positive"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
+                                    if prompt not in conditioning_cache["positive"]:
+                                        conditioning_cache["positive"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
 
-                            for prompt in model_unique_negatives:
-                                # Check for interrupt before each prompt encoding
-                                if mm.processing_interrupted():
-                                    print(f"\n[GridTester] 🛑 INTERRUPTED during negative encoding - Stopping all encoding")
-                                    raise InterruptProcessingException()
+                                for prompt in model_unique_negatives:
+                                    # Check for interrupt before each prompt encoding
+                                    if mm.processing_interrupted():
+                                        print(f"\n[GridTester] 🛑 INTERRUPTED during negative encoding - Stopping all encoding")
+                                        raise InterruptProcessingException()
 
-                                if prompt not in conditioning_cache["negative"]:
-                                    conditioning_cache["negative"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
+                                    if prompt not in conditioning_cache["negative"]:
+                                        conditioning_cache["negative"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
 
                         except InterruptProcessingException:
                             print(f"\n[GridTester] 🛑 INTERRUPTED during encoding - Stopping all jobs")
@@ -2773,22 +2773,21 @@ def _preencode_all_conditionings(
             else:
                 patched_model, patched_clip = loaded_model, loaded_clip
 
-            # Force CLIP onto GPU for encoding
-            import comfy.model_management as mm_enc
-            mm_enc.load_models_gpu([patched_clip.patcher])
-
             clip_skip = first_conf.get("clip_skip", 0)
 
             serialized_positive = {}
             serialized_negative = {}
 
-            for prompt in unique_positives:
-                cond = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
-                serialized_positive[prompt] = _conditioning_to_serializable(cond)
+            # One encoder load for the whole group (pinned_clip); ComfyUI would otherwise
+            # re-prepare the text encoder on every encode.
+            with pinned_clip(patched_clip, list(unique_positives) + list(unique_negatives)):
+                for prompt in unique_positives:
+                    cond = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
+                    serialized_positive[prompt] = _conditioning_to_serializable(cond)
 
-            for prompt in unique_negatives:
-                cond = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
-                serialized_negative[prompt] = _conditioning_to_serializable(cond)
+                for prompt in unique_negatives:
+                    cond = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
+                    serialized_negative[prompt] = _conditioning_to_serializable(cond)
 
             encoded_all[group_key] = {
                 "positive": serialized_positive,
@@ -3132,23 +3131,20 @@ def _run_distributed_generation(
                 cached_lora_key = current_lora_string
 
             # --- Prompt Encoding ---
-            if optional_positive:
-                final_positive = optional_positive
-            else:
-                if actual_positive_prompt not in conditioning_cache["positive"]:
-                    clip_skip = conf.get("clip_skip", 0)
-                    conditioning_cache["positive"][actual_positive_prompt] = \
-                        encode_prompt_with_combinators(patched_clip, actual_positive_prompt, clip_skip)
-                final_positive = conditioning_cache["positive"][actual_positive_prompt]
-
-            if optional_negative:
-                final_negative = optional_negative
-            else:
-                if actual_negative_prompt not in conditioning_cache["negative"]:
-                    clip_skip = conf.get("clip_skip", 0)
-                    conditioning_cache["negative"][actual_negative_prompt] = \
-                        encode_prompt_with_combinators(patched_clip, actual_negative_prompt, clip_skip)
-                final_negative = conditioning_cache["negative"][actual_negative_prompt]
+            # One encoder load covers both prompts (pinned_clip); nothing is loaded when both are cached.
+            need_pos = not optional_positive and actual_positive_prompt not in conditioning_cache["positive"]
+            need_neg = not optional_negative and actual_negative_prompt not in conditioning_cache["negative"]
+            if need_pos or need_neg:
+                clip_skip = conf.get("clip_skip", 0)
+                with pinned_clip(patched_clip):
+                    if need_pos:
+                        conditioning_cache["positive"][actual_positive_prompt] = \
+                            encode_prompt_with_combinators(patched_clip, actual_positive_prompt, clip_skip)
+                    if need_neg:
+                        conditioning_cache["negative"][actual_negative_prompt] = \
+                            encode_prompt_with_combinators(patched_clip, actual_negative_prompt, clip_skip)
+            final_positive = optional_positive if optional_positive else conditioning_cache["positive"][actual_positive_prompt]
+            final_negative = optional_negative if optional_negative else conditioning_cache["negative"][actual_negative_prompt]
 
             # --- Create Latent ---
             latent_channels = get_latent_channels(loaded_model, optional_latent)

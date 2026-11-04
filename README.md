@@ -748,6 +748,7 @@ Set **Model Type = Diffusion Model**, pick the diffusion file (e.g. `moss_image_
 
 * The CLIP Type list is read from your installed ComfyUI's `CLIPLoader`, so new model families appear without a plugin update. If you leave it at `stable_diffusion` for a diffusion model, the generator picks the CLIP type that matches the detected model family and logs it (MOSS-Image needs `moss_image` to get its chat template; with `stable_diffusion` ComfyUI builds a generic Qwen3.5 encoder).
 * The empty latent follows the model's latent format: 16 px per latent cell for the Flux.2 family, 8 for SD / SDXL / Flux.1. Use sizes that are multiples of 16; a 832x1216 job renders at 832x1216. Earlier releases always used 8, which made 16x models render at double size and run ~10x slower than the stock workflows.
+* Pre-encoding loads the text encoder once per pass instead of once per prompt (ComfyUI's dynamic VRAM loader re-prepares a model on every encode, which is the repeated `Model ... prepared for dynamic VRAM loading` log line). What remains is the encoder itself: the Qwen3.5-9B encoder costs roughly 0.8 s per prompt on a 16 GB card, the same as the stock workflow, so a 60-prompt grid spends about a minute encoding before the first image. SDXL's CLIPs take about 0.15 s per prompt, Krea 2 and Qwen-Image about 0.3 s. The pre-encode summary line reports the measured ms/prompt.
 
 ### Model-Specific Prompts
 

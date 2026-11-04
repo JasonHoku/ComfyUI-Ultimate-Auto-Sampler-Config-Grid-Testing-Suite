@@ -725,39 +725,25 @@ def run_florence2_step(
     #    and crash with "mat1 and mat2 shapes cannot be multiplied". So we maintain
     #    a per-clip-identity conditioning cache inside ckpt_cache.
     try:
-        from .batch_encoding import encode_prompt_with_combinators
+        from .batch_encoding import encode_pair_cached
     except ImportError:
-        from batch_encoding import encode_prompt_with_combinators
+        from batch_encoding import encode_pair_cached
 
     session_clip = fallback_handles[1]
     if clip_handle is session_clip:
         # Same clip as session — reuse the upscale_runner's shared cache.
-        if positive_prompt not in conditioning_cache["positive"]:
-            conditioning_cache["positive"][positive_prompt] = encode_prompt_with_combinators(
-                clip_handle, positive_prompt, clip_skip
-            )
-        if negative_prompt not in conditioning_cache["negative"]:
-            conditioning_cache["negative"][negative_prompt] = encode_prompt_with_combinators(
-                clip_handle, negative_prompt, clip_skip
-            )
-        pos_cond = conditioning_cache["positive"][positive_prompt]
-        neg_cond = conditioning_cache["negative"][negative_prompt]
+        pos_cond, neg_cond = encode_pair_cached(
+            clip_handle, conditioning_cache, positive_prompt, negative_prompt, clip_skip
+        )
     else:
         # Different clip (per-manifest model) — use a per-clip-id cache inside
         # ckpt_cache so multiple images with the same per-item model still share.
         per_clip = ckpt_cache.setdefault("_cond_cache", {})
         clip_id = id(clip_handle)
         bucket = per_clip.setdefault(clip_id, {"positive": {}, "negative": {}})
-        if positive_prompt not in bucket["positive"]:
-            bucket["positive"][positive_prompt] = encode_prompt_with_combinators(
-                clip_handle, positive_prompt, clip_skip
-            )
-        if negative_prompt not in bucket["negative"]:
-            bucket["negative"][negative_prompt] = encode_prompt_with_combinators(
-                clip_handle, negative_prompt, clip_skip
-            )
-        pos_cond = bucket["positive"][positive_prompt]
-        neg_cond = bucket["negative"][negative_prompt]
+        pos_cond, neg_cond = encode_pair_cached(
+            clip_handle, bucket, positive_prompt, negative_prompt, clip_skip
+        )
 
     # 10. VAE encode -> generate_image (project's known-working sampling path)
     try:

@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image as PILImage
 
 from .model_loader import load_checkpoint, load_vae_by_name
-from .batch_encoding import encode_prompt_with_combinators
+from .batch_encoding import encode_prompt_with_combinators, encode_pair_cached
 from .image_generation import upscale_image, decode_latent_with_vae, create_image_metadata
 from .manifest_utils import save_manifest
 
@@ -248,13 +248,10 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
             neg_prompt = item.get("negative", meta.get("negative", ""))
             clip_skip = item.get("clip_skip", 0)
 
-            if pos_prompt not in conditioning_cache["positive"]:
-                conditioning_cache["positive"][pos_prompt] = encode_prompt_with_combinators(patched_clip, pos_prompt, clip_skip)
-            if neg_prompt not in conditioning_cache["negative"]:
-                conditioning_cache["negative"][neg_prompt] = encode_prompt_with_combinators(patched_clip, neg_prompt, clip_skip)
-
-            final_positive = conditioning_cache["positive"][pos_prompt]
-            final_negative = conditioning_cache["negative"][neg_prompt]
+            # One encoder load for the pair (ComfyUI re-prepares the TE on every encode otherwise)
+            final_positive, final_negative = encode_pair_cached(
+                patched_clip, conditioning_cache, pos_prompt, neg_prompt, clip_skip
+            )
 
             # HiRes prompt adjustment
             hires_positive_cond = final_positive

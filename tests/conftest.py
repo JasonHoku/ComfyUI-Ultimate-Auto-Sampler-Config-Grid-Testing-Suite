@@ -100,6 +100,8 @@ _GEN_ORCH_DEPS = {
     "batch_encoding": {
         "batch_encode_prompts": lambda *a, **kw: None,
         "encode_prompt_with_combinators": lambda *a, **kw: None,
+        "pinned_clip": lambda clip=None, *a, **kw: __import__("contextlib").nullcontext(clip),
+        "encode_pair_cached": lambda *a, **kw: (None, None),
     },
     "manifest_utils": {
         "load_existing_manifest": lambda *a, **kw: {},

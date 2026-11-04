@@ -4,10 +4,92 @@ Handles efficient batch encoding of prompts with caching.
 Supports prompt combinators: AND, CAT, AVG(), BREAK (native).
 """
 
+import contextlib
 import re
+import time
 import torch
 import gc
 import comfy.model_management
+
+
+# ============================================================
+# === KEEP THE TEXT ENCODER RESIDENT ACROSS A RUN OF ENCODES ===
+# ============================================================
+
+@contextlib.contextmanager
+def pinned_clip(clip_model, sample_texts=None):
+    """
+    Load a CLIP/text encoder ONCE and keep ComfyUI from re-preparing it on every
+    encode inside the block.
+
+    comfy.sd.CLIP.encode_from_tokens() calls self.load_model() ->
+    comfy.model_management.load_models_gpu([patcher]) on EVERY encode. Since the
+    dynamic VRAM loader (comfy_aimdo, ComfyUI 0.4x+) load_models_gpu() re-runs
+    ModelPatcherDynamic.load() even for a model that is already resident: a Python
+    walk over every module of the encoder plus free_memory()/get_free_memory()
+    bookkeeping. That is the repeated
+
+        Model MOSSImageTEModel_ prepared for dynamic VRAM loading. 7002MB Staged. ...
+
+    log line, once per prompt (N prompts -> N+1 lines). For a ~500-module LLM text
+    encoder (Qwen3.5-9B for MOSS-Image, Qwen2.5-VL for Qwen-Image, Qwen3-VL for
+    Krea 2) the re-prepare costs about as much as the encode itself; SDXL's small
+    CLIPs hide it, which is why SDXL pre-encoding always looked fast.
+
+    Inside this context the encoder is loaded once through the normal load_model()
+    path (sized by the longest of ``sample_texts`` so any memory estimate still
+    runs) and ``clip_model.load_model`` is shadowed by a no-op returning the
+    already-loaded patcher. Nothing in a plain encode loop touches model
+    management, so the encoder stays resident. The shadow is removed on exit, even
+    on exceptions, so the CLIP behaves normally afterwards (sampling may then evict
+    it as usual). Nesting is safe: the inner block restores the outer shadow.
+    """
+    if clip_model is None or not hasattr(clip_model, "load_model"):
+        yield clip_model
+        return
+
+    tokens = {}
+    if sample_texts:
+        try:
+            longest = max(sample_texts, key=len)
+            tokens = clip_model.tokenize(longest)
+        except Exception:
+            tokens = {}
+    try:
+        patcher = clip_model.load_model(tokens)
+    except TypeError:
+        patcher = clip_model.load_model()  # very old ComfyUI: load_model() took no tokens
+    if patcher is None:
+        patcher = getattr(clip_model, "patcher", None)
+
+    inst = vars(clip_model)
+    had_shadow = "load_model" in inst
+    previous = inst.get("load_model")
+    clip_model.load_model = lambda tokens={}: patcher
+    try:
+        yield clip_model
+    finally:
+        if had_shadow:
+            clip_model.load_model = previous
+        else:
+            inst.pop("load_model", None)
+
+
+def encode_pair_cached(clip_model, cache, positive, negative, clip_skip=0):
+    """
+    Fill cache["positive"][positive] / cache["negative"][negative] if missing,
+    loading the encoder at most once for the pair, and return (pos_cond, neg_cond).
+    Does not touch the encoder at all when both are already cached.
+    """
+    need_pos = positive not in cache["positive"]
+    need_neg = negative not in cache["negative"]
+    if need_pos or need_neg:
+        with pinned_clip(clip_model):
+            if need_pos:
+                cache["positive"][positive] = encode_prompt_with_combinators(clip_model, positive, clip_skip)
+            if need_neg:
+                cache["negative"][negative] = encode_prompt_with_combinators(clip_model, negative, clip_skip)
+    return cache["positive"][positive], cache["negative"][negative]
 
 
 # ============================================================
@@ -274,13 +356,14 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
         clip_skip_msg = f" (clip_skip={clip_skip})" if clip_skip != 0 else ""
         print(f"[GridTester] 🚀 Batch encoding {len(prompts_to_encode)} {prompt_type} prompts{clip_skip_msg} (batch_size={batch_size})")
         
-        # Force model to stay in VRAM
-        comfy.model_management.load_models_gpu([clip_model.patcher])
+        # The encoder is loaded ONCE by pinned_clip (below) and stays resident for
+        # the whole loop; without it ComfyUI re-prepares it on every single encode.
+        _t_enc_start = time.time()
         
         prompts_list = list(prompts_to_encode)
         total_batches = (len(prompts_list) + batch_size - 1) // batch_size
         
-        with torch.no_grad():
+        with torch.no_grad(), pinned_clip(clip_model, prompts_list):
             for batch_idx in range(0, len(prompts_list), batch_size):
                 batch_prompts = prompts_list[batch_idx:batch_idx + batch_size]
                 current_batch = (batch_idx // batch_size) + 1
@@ -315,7 +398,10 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
                 if current_batch % 5 == 0 or current_batch == total_batches:
                     print(f"[GridTester]   Batch {current_batch}/{total_batches} | Encoded {encoded_count}/{len(prompts_list)}")
         
-        print(f"[GridTester] ✅ Batch encoding complete!")
+        _enc_elapsed = time.time() - _t_enc_start
+        _per_prompt_ms = (_enc_elapsed / len(prompts_list) * 1000.0) if prompts_list else 0.0
+        print(f"[GridTester] ✅ Batch encoding complete! {len(prompts_list)} prompts in {_enc_elapsed:.1f}s "
+              f"({_per_prompt_ms:.0f} ms/prompt, encoder prepared once)")
     
     return results
 
