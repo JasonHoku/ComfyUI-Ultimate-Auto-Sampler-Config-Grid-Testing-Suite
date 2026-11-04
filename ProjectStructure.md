@@ -76,6 +76,8 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_standalone.js      # Standalone-page mode: own websocket, run-API GENERATE NEW, openStandalone() (loaded last)
 │   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (104 lines)
 │   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (510 lines)
+│   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable)
+│   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (925 lines)
 │   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (1780 lines)
 │   ├── logic_upscale_modal.js   # Dashboard upscale modal (inline config, presets, async upscale) (380 lines)
@@ -204,6 +206,8 @@ All routes registered via `PromptServer.instance.routes`.
 | POST | `/config_tester/delete_session` | 142 | Delete session folder `{session_name}` |
 | GET | `/config_tester/list_sessions` | 174 | List all sessions with metadata (name, count, thumbnail, mtime) |
 | POST | `/config_tester/save_changes` | 234 | Delta save — only changed items `{session_name, changed_items}` |
+| POST | `/config_tester/save_comparisons` | - | Pairwise-review votes `{session_name, append, remove}`; only touches manifest `comparisons` |
+| POST | `/config_tester/clear_comparisons` | - | Delete all votes of a session `{session_name}` |
 | POST | `/config_tester/save_manifest` | 308 | Full merge save `{session_name, manifest}` |
 | POST | `/config_tester/get_session_html` | 390 | Generate dashboard HTML on-demand `{session_name, node_id}` |
 | GET | `/config_tester/dashboard` | - | Dashboard SPA as a top-level page, optional `?session=` (standalone mode, `USCG_STANDALONE`, own websocket via `resources/logic_standalone.js`) |
@@ -279,7 +283,7 @@ All routes registered via `PromptServer.instance.routes`.
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id)` — reads all `/resources/` files, inlines into `template.html`
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ui.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js`
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests — everything inlined
 
@@ -447,6 +451,12 @@ The Dashboard is a standalone single-page app rendered inside an iframe. All fil
 ---
 
 ### **Key Data Shapes**
+
+**Manifest `comparisons`** (top level, sibling of `items`/`meta`; written ONLY by `manifest_utils.update_manifest_comparisons`, disk always wins in every other writer via `preserve_disk_comparisons`):
+```json
+"comparisons": [{"a": 180000000000001, "b": 180000000000002, "winner": "a", "ts": 1762000000000, "mode": "matched"}]
+```
+`mode` is `matched|seed|one_axis|random`; `blind: false` is present only for votes cast unblinded. Dedupe key is `ts:a:b`.
 
 **Config Array State** (`node.state.config_arrays[n]` in JS, parsed from `lora_config` widget in Python):
 ```json
@@ -871,4 +881,6 @@ __init__.py
 | `logic_utils.js` | `loadSession()`, `exportFavorites()`, `scanDirectory()`, `triggerGen()`, `toggleFullscreen()`, `deleteNonFavorites()` |
 | `logic_virtual.js` | `renderDOM()`, `updateVisibleItems()`, `calculateVisibleRange()`, `autoFitZoom()`, `goToImage()` |
 | `logic_pipeline.js` | `updateDataPipeline()`, `executePipeline()`, `processNewData()`, `incrementalFilter()` |
+| `logic_ratings.js` | `computeBradleyTerry()`, `buildPairSource()`, `nextPair()`, `axisDiff()`, `computeScoreboard()` (pure; tests in `tests/js/ratings.test.js`, run `node --test tests/js/*.test.js`) |
+| `logic_compare.js` | `openCompareMode()`, `cmpVoteSide()`, `cmpUndo()`, `openScoreboard()`, `getItemRating()`, `compareRatings()`, `onComparisonsReplaced()` |
 | `logic_events.js` | Message handler for `progress_update`, `update_data`, `distribution_status` |

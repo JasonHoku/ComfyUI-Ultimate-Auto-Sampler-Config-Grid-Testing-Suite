@@ -417,6 +417,81 @@ async def save_changes(request):
         return web.Response(status=500, text=str(e))
     
 # =============================================================================
+# API: PAIRWISE REVIEW VOTES (manifest "comparisons")
+# =============================================================================
+
+def _comparisons_manifest_path(session_name):
+    """Resolve a sanitized session name to its manifest path; returns (path, error_response)."""
+    if session_name:
+        session_name = re.sub(r'[^\w\-]', '', str(session_name))
+    if not session_name:
+        return None, web.Response(status=400, text="Missing session_name")
+    base_dir = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name)
+    if not _is_path_within(base_dir, _get_benchmarks_base()):
+        return None, web.Response(status=403, text="Forbidden: path outside benchmarks directory")
+    manifest_path = os.path.join(base_dir, "manifest.json")
+    if not os.path.exists(manifest_path):
+        return None, web.Response(status=404, text=f"Session '{session_name}' not found")
+    return manifest_path, None
+
+
+@server.PromptServer.instance.routes.post("/config_tester/save_comparisons")
+async def save_comparisons(request):
+    """
+    Append / remove blind-compare votes in manifest["comparisons"].
+    Body: {session_name, append: [{a,b,winner,ts,mode,blind?}], remove: ["ts:a:b", ...]}
+    Only the comparisons list is touched; items/meta are written back as read.
+    """
+    try:
+        from .manifest_utils import update_manifest_comparisons
+        data = await request.json()
+        append = data.get("append") or []
+        remove = data.get("remove") or []
+        if not isinstance(append, list) or not isinstance(remove, list):
+            return web.Response(status=400, text="append and remove must be lists")
+        if (not append and not remove) or len(append) > 5000 or len(remove) > 5000:
+            return web.Response(status=400, text="Nothing to save or too many votes")
+        manifest_path, err = _comparisons_manifest_path(data.get("session_name"))
+        if err:
+            return err
+        try:
+            result = await asyncio.to_thread(
+                update_manifest_comparisons, manifest_path, append,
+                [str(k) for k in remove])
+        except FileNotFoundError:
+            return web.Response(status=404, text="Session manifest not found")
+        except ValueError:  # includes json.JSONDecodeError (manifest mid-write): client retries
+            return web.Response(status=409, text="Manifest unreadable, retry")
+        print(f"[ConfigTester] ⚖️ Votes: +{result['added']} -{result['removed']} = {result['total']} in {data.get('session_name')}")
+        return web.json_response(result)
+    except Exception as e:
+        print(f"[ConfigTester] Error saving comparisons: {e}")
+        return web.Response(status=500, text=str(e))
+
+
+@server.PromptServer.instance.routes.post("/config_tester/clear_comparisons")
+async def clear_comparisons(request):
+    """Delete every vote of a session (body: {session_name})."""
+    try:
+        from .manifest_utils import update_manifest_comparisons
+        data = await request.json()
+        manifest_path, err = _comparisons_manifest_path(data.get("session_name"))
+        if err:
+            return err
+        try:
+            result = await asyncio.to_thread(update_manifest_comparisons, manifest_path, (), (), True)
+        except FileNotFoundError:
+            return web.Response(status=404, text="Session manifest not found")
+        except ValueError:
+            return web.Response(status=409, text="Manifest unreadable, retry")
+        print(f"[ConfigTester] ⚖️ Votes cleared ({result['removed']}) in {data.get('session_name')}")
+        return web.json_response(result)
+    except Exception as e:
+        print(f"[ConfigTester] Error clearing comparisons: {e}")
+        return web.Response(status=500, text=str(e))
+
+
+# =============================================================================
 # API: SAVE MANIFEST (Legacy - Full Save)
 # =============================================================================
 
@@ -484,6 +559,10 @@ async def save_manifest(request):
             # Preserve server's meta
             if "meta" in server_manifest:
                 manifest_data["meta"] = server_manifest["meta"]
+
+            # Preserve pairwise-review votes (disk wins; the dashboard copy can be stale)
+            if "comparisons" in server_manifest:
+                manifest_data["comparisons"] = server_manifest["comparisons"]
 
         # Save merged manifest
         os.makedirs(base_dir, exist_ok=True)

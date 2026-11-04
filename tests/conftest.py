@@ -107,6 +107,8 @@ _GEN_ORCH_DEPS = {
     "manifest_utils": {
         "load_existing_manifest": lambda *a, **kw: {},
         "save_manifest": lambda *a, **kw: None,
+        "preserve_disk_comparisons": lambda *a, **kw: None,
+        "update_manifest_comparisons": lambda *a, **kw: {"comparisons": [], "added": 0, "removed": 0, "total": 0},
     },
     "model_loader": {
         "load_checkpoint": lambda *a, **kw: None,

@@ -54,7 +54,8 @@ const sortOptionsList = [
     { id: 'lora', label: 'LoRA' },
     { id: 'sampler', label: 'Sampler' },
     { id: 'seed', label: 'Seed' },
-    { id: 'size', label: 'Size' }
+    { id: 'size', label: 'Size' },
+    { id: 'rating', label: 'Rating' }
 ];
 
 // --- SEARCH FILTER STATE ---
@@ -122,7 +123,8 @@ var labelMode = labelMode || {
         upscaleHiresSteps: false,
         upscaleTiling: false,
         hiresPromptBehavior: false,
-        hiresPromptText: false
+        hiresPromptText: false,
+        rating: false           // Pairwise-review rating badge
     }
 };
 
