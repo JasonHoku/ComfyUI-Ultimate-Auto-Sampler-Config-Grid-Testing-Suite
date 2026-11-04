@@ -185,6 +185,10 @@ def merge_manifest_user_changes(manifest_path, existing_data):
                 if current_item.get("note"):
                     item["note"] = current_item["note"]
                     notes_preserved += 1
+                # Per-image metrics computed for an existing session (metrics_runner) live only on
+                # disk; a generation run's in-memory copy must not wipe them on its next save.
+                if "metrics" in current_item and "metrics" not in item:
+                    item["metrics"] = current_item["metrics"]
             # else: This is a new item, no merge needed
         
         # Log merge results if any user changes were preserved

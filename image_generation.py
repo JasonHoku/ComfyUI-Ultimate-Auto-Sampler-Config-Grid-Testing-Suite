@@ -1123,6 +1123,8 @@ def flush_batch_with_vae(pending_batch, vae, img_dir, existing_data, session_nam
                             local_item["favorited"] = disk_item["favorited"]
                         if "rejected" in disk_item:
                             local_item["rejected"] = disk_item["rejected"]
+                        if "metrics" in disk_item and "metrics" not in local_item:
+                            local_item["metrics"] = disk_item["metrics"]  # computed later for an existing session
 
             except Exception as e:
                 print(f"[GridTester] ⚠️ Error syncing with disk manifest: {e}")
