@@ -80,6 +80,47 @@ def test_desktop_is_unchanged(dashboard):
     assert page.evaluate("getComputedStyle(document.querySelector('#modal .modal-main')).flexDirection") == "row"
     expect(page.locator("#modal-action-bar")).to_be_hidden()
     page.locator(".modal-close-x").click()
+    # the standalone-only header buttons exist on the top-level page
+    expect(page.locator("#share-link-btn")).to_be_visible()
     page.evaluate("toggleCogMenu()")
     width = page.evaluate("document.getElementById('cog-menu-dropdown').getBoundingClientRect().width")
     assert 340 <= width <= 342, width   # unchanged desktop panel (340px + border)
+
+
+# ---- E3: share link --------------------------------------------------------
+
+STUB_SHARE = "window.__shared = []; navigator.share = (a) => { window.__shared.push(a); return Promise.resolve(); };"
+
+
+def test_share_button_uses_navigator_share(phone_dashboard):
+    d = phone_dashboard(init_scripts=[STUB_SHARE])
+    d.page.locator("#share-link-btn").tap()
+    d.page.wait_for_function("window.__shared.length === 1")
+    assert d.ev("window.__shared[0].url").endswith("/config_tester/dashboard?session=smoke")
+
+
+def test_share_button_falls_back_to_copy(phone_dashboard):
+    # plain http origin = not a secure context: the execCommand path (no share API in desktop-ish contexts)
+    d = phone_dashboard(init_scripts=["delete Navigator.prototype.share; window.__copied = 0;"
+                                      "const ex = document.execCommand.bind(document);"
+                                      "document.execCommand = (c) => { if (c === 'copy') { window.__copied++; return true; } return ex(c); };"])
+    d.page.locator("#share-link-btn").tap()
+    d.page.wait_for_function("window.__copied === 1")
+    expect(d.page.locator("#share-link-btn")).to_have_text("✓")
+
+
+# ---- E4: session picker ----------------------------------------------------
+
+def test_session_picker_switches_session(phone_dashboard):
+    sessions = [{"name": n, "mtime": 1700000000 + i, "item_count": 5 + i, "first_image": ""}
+                for i, n in enumerate(("smoke", "other", "third"))]
+    d = phone_dashboard(sessions=sessions)
+    page = d.page
+    page.locator("#session-switch-btn").tap()
+    rows = page.locator("#session-picker-list .session-picker-row")
+    expect(rows).to_have_count(3)
+    heights = [r.bounding_box()["height"] for r in rows.all()]
+    assert all(h >= 44 for h in heights), heights
+    rows.filter(has_text="other").locator("span").first.tap()
+    page.wait_for_function("window._uscgLoadedSession === 'other'")
+    assert page.evaluate("location.search") == "?session=other"

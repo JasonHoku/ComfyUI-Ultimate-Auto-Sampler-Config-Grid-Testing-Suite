@@ -185,11 +185,17 @@ def phone_dashboard(browser, playwright):
         d.sessions = sessions or []
         dashboards.append(d)
         page.on("pageerror", lambda e: d.pageerrors.append(str(e)))
+        loaded = []
+        page.on("console", lambda m: loaded.append(1) if "Session loaded successfully" in m.text else None)
         page.route("**/*", d.handle)
         page.goto(ORIGIN + "/")
         page.wait_for_function(
             f"typeof processedData!=='undefined' && processedData.length==={n_items}")
         expect(page.locator("#grid .card:visible").first).to_be_visible()
+        for _ in range(100):   # the startup loadSession() closes the settings panel when it finishes
+            if loaded:
+                break
+            page.wait_for_timeout(50)
         return d
 
     yield make

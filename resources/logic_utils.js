@@ -154,9 +154,11 @@ async function loadSession() {
         // Close Settings Panel
         const cogPanel = document.getElementById('cog-menu-dropdown');
         const cogOverlay = document.getElementById('cog-menu-overlay');
-        if (cogPanel) cogPanel.style.display = 'none';
-        if (cogOverlay) cogOverlay.style.display = 'none';
-        document.body.style.overflow = '';
+        if (!window._uscgResyncing) {
+            if (cogPanel) cogPanel.style.display = 'none';
+            if (cogOverlay) cogOverlay.style.display = 'none';
+            document.body.style.overflow = '';
+        }
         // Hide landing page, show viewport
         const landing = document.getElementById('session-landing');
         if (landing) landing.style.display = 'none';

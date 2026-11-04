@@ -1826,6 +1826,13 @@ body {
         justify-content: center; gap: 2px; padding: 4px 2px; font-size: 18px; line-height: 1; }
     #modal-action-bar .mab-lbl { font-size: 10px; white-space: nowrap; }
     #modal-action-bar button.favorited { color: #e0c040; border-color: #e0c040; }
+    /* phone session picker + settings panel */
+    .cog-menu-panel { left: 0; right: 0; width: auto; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); border-radius: 0 0 8px 8px; }
+    #session-picker-list { max-height: 45vh !important; overscroll-behavior: contain; }
+    .session-picker-row { padding: 12px 10px !important; font-size: 14px !important; line-height: 1.35; }
+    .session-picker-row > span:last-child { display: block; font-size: 11px !important; }
+    .session-picker-row button { font-size: 12px !important; padding: 6px 10px !important; min-height: 32px; }
+    #session-search, #session-input { font-size: 16px !important; padding: 8px !important; }
 }
 
 @media (max-width: 600px) {
@@ -1865,6 +1872,13 @@ body {
         justify-content: center; gap: 2px; padding: 4px 2px; font-size: 18px; line-height: 1; }
     body.uscg-standalone #modal-action-bar .mab-lbl { font-size: 10px; white-space: nowrap; }
     body.uscg-standalone #modal-action-bar button.favorited { color: #e0c040; border-color: #e0c040; }
+    /* phone session picker + settings panel */
+    body.uscg-standalone .cog-menu-panel { left: 0; right: 0; width: auto; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); border-radius: 0 0 8px 8px; }
+    body.uscg-standalone #session-picker-list { max-height: 45vh !important; overscroll-behavior: contain; }
+    body.uscg-standalone .session-picker-row { padding: 12px 10px !important; font-size: 14px !important; line-height: 1.35; }
+    body.uscg-standalone .session-picker-row > span:last-child { display: block; font-size: 11px !important; }
+    body.uscg-standalone .session-picker-row button { font-size: 12px !important; padding: 6px 10px !important; min-height: 32px; }
+    body.uscg-standalone #session-search, body.uscg-standalone #session-input { font-size: 16px !important; padding: 8px !important; }
 
     body.uscg-standalone .session-card { width: calc(50% - 6px) !important; }
     body.uscg-standalone #session-landing { padding: 16px 12px !important; }
