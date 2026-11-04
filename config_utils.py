@@ -450,6 +450,27 @@ def _expand_ltx_entry(entry):
     return expanded
 
 
+_EXTRA_SEEDS_SALT = "uscg-extra-seeds-v1"
+
+
+def derive_extra_seeds(base_seed, count):
+    """Deterministic extra seeds for "Additional Random Seeds".
+
+    The same (base_seed, count prefix) always yields the same seeds, so a
+    re-run or an interrupted run resumed later (skip matching is by seed)
+    renders the same images; a different base seed yields different extras.
+    """
+    import random
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        return []
+    if count <= 0:
+        return []
+    rng = random.Random(f"{_EXTRA_SEEDS_SALT}:{base_seed}")
+    return [rng.randint(0, 2**32 - 1) for _ in range(count)]
+
+
 def expand_configs(raw_configs, pos_prompts, neg_prompts, denoise_values, seed, extra_seeds, ckpt_name=None):
     """
     Expand raw config entries into full configuration combinations.

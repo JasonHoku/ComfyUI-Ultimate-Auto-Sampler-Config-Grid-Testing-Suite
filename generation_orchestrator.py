@@ -810,7 +810,7 @@ def run_generation_loop(
     existing_data["session_name"] = session_name
     
     from .config_utils import (
-        parse_json_with_error, parse_float_input, parse_prompt_input_nested,
+        parse_json_with_error, parse_float_input, parse_prompt_input_nested, derive_extra_seeds,
         expand_configs, prepare_input_jobs
     )
     
@@ -823,8 +823,9 @@ def run_generation_loop(
     
     extra_seeds = []
     if add_random_seeds_to_gens > 0:
-        import random
-        extra_seeds = [random.randint(0, 2**32 - 1) for _ in range(add_random_seeds_to_gens)]
+        # Deterministic per base seed (see config_utils.derive_extra_seeds) so a
+        # re-run / resumed run matches already-rendered images by seed.
+        extra_seeds = derive_extra_seeds(seed, add_random_seeds_to_gens)
     
     expanded = expand_configs(raw_configs, pos_prompts, neg_prompts, denoise_values, seed, extra_seeds, ckpt_name)
     expanded.sort(key=lambda x: (

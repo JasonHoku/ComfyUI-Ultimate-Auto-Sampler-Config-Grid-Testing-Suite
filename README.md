@@ -380,7 +380,7 @@ This suite consists of three nodes found under the `sampling/testing` category:
 * **`add_random_seeds_to_gens`**: Generate X extra random variations per config.
   - `0` (default): Only use base seed
   - `3`: Generate 3 additional random seed variations per config
-  - Random seeds are deterministic per base seed — changing base seed generates new random variations
+  - Extra seeds are deterministic per base seed — the same base seed always gives the same extras, changing the base seed gives new ones
 
 * **`lookup_and_append_lora_triggerwords`**: Automatically fetch and append LoRA trigger words.
   - `False` (default): Use prompts as-is
@@ -501,6 +501,12 @@ The Generator node features built-in widgets for Model Selection and Prompts, bu
 The Config Builder node replaces manual JSON editing with an intuitive visual interface. Instead of writing configuration arrays by hand, you can point and click to select models and LoRAs, drag sliders to adjust strengths, expand entire folders, stack multiple LoRAs, manage trigger words, and preview JSON output in real-time.
 
 All configuration data is automatically synchronized with the Ultimate Sampler Grid node.
+
+### Run Settings
+
+The Run Settings section of the Builder holds options that apply to the whole run rather than to one config array (overwrite/resume, flush batch size, VAE batch size, model cache, trigger-word mode, ...). One of them:
+
+* **Additional Random Seeds** (`add_random_seeds_to_gens`, 0-100): render this many extra images per config using extra seeds on top of the base seed. Handy for telling "the base model did that" from "the LoRA did that" by checking whether a quirk survives across seeds. The extra seeds are derived from the base seed, so the same base seed always gives the same extras (and resuming an interrupted run works). Contributed by DRuggeri (PR #21).
 
 ### Basic Setup
 
@@ -1126,7 +1132,7 @@ Please check the [GitHub Issues list](https://github.com/YOUR_USERNAME/ComfyUI-U
 * **"Session not found":** Ensure the `session_name` matches a folder inside `ComfyUI/output/benchmarks/`.
 * **OOM Errors:** Lower the `vae_batch_size` to 1 or 2.
 * **Images not resuming:** Make sure `overwrite_existing: False`. Check console for skip messages.
-* **Random seeds different each run:** Intentional — random seeds are tied to the base seed.
+* **Extra random seeds changed:** Additional Random Seeds are derived from the base seed: the same base seed always gives the same extra seeds (so re-runs and resumed runs skip finished images), and a different base seed gives different ones.
 * **"mat1 and mat2 shapes cannot be multiplied":** Model architecture mismatch. For SD3/Flux/Z-Image, ensure you connect ALL optional inputs. Check LoRA compatibility.
 * **Dashboard not auto-loading:** Ensure the dashboard node is connected to the sampler's `dashboard_html` output. Try the "RELOAD / SHOW SESSION" button.
 
@@ -1536,6 +1542,11 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 ---
 
 ## 📝 Changelog
+
+### Update 11/3/26 — Additional Random Seeds finished, LTX prompt arrays
+* 🌱 **Additional Random Seeds:** Run Settings control (0-100) now has full defaults/migration and tests; extra seeds are deterministic per base seed. Thanks to DRuggeri (PR #21).
+* 🎬 **LTX Builder prompts:** Builder prompt arrays (`[["p1","p2"]]`) now expand into separate LTX runs instead of being passed as a list.
+* 🔧 **Builder fixes:** empty text-encoder list falls back to `None`; reloading a saved Builder config keeps each model's type.
 
 ### Update 3/9/26 — Upscaling, Workflow Packing & Config Builder Enhancements
 * 🔍 **Array-Based Upscaling System:** Define multiple upscale configs with Cartesian expansion across models, ratios, and denoise values. Five modes: hires_only, model_only, model_then_hires, seedvr2, and florence2_hires (targeted region inpaint via Florence2 segmentation — needs ComfyUI-Florence2).
