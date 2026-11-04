@@ -760,20 +760,29 @@ body {
     }
     
     .reject-btn {
-        width: 32px;
-        height: 32px;
-        font-size: 16px;
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
     }
-    
+
     .favorite-btn {
-        width: 36px;
-        height: 36px;
-        font-size: 20px;
+        width: 44px;
+        height: 44px;
+        font-size: 22px;
     }
-    
+
+    .upscale-btn {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+        top: 110px;
+    }
+
     .revise-btn {
-        padding: 8px 12px;
+        min-height: 44px;
+        padding: 0 12px;
         font-size: 11px;
+        top: 58px;
     }
 }
 
@@ -1734,4 +1743,81 @@ body {
     .analytics-count {
         font-size: 11px;
     }
+}
+
+/* ==========================================================================
+   TOUCH / PHONE LAYOUT
+   Scoped to a coarse pointer, or to the standalone page (body.uscg-standalone)
+   at phone width. Never width alone: node iframes are narrow too and must look
+   exactly as before.
+   ========================================================================== */
+#modal-action-bar { display: none; }
+
+@media (hover: none) and (pointer: coarse) {
+    /* header */
+    #header { height: 44px; }
+    #header .fs-btn,
+    #header .action-btn,
+    .filter-popup-btn { min-width: 40px; min-height: 40px; }
+    .cog-menu-panel { top: 48px; }
+
+    /* lightbox */
+    .modal-close-x { width: 44px; height: 44px; }
+    .modal-nav-btn { min-width: 44px; min-height: 44px; }
+    .modal-kbd-hint { display: none; }
+    .controls .action-btn,
+    .controls .modal-action-btn { min-height: 44px; }
+
+    #modal-action-bar {
+        display: flex;
+        position: sticky;
+        bottom: 0;
+        gap: 6px;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+        background: rgba(0, 0, 0, 0.9);
+        border-top: 1px solid #333;
+        z-index: 1002;
+        flex-shrink: 0;
+    }
+    #modal-action-bar button {
+        flex: 1;
+        min-height: 48px;
+        font-size: 18px;
+        background: #222;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 6px;
+        cursor: pointer;
+        padding: 0 4px;
+    }
+    #modal { overflow-y: auto; padding-bottom: 72px; }
+}
+
+@media (max-width: 600px) {
+    body.uscg-standalone #modal-action-bar {
+        display: flex;
+        position: sticky;
+        bottom: 0;
+        gap: 6px;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+        background: rgba(0, 0, 0, 0.9);
+        border-top: 1px solid #333;
+        z-index: 1002;
+        flex-shrink: 0;
+    }
+    body.uscg-standalone #modal-action-bar button {
+        flex: 1;
+        min-height: 48px;
+        font-size: 18px;
+        background: #222;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 6px;
+        cursor: pointer;
+        padding: 0 4px;
+    }
+    body.uscg-standalone #modal { overflow-y: auto; padding-bottom: 72px; }
+
+    body.uscg-standalone .session-card { width: calc(50% - 6px) !important; }
+    body.uscg-standalone #session-landing { padding: 16px 12px !important; }
 }

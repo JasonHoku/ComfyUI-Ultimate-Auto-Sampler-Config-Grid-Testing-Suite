@@ -846,6 +846,21 @@ Clicking **REVISE** on a card opens the studio view:
 4. **Bottom:** "Related Variants" reel showing other images with the same seed.
 5. **GENERATE NEW:** Queues the specific config you just edited.
 
+### Standalone Dashboard (phone / second monitor)
+
+The dashboard is also served as a normal web page, with the same live updates as the node:
+
+```
+http://<comfyui-host>:8188/config_tester/dashboard?session=<session_name>
+```
+
+- Without `?session=` you get the session landing cards; picking a session updates the URL, so refresh keeps your place.
+- Open it from the node with the **↗** button in the dashboard header (it opens the page for the session you are viewing).
+- It opens its own ComfyUI websocket, so new images and the ETA bar update live while a run is going. After your phone sleeps, it reloads the session when you come back, without duplicating cards. Reverse proxies that do not upgrade websockets (some Tailscale Serve / nginx setups) lose live updates; the **R** key and the resume reload still work.
+- Touch screens get 44px buttons, and the lightbox gets a bottom bar (Prev / Favorite / Reject / Revise / Next). The in-node view is unchanged apart from the extra header button.
+- **GENERATE NEW** in the lightbox queues through the run API below, into the session you are viewing. "Pack workflow" in export needs the ComfyUI tab and is disabled here.
+- Like ComfyUI itself, the page has no authentication. Only expose it on a network you trust.
+
 ---
 
 ## 🎯 Example Workflows
@@ -1333,6 +1348,34 @@ These endpoints are used internally by the distribution system:
 | POST | `/uscg-distribution/register_worker` | Worker registration with master |
 | GET | `/uscg-distribution/download_model` | Download model file for model sync |
 | POST | `/uscg-distribution/heartbeat` | Worker keepalive signal |
+
+### Run API (headless runs: Discord bot, session hub, curl)
+
+`POST /config_tester/run` builds the two-node prompt (Generator -> Dashboard) and queues it the same way ComfyUI's own `/prompt` does. No workflow JSON is needed.
+
+| Field | Meaning |
+|---|---|
+| `configs_json` | Configs as an object `{"configs":[...]}`, a bare list, or a JSON string of either. |
+| `config_name` | Alternative: a Config Builder file saved in `output/ultimate-configs` (with or without `.json`). Give exactly one of `configs_json` / `config_name`. |
+| `session_name` | Output session (`output/benchmarks/<name>`). Letters, digits, `_`, `-` only. Defaults to the config's own session name, then `my_session`. |
+| `overwrite_existing` | Optional bool, same as the Builder's Run Settings. Skip/resume still protects existing images when false. |
+| `force` | Default **true**: a nonce is added so ComfyUI's node cache cannot short-circuit the run. `false` lets an identical request return the cached result with no new images. |
+| `front` | Optional bool: queue ahead of waiting jobs. |
+| `client_id` | Optional: events are still broadcast to every websocket; this tags the queue entry. |
+
+```
+curl -X POST http://HOST:8188/config_tester/run -H "Content-Type: application/json" \
+  -d '{"config_name":"my_flux_sweep","session_name":"flux_sweep_nov"}'
+curl -X POST http://HOST:8188/config_tester/run -H "Content-Type: application/json" \
+  -d '{"configs_json":{"configs":[{"model":"x.safetensors","sampler":"euler","scheduler":"normal","steps":20,"cfg":7,"positive":"a cat","negative":"","seed":1}]},"session_name":"bot_run"}'
+curl "http://HOST:8188/config_tester/run_status?prompt_id=<id>"
+```
+
+Response: `{"prompt_id", "number", "session_name", "dashboard_path", "dashboard_url", "node_errors"}`. Errors: `400` (bad JSON/configs, both or neither source, empty session, or ComfyUI validation failure with its `node_errors`), `403`, `404` (unknown `config_name`), `500`.
+
+`GET /config_tester/run_status?prompt_id=<id>` returns `state` (`pending` | `running` | `success` | `error`), `queue_position`, `queue_remaining`, a small `status` summary (including the error message when a node failed), and, for runs started through `/run`, `session_name`, `dashboard_url` and `item_count`. Unknown ids return `404` with `state: "unknown"` (history is in memory and lost on restart).
+
+Bot pattern: `POST /run`, post `dashboard_url` to the channel, poll `run_status` every 10-30 s (or pass `client_id` and listen on `/ws?clientId=...` for `ultimate_grid.progress`). `/run` is unauthenticated, the same exposure as ComfyUI's `/prompt`.
 
 ---
 

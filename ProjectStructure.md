@@ -53,6 +53,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── network_utils.py             # ALL outbound network requests (CivitAI, HuggingFace VAE, Distribution LAN) (280 lines)
 ├── upscale_runner.py            # Dashboard async upscaling background thread (371 lines)
 ├── html_generator.py            # Reads /resources/ to build the Dashboard HTML (57 lines)
+├── run_api.py                   # Pure helpers for POST /config_tester/run + run_status (no server imports)
 │
 ├── distribution_manager.py      # Distributed Job Queue Coordinator/Master (634 lines)
 ├── distribution_worker.py       # Worker Thread for Remote Processing (813 lines)
@@ -72,6 +73,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── template.html            # HTML Skeleton for the generated report (662 lines)
 │   ├── report.css               # Styling (Infinite Canvas, Cards, Modals) (1642 lines)
 │   ├── logic_init.js            # Bootstrapper (Load JSON, Init State) (104 lines)
+│   ├── logic_standalone.js      # Standalone-page mode: own websocket, run-API GENERATE NEW, openStandalone() (loaded last)
 │   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (104 lines)
 │   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (510 lines)
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (925 lines)
@@ -203,6 +205,9 @@ All routes registered via `PromptServer.instance.routes`.
 | POST | `/config_tester/save_changes` | 234 | Delta save — only changed items `{session_name, changed_items}` |
 | POST | `/config_tester/save_manifest` | 308 | Full merge save `{session_name, manifest}` |
 | POST | `/config_tester/get_session_html` | 390 | Generate dashboard HTML on-demand `{session_name, node_id}` |
+| GET | `/config_tester/dashboard` | - | Dashboard SPA as a top-level page, optional `?session=` (standalone mode, `USCG_STANDALONE`, own websocket via `resources/logic_standalone.js`) |
+| POST | `/config_tester/run` | - | Headless run: `{configs_json \| config_name, session_name?, overwrite_existing?, force? (default true), front?, client_id?}` -> builds Generator+Dashboard prompt, enqueues in-process like `/prompt`. Helpers in `run_api.py` |
+| GET | `/config_tester/run_status` | - | `?prompt_id=` -> `pending/running/success/error` + session/dashboard_url/item_count |
 | POST | `/config_tester/export_favorites` | 435 | Export favorited images with options (metadata, workflow, organize) |
 | POST | `/config_tester/delete_non_favorites` | 662 | Delete all non-favorited images from session |
 | POST | `/config_tester/scan_directory` | 746 | Scan external dir, create symlinks, generate manifest |
@@ -273,7 +278,7 @@ All routes registered via `PromptServer.instance.routes`.
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id)` — reads all `/resources/` files, inlines into `template.html`
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ui.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_events.js` → `logic_init.js`
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ui.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js`
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests — everything inlined
 
