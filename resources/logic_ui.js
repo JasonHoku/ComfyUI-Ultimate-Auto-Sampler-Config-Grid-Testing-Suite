@@ -318,6 +318,17 @@ function buildLabelOverlay(d) {
         }
     }
 
+    if (labelMode.fields.wfParams && d.wf_params && typeof d.wf_params === 'object' && typeof wfParamKeys === 'function') {
+        const wfKeys = wfParamKeys(activeData);
+        const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        for (const row of wfKeys) {
+            if (row.distinct <= 1) continue;          // constant axes are noise
+            const v = wfParamValue(d, row.key);
+            if (v === null) continue;
+            tags.push(`<span class="label-tag label-wf" title="${esc(row.key)}: ${esc(v)}">${esc(wfShortLabel(row.key, wfKeys))}:${esc(wfDisplay(v))}</span>`);
+        }
+    }
+
     if (tags.length === 0) return '';
     return `<div class="label-overlay">${tags.join('')}</div>`;
 }
@@ -343,7 +354,7 @@ function toggleLabelMode(enabled) {
 function updateLabelFields() {
     const fields = ['model', 'lora', 'prompt', 'sampler', 'scheduler', 'cfg', 'steps', 'seed', 'denoise', 'upscale',
                      'upscaleMode', 'upscaleModel', 'upscaleRatio', 'upscaleDenoise', 'upscaleResizeMethod', 'upscaleHiresSteps', 'upscaleTiling',
-                     'hiresPromptBehavior', 'hiresPromptText', 'rating', 'metrics'];
+                     'hiresPromptBehavior', 'hiresPromptText', 'rating', 'metrics', 'wfParams'];
     fields.forEach(f => {
         const cb = document.getElementById(`label-field-${f}`);
         if (cb) labelMode.fields[f] = cb.checked;
@@ -411,7 +422,7 @@ function loadLabelPreferences() {
 
     const fields = ['model', 'lora', 'prompt', 'sampler', 'scheduler', 'cfg', 'steps', 'seed', 'denoise', 'upscale',
                      'upscaleMode', 'upscaleModel', 'upscaleRatio', 'upscaleDenoise', 'upscaleResizeMethod', 'upscaleHiresSteps', 'upscaleTiling',
-                     'hiresPromptBehavior', 'hiresPromptText', 'rating', 'metrics'];
+                     'hiresPromptBehavior', 'hiresPromptText', 'rating', 'metrics', 'wfParams'];
     fields.forEach(f => {
         const cb = document.getElementById(`label-field-${f}`);
         if (cb) cb.checked = labelMode.fields[f] || false;
@@ -1368,7 +1379,8 @@ function createCard(d) {
         ? `<video ondblclick="toggleFavorite(this)" data-src="${d.file}" muted loop playsinline preload="metadata" draggable="false"></video>`
         : `<img ondblclick="toggleFavorite(this)" data-src="${d.file}" alt="Image ${d.id}" draggable="false">`;
     // Workflow Sweep items: the Revise modal builds a standard config and would lose the workflow template
-    const reviseBtn = (isVideo || d.model_type === 'workflow') ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">REVISE</button>`;
+    // (they get a JOB button instead: openM shows the read-only Workflow job panel)
+    const reviseBtn = isVideo ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">${d.model_type === 'workflow' ? 'JOB' : 'REVISE'}</button>`;
     const upscaleBtn = isVideo ? '' : `<button class="upscale-btn" onclick="openUpscaleModal(${d.id})" title="Upscale this image">\u2B06</button>`;
     const videoBadge = isVideo ? '<div class="video-badge">\u25B6 VIDEO</div>' : '';
     const previewBadge = d.preview
@@ -1423,12 +1435,49 @@ function createCard(d) {
     return card;
 }
 
+// Workflow Sweep items show a read-only "Workflow job" panel instead of the revise form.
+function _setModalWorkflowMode(d) {
+    const isWf = d.model_type === 'workflow';
+    const rev = document.getElementById('m-revise-controls');
+    const pnl = document.getElementById('m-workflow-panel');
+    if (!rev || !pnl) return;
+    rev.style.display = isWf ? 'none' : 'flex';
+    pnl.style.display = isWf ? 'flex' : 'none';
+    if (!isWf) return;
+    const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const metaEl = document.getElementById('m-wf-meta');
+    if (metaEl) {
+        const bits = [d.wf_source || 'workflow'];
+        if (d.wf_output && d.wf_output.node_id !== undefined) bits.push('output ' + d.wf_output.node_id + (d.wf_output.output_index ? ':' + d.wf_output.output_index : ''));
+        if (d.wf_sweep_id) bits.push('sweep ' + d.wf_sweep_id);
+        if (d.wf_job_index !== undefined && d.wf_job_index !== null) bits.push('job #' + (Number(d.wf_job_index) + 1));
+        metaEl.textContent = bits.join(' \u00B7 ');
+    }
+    const tbl = document.getElementById('m-wf-params');
+    if (tbl) {
+        const p = (d.wf_params && typeof d.wf_params === 'object') ? d.wf_params : {};
+        const keys = Object.keys(p).sort();
+        tbl.innerHTML = keys.length
+            ? keys.map(k => `<tr><td style="padding:3px 8px 3px 0; color:#888; vertical-align:top;">${esc(k)}</td><td style="padding:3px 0; color:#fff; word-break:break-all;">${esc(p[k])}</td></tr>`).join('')
+            : '<tr><td style="color:#666;">No varied parameters recorded.</td></tr>';
+    }
+    const canFetch = !!d.wf_sweep_id && d.wf_job_index !== undefined && d.wf_job_index !== null;
+    ['m-wf-download', 'm-wf-copy'].forEach(bid => {
+        const b = document.getElementById(bid);
+        if (!b) return;
+        b.disabled = !canFetch;
+        b.title = canFetch ? '' : 'This item was not produced by a recorded sweep (no sweep id).';
+        b.style.opacity = canFetch ? '' : '0.5';
+    });
+}
+
 // Open Revision Modal
 function openM(id) {
     window.currentModalId = id;
     const d = activeData.find(x => x.id === id);
     if (!d) return;
     document.getElementById('m-img').src = d.file;
+    _setModalWorkflowMode(d);
     const previewNote = document.getElementById('m-preview-note');
     if (previewNote) {
         if (d.preview) {
@@ -2003,6 +2052,37 @@ function addLogicFilter() {
     console.log(`[Logic Filter] Added: ${field} ${op} ${value}`);
 }
 
+// --- Workflow params in the Logic Filter (numeric wf_params keys only; group is absent when no item has wf_params) ---
+var _wfUiSig = null;
+
+function populateWfParamFilterUI() {
+    if (typeof wfParamKeys !== 'function') return;
+    const keys = wfParamKeys(activeData).filter(k => k.numeric);
+    const sig = keys.map(k => k.key).join(',');
+    if (sig === _wfUiSig) return;
+    _wfUiSig = sig;
+    const sel = document.getElementById('logic-filter-field');
+    if (!sel) return;
+    const prev = sel.value;
+    const old = document.getElementById('logic-filter-wf-group');
+    if (old) old.remove();
+    if (keys.length) {
+        const group = document.createElement('optgroup');
+        group.id = 'logic-filter-wf-group';
+        group.label = 'Workflow params';
+        const all = keys.map(k => k.key);
+        keys.forEach(k => {
+            const o = document.createElement('option');
+            o.value = 'wf:' + k.key;
+            o.textContent = wfShortLabel(k.key, all);
+            o.title = k.key;
+            group.appendChild(o);
+        });
+        sel.appendChild(group);
+    }
+    sel.value = prev;
+}
+
 // --- Metric fields in the Logic Filter (populated from the data; hidden when no item has metrics) ---
 var _metricUiSig = null;
 
@@ -2129,7 +2209,9 @@ function renderLogicFilters() {
         tag.className = 'search-filter-tag';
 
         const label = fieldLabels[filter.field] ||
-            (typeof filter.field === 'string' && filter.field.startsWith('metric:') ? metricLabel(filter.field.slice(7)) : filter.field);
+            (typeof filter.field === 'string' && filter.field.startsWith('metric:') ? metricLabel(filter.field.slice(7)) :
+             (typeof filter.field === 'string' && filter.field.startsWith('wf:') && typeof wfShortLabel === 'function'
+                ? wfShortLabel(filter.field.slice(3), wfParamKeys(activeData)) : filter.field));
         tag.innerHTML = `
             <span class="filter-type" style="background: #1a4a2a; color: #4ecf7a;">${label}</span>
             <span class="filter-term">${filter.op} ${filter.value}</span>
@@ -2180,11 +2262,29 @@ const _qfAllTypes = ['lora', 'lora_strength', 'cfg', 'steps', 'sampler', 'schedu
 // Types shown in the expanded facet panel (omit prompt types for brevity)
 const _qfFacetableTypes = ['sampler', 'scheduler', 'lora', 'lora_strength', 'model', 'denoise', 'cfg', 'steps', 'size', 'seed', 'upscaleMethod', 'mediaType', 'passType'];
 
+// Workflow Sweep: one extra chip type per VARIED wf_params key ("wf:<key>"); the lists are dynamic.
+function _qfTypes(base) {
+    if (typeof wfParamKeys !== 'function') return base;
+    return base.concat(wfParamKeys(typeof activeData !== 'undefined' ? activeData : []).filter(k => k.distinct > 1).map(k => 'wf:' + k.key));
+}
+
+function _qfLabel(type) {
+    if (_qfTypeLabels[type]) return _qfTypeLabels[type];
+    if (typeof type === 'string' && type.startsWith('wf:') && typeof wfShortLabel === 'function') {
+        return 'WF ' + wfShortLabel(type.slice(3), wfParamKeys(typeof activeData !== 'undefined' ? activeData : []));
+    }
+    return type;
+}
+
 /**
  * Extract a facet value (or array of values) from an item for a given type.
  * Returns null if the field is missing.
  */
 function _qfExtractItemValue(item, type) {
+    if (typeof type === 'string' && type.startsWith('wf:')) {
+        const raw = wfParamValue(item, type.slice(3));
+        return raw === null ? null : String(raw);
+    }
     if (type === 'lora') {
         const lora = String(item.lora || 'None');
         if (lora === 'None') return ['None'];
@@ -2251,12 +2351,13 @@ function _computeChipFacets(chip) {
     const data = (typeof activeData !== 'undefined' ? activeData : []);
     const subset = data.filter(item => _quickFilterMatches(item, chip));
     const facets = {};
-    for (const type of _qfFacetableTypes) {
+    const facetTypes = _qfTypes(_qfFacetableTypes);
+    for (const type of facetTypes) {
         if (type === chip.type) continue;
         facets[type] = new Set();
     }
     for (const item of subset) {
-        for (const type of _qfFacetableTypes) {
+        for (const type of facetTypes) {
             if (type === chip.type) continue;
             const val = _qfExtractItemValue(item, type);
             if (val === null || val === undefined) continue;
@@ -2328,8 +2429,8 @@ function _openQuickFilterTypeMenu(btnEl) {
         return;
     }
 
-    for (const type of _qfAllTypes) {
-        const label = _qfTypeLabels[type] || type;
+    for (const type of _qfTypes(_qfAllTypes)) {
+        const label = _qfLabel(type);
         const div = document.createElement('div');
         div.style.cssText = 'padding:7px 14px; cursor:pointer; font-size:12px; color:#ccc; white-space:nowrap;';
         div.textContent = label;
@@ -2357,7 +2458,7 @@ function _openQuickFilterValueMenu(type) {
     vm.innerHTML = '';
 
     const values = _qfUniqueValuesForType(type);
-    const label = _qfTypeLabels[type] || type;
+    const label = _qfLabel(type);
 
     if (values.length === 0) {
         vm.innerHTML = `<div style="padding:8px 12px; color:#666; font-size:11px;">No values for ${label}</div>`;
@@ -2451,7 +2552,7 @@ function renderQuickFilters() {
     }
 
     quickFilters.forEach((chip, idx) => {
-        const label = _qfTypeLabels[chip.type] || chip.type;
+        const label = _qfLabel(chip.type);
 
         const chipEl = document.createElement('div');
         chipEl.style.cssText = 'border:1px solid #1e4a6e; border-radius:4px; margin-bottom:6px; overflow:hidden; background:#0d1f2d;';
@@ -2501,7 +2602,7 @@ function renderQuickFilters() {
             body.appendChild(countEl);
 
             let anyFacets = false;
-            for (const type of _qfFacetableTypes) {
+            for (const type of _qfTypes(_qfFacetableTypes)) {
                 if (type === chip.type) continue;
                 const vals = facets[type];
                 if (!vals || vals.size === 0) continue;
@@ -2514,7 +2615,7 @@ function renderQuickFilters() {
 
                 const rowLabel = document.createElement('span');
                 rowLabel.style.cssText = 'font-size:9px; color:#555; text-transform:uppercase; letter-spacing:0.05em; margin-right:6px;';
-                rowLabel.textContent = (_qfTypeLabels[type] || type) + ':';
+                rowLabel.textContent = _qfLabel(type) + ':';
                 row.appendChild(rowLabel);
 
                 for (const val of sortedVals) {

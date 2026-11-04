@@ -1071,3 +1071,65 @@ async function runFullPassForSurvivors() {
     if (res && res.ok) { _uscgToast(res.message || 'Full pass queued.', true); return; }
     _uscgToast((res && res.message ? res.message + ' ' : '') + manual, false);
 }
+
+
+// --- Workflow Sweep: download / copy the API prompt of one job (GET /config_tester/sweep/job_prompt) ---
+async function _fetchWorkflowJobPrompt() {
+    const d = (typeof activeData !== 'undefined' ? activeData : []).find(x => x.id === window.currentModalId);
+    if (!d || d.wf_sweep_id === undefined || d.wf_sweep_id === null || d.wf_job_index === undefined || d.wf_job_index === null) {
+        _uscgToast('This item has no recorded sweep job.', false);
+        return null;
+    }
+    const session = document.getElementById('session-input')?.value || (typeof fullManifest !== 'undefined' && fullManifest && fullManifest.session_name) || '';
+    const q = 'session_name=' + encodeURIComponent(session) + '&sweep_id=' + encodeURIComponent(d.wf_sweep_id) + '&job_index=' + encodeURIComponent(d.wf_job_index);
+    try {
+        const r = await fetch('/config_tester/sweep/job_prompt?' + q);
+        const data = await r.json();
+        if (!r.ok) { _uscgToast(data.error || ('Could not load the job prompt (' + r.status + ')'), false); return null; }
+        return { session: session, job: d.wf_job_index, prompt: data.prompt };
+    } catch (e) {
+        _uscgToast('Could not load the job prompt: ' + e, false);
+        return null;
+    }
+}
+
+async function downloadWorkflowJobPrompt() {
+    const res = await _fetchWorkflowJobPrompt();
+    if (!res) return;
+    const text = JSON.stringify(res.prompt, null, 2);
+    try {
+        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (res.session || 'sweep') + '_job' + (Number(res.job) + 1) + '_api.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+        _uscgToast('Job prompt downloaded (if nothing happened, use "Copy job prompt").', true);
+    } catch (e) {
+        _uscgToast('Download blocked: ' + e + ' (use "Copy job prompt")', false);
+    }
+}
+
+async function copyWorkflowJobPrompt() {
+    const res = await _fetchWorkflowJobPrompt();
+    if (!res) return;
+    const text = JSON.stringify(res.prompt, null, 2);
+    let ok = false;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; }
+    } catch (e) { ok = false; }
+    if (!ok) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+            document.body.appendChild(ta);
+            ta.select();
+            ok = document.execCommand('copy');
+            ta.remove();
+        } catch (e) { ok = false; }
+    }
+    _uscgToast(ok ? 'Job prompt copied to the clipboard.' : 'Copy failed: clipboard access is blocked here.', ok);
+}

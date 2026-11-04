@@ -22,6 +22,7 @@ def get_html_template(title, manifest_data, node_id, standalone=False):
         "logic_state.js",    # Global variables
         "logic_utils.js",    # API & Helper functions
         "logic_ratings.js",  # Pairwise review: pure logic (normalisers, Bradley-Terry, pairing, scoreboard)
+        "logic_wfparams.js",  # Workflow Sweep: wf_params helpers (pure; must load before logic_ui/logic_pipeline)
         "logic_ui.js",       # DOM Creation, Modals, JSON Bars
         "logic_upscale_modal.js",  # Upscale Modal (preset management, async upscale)
         "logic_virtual.js",  # The Virtual Scroll Engine & Viewport

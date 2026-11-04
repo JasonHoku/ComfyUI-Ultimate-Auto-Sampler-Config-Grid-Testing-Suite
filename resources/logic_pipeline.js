@@ -25,6 +25,9 @@ function refreshIndices() {
  * Returns null if the field is missing or not parseable as a number.
  */
 function _extractFieldValue(item, field) {
+    if (typeof field === 'string' && field.startsWith('wf:')) {
+        return (typeof wfParamNumber === 'function') ? wfParamNumber(item, field.slice(3)) : null;
+    }
     if (typeof field === 'string' && field.startsWith('metric:')) {
         const mv = item.metrics ? item.metrics[field.slice(7)] : undefined;
         return (typeof mv === 'number' && isFinite(mv)) ? mv : null;
@@ -95,6 +98,9 @@ function matchesLogicFilters(item) {
  * - everything else: String exact match.
  */
 function _quickFilterMatches(item, f) {
+    if (typeof f.type === 'string' && f.type.startsWith('wf:')) {
+        return (typeof wfParamMatches === 'function') && wfParamMatches(item, f.type.slice(3), f.value);
+    }
     if (f.type === 'lora') {
         const lora = String(item.lora || 'None');
         if (lora === 'None') return f.value === 'None';
@@ -547,6 +553,7 @@ function executePipeline() {
     const startTime = performance.now();
     refreshSupersededFps();
     if (typeof populateMetricFilterUI === 'function') populateMetricFilterUI();
+    if (typeof populateWfParamFilterUI === 'function') populateWfParamFilterUI();
     const currentFilterKey = getFilterKey();
     const filtersChanged = currentFilterKey !== lastFilterKey;
 

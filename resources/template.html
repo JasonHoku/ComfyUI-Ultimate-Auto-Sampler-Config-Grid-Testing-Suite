@@ -189,6 +189,10 @@
                             <label for="label-field-metrics" style="font-size: 10px; color: #7ab0e0; cursor: pointer; user-select: none;">Metrics</label>
                         </div>
                         <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="checkbox" id="label-field-wfParams" onchange="updateLabelFields()" style="width: 12px; height: 12px; cursor: pointer;">
+                            <label for="label-field-wfParams" style="font-size: 10px; color: #b48ae0; cursor: pointer; user-select: none;">Workflow params</label>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 4px;">
                             <input type="checkbox" id="label-field-upscale" onchange="updateLabelFields()" style="width: 12px; height: 12px; cursor: pointer;">
                             <label for="label-field-upscale" style="font-size: 10px; color: #e06090; cursor: pointer; user-select: none;">Upscale (all)</label>
                         </div>
@@ -860,6 +864,7 @@
         <div class="modal-main">
             <div class="preview"><img id="m-img" src=""><div id="m-preview-note" style="display: none; font-size: 11px; color: #cdb26a; padding: 4px 8px; text-align: center;"></div></div>
             <div class="controls">
+              <div id="m-revise-controls" style="display:flex; flex-direction:column; gap:10px; flex:1; min-height:0;">
                 <h2 style="margin:0 0 10px 0; color:#fff;">Revise & Generate</h2>
                 <button class="modal-action-btn copy-comfy-btn" onclick="copyConfigsAsComfyNodes(window.currentModalId)"
                     style="background: #6366f1; margin-top: 10px;">
@@ -889,6 +894,17 @@
                         onclick="triggerGen(this)">GENERATE NEW</button>
                     <button class="action-btn" style="flex:1" onclick="closeM()">EXIT</button>
                 </div>
+              </div>
+              <div id="m-workflow-panel" style="display:none; flex-direction:column; gap:10px; flex:1; min-height:0;">
+                <h2 style="margin:0 0 6px 0; color:#fff;">Workflow job</h2>
+                <div id="m-wf-meta" style="font-size:11px; color:#888; word-break:break-all;"></div>
+                <table id="m-wf-params" style="width:100%; border-collapse:collapse; font-size:12px; color:#ccc;"></table>
+                <div style="margin-top:auto; display:flex; flex-direction:column; gap:8px;">
+                    <button id="m-wf-download" class="modal-action-btn" style="background:#6366f1;" onclick="downloadWorkflowJobPrompt()">⬇ Download job prompt (API JSON)</button>
+                    <button id="m-wf-copy" class="modal-action-btn" style="background:#333;" onclick="copyWorkflowJobPrompt()">📋 Copy job prompt</button>
+                    <button class="action-btn" onclick="closeM()">EXIT</button>
+                </div>
+              </div>
             </div>
         </div>
         <div class="reel-wrap">
