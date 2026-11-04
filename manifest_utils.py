@@ -117,3 +117,69 @@ def load_existing_manifest(manifest_path):
         "session_name": "default",
         "items": []
     }
+
+
+
+def _item_file_path(manifest_path, item):
+    """Local path of an item's image, derived from its /view URL, confined to <session>/images."""
+    try:
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(item.get("file", "")).query)
+        filename = os.path.basename((q.get("filename") or [""])[0])
+        if not filename:
+            return None
+        images_dir = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), "images")
+        path = os.path.abspath(os.path.join(images_dir, filename))
+        if os.path.dirname(path) != os.path.abspath(images_dir):
+            return None
+        return path
+    except Exception:
+        return None
+
+
+def append_items(manifest_path, items, remove_ids=(), session_name=None, default_meta=None):
+    """
+    Add items to a manifest (newest first, like every other writer) with a fresh read of the file on disk.
+
+    Used by workflow sweeps, where a standard Generator run on the same session may write the manifest
+    between two jobs, so an in-memory copy held elsewhere would drop its items. Thread-safe.
+    `remove_ids` are deleted (item + image file) after the new items are inserted (overwrite_existing).
+    Returns the manifest dict that was written.
+    """
+    remove_ids = set(remove_ids or ())
+    with _manifest_lock:
+        data = None
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r") as f:
+                    data = json.load(f)
+            except Exception as e:
+                print(f"[GridTester] ⚠️ Could not read manifest before append: {e}")
+        if not isinstance(data, dict):
+            data = {"session_name": session_name or "default", "items": []}
+        data.setdefault("items", [])
+        if session_name:
+            data.setdefault("session_name", session_name)
+        if default_meta and not data.get("meta"):
+            data["meta"] = default_meta
+        for item in items:
+            data["items"].insert(0, item)
+        if remove_ids:
+            kept = []
+            for it in data["items"]:
+                if it.get("id") in remove_ids and not any(it is n for n in items):
+                    path = _item_file_path(manifest_path, it)
+                    if path and os.path.isfile(path):
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
+                else:
+                    kept.append(it)
+            data["items"] = kept
+        os.makedirs(os.path.dirname(os.path.abspath(manifest_path)), exist_ok=True)
+        tmp = manifest_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp, manifest_path)
+        return data
