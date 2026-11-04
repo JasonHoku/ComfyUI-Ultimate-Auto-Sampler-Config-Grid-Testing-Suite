@@ -129,7 +129,7 @@ A button in the builder UI to pack short sha256 into config with an explanation 
 * **Problem:** Can only load full sessions, not merge snippets.
 
 
-#### **23. Pseudo-JSON Nodes (Recursion)** (low priority) - STARTED: v1 is the **Workflow Sweep** (Builder: Add Workflow Sweep): any API-format workflow runs as-is with chosen inputs swept (see README, 'Workflow Sweep'). Still open: inserting nodes into the USCG pipeline itself, video outputs, mixed workflow + standard runs.
+#### **23. Pseudo-JSON Nodes (Recursion)** (low priority) - STARTED: v1 is the **Workflow Sweep** (Builder: Add Workflow Sweep): any API-format workflow runs as-is with chosen inputs swept (see README, 'Workflow Sweep'). Still open: inserting nodes into the USCG pipeline itself, video outputs, mixed workflow + standard runs. (v1 shipped 11/4/26)
 * **Problem:** Advanced. Running a raw JSON workflow as a sub-node. Inserting any node into any part of the genereation would make this tool have an immense customizability increase.
 More info needed on how this could work, would like to see a visual interface for it in the builder UI eventaully. (big job, very low priority)
 
@@ -150,11 +150,15 @@ Compute objective quality metrics during generation and store in manifest:
 - **Sobel edge quality** (detail preservation)
 Add as sortable/filterable fields in Dashboard. Enables data-driven parameter selection instead of purely visual comparison. Prior art: SamplerSchedulerMetricsTester (proves the concept, only 9 stars but validates demand).
 
+DONE (11/4/26): built-in metrics (sharpness, entropy, colorfulness, contrast, luma, saturation), Dashboard sort/filter/labels, backfill job for old sessions. Still open: Sobel edge quality, scorer packs.
+
 #### **26. Analytics Panel in Dashboard** (transforms tool from "look at pictures" to "data-driven decisions")
 * **Milestone 1:** Aggregate stats bar — avg generation time by sampler/scheduler, favorites rate by model/LoRA
 * **Milestone 2:** Canvas-based charts — bar charts, scatter plots (steps vs duration, CFG vs quality metrics)
 * **Milestone 3:** Export — downloadable reports with charts + top images
 Pure client-side using canvas API from existing `activeData`. Prior art: W&B dashboards.
+
+STARTED (11/4/26): the Pairwise Review scoreboard (per-axis win % + ratings) covers part of Milestone 1.
 
 #### **27. Static Dashboard** (eliminate HTML regeneration requirement)
 * **Milestone 1:** REST manifest fetch — Dashboard loads manifest via `fetch('/config_tester/get_manifest?session=name')` instead of inline `__JSON_DATA__`
@@ -162,7 +166,26 @@ Pure client-side using canvas API from existing `activeData`. Prior art: W&B das
 * **Milestone 3:** Hot-reload in dev — JS changes visible on browser refresh without re-running sampler
 Biggest architectural leverage: eliminates the #1 developer friction point.
 
+STARTED (11/4/26): `/config_tester/dashboard` serves the SPA as a standalone page with its own websocket; the manifest is still inlined by html_generator (Milestones 1-3 open).
+
 #### **28. Onboarding Wizard & Tutorial**
 * **Milestone 1:** First-run wizard in Builder UI — walks through: create session → pick model → add LoRA → run → view dashboard (5 interactive steps)
 * **Milestone 2:** Video tutorial (3-minute YouTube walkthrough)
 README is 2000+ words; most users won't read it. Efficiency Nodes grew via community tutorials.
+
+
+---
+
+## Open follow-ups (11/4/26)
+
+#### **29. Text-Encoder Batching: live check, then flip the default**
+Verify `te_batch_size` on the 5060 Ti with the real MOSS-Image, Krea 2 and Qwen-Image encoders, then decide whether the default of 1 (off) should change.
+
+#### **30. Distributed companion parity**
+Preview pass, `job_order` and metrics are ignored in distributed mode today. Teach the ComfyUI-USCG-Distributed companion about them.
+
+#### **31. Scorer-pack adapters**
+Verify the node ids of the optional aesthetic / reward scorer packs against the real packs, then enable the shipped adapter entries.
+
+#### **32. Workflow Sweep: video outputs and mixed runs**
+Allow video outputs from a sweep and sweep + standard configs in one Generator run (both are v1 limits).
