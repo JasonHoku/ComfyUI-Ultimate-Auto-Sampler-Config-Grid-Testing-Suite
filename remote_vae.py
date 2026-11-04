@@ -231,6 +231,10 @@ class RemoteVAEDecodeWorker:
                     try:
                         with open(self.manifest_path, "r") as f:
                             disk_manifest = json.load(f)
+
+                        # Pairwise-review votes live on disk (disk wins), never drop them on this save
+                        from .manifest_utils import preserve_disk_comparisons
+                        preserve_disk_comparisons(disk_manifest, self.existing_data)
                         
                         # Create a lookup map for items currently in memory
                         # This allows us to update self.existing_data in-place

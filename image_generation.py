@@ -1084,6 +1084,10 @@ def flush_batch_with_vae(pending_batch, vae, img_dir, existing_data, session_nam
             try:
                 with open(manifest_path, "r") as f:
                     disk_manifest = json.load(f)
+
+                # Pairwise-review votes live on disk (disk wins), never drop them on this save
+                from .manifest_utils import preserve_disk_comparisons
+                preserve_disk_comparisons(disk_manifest, existing_data)
                 
                 # Create a lookup map for items currently in memory
                 memory_items_map = {
