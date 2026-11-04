@@ -21,7 +21,7 @@ from .run_api import (
     RunTracker, sanitize_session_name_strict, normalize_configs_payload, apply_run_overrides,
     build_run_prompt, resolve_saved_config, saved_config_to_configs_obj, summarize_history, find_in_queue,
 )
-from .workflow_sweep_collect import USCGSweepCollect
+from .workflow_sweep_collect import USCGSweepCollect, USCGSweepCollectVideo
 import sys
 
 # Register a sys.modules alias for cross-companion imports.
@@ -1576,6 +1576,7 @@ NODE_CLASS_MAPPINGS = {
     "UltimateConfigBuilder": UltimateConfigBuilder,
     "SmartJSONText": SmartJSONTextNode,
     "USCGSweepCollect": USCGSweepCollect,
+    "USCGSweepCollectVideo": USCGSweepCollectVideo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1584,6 +1585,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "UltimateConfigBuilder": "Ultimate Config Builder",
     "SmartJSONText": "Smart JSON Text",
     "USCGSweepCollect": "USCG Sweep Collect",
+    "USCGSweepCollectVideo": "USCG Sweep Collect Video",
 }
 
 WEB_DIRECTORY = "./web"

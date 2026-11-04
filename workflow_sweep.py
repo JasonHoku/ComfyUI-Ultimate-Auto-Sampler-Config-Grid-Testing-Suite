@@ -26,6 +26,8 @@ import random
 
 
 COLLECTOR_CLASS = "USCGSweepCollect"
+COLLECTOR_VIDEO_CLASS = "USCGSweepCollectVideo"
+VHS_COMBINE_CLASS = "VHS_VideoCombine"
 MAX_JOBS = 50000
 
 # input name -> manifest field (class-agnostic; see plan section 4.4)
@@ -280,10 +282,93 @@ def find_output_nodes(prompt, class_info=None):
     return outs
 
 
+def _vhs_unsupported(node):
+    """Why a VHS_VideoCombine node cannot be a frames source, or None when it can."""
+    inputs = (node or {}).get("inputs") or {}
+    if is_link(inputs.get("vae")):
+        return "it has a `vae` link (latent input): decode the latents before VHS Video Combine"
+    if is_link(inputs.get("meta_batch")):
+        return "it has a `meta_batch` link (batch manager is not supported)"
+    return None
+
+
+def find_video_sources(prompt, class_info=None, warnings=None):
+    """
+    Every socket a video collector could be fed from, best candidate first:
+      1. feeders of SaveVideo*.video            (kind "video", VIDEO socket)
+      2. feeders of VHS_VideoCombine.images     (kind "frames", IMAGE socket, converted with a CreateVideo)
+      3. any node whose class advertises a VIDEO output (CreateVideo, LoadVideo, ...)
+    Returns [{node_id, output_index, type, media:"video", kind, frames_from?, picked_from?}].
+    Unsupported VHS nodes are skipped with an entry in `warnings` (when a list is given).
+    """
+    sources, seen = [], set()
+
+    def add(nid, idx, rtype, kind, picked_from=None, frames_from=None):
+        key = (str(nid), int(idx), kind, frames_from)
+        if key in seen or str(nid) not in prompt:
+            return
+        seen.add(key)
+        entry = {"node_id": key[0], "output_index": key[1], "type": rtype, "media": "video", "kind": kind}
+        if frames_from is not None:
+            entry["frames_from"] = str(frames_from)
+        if picked_from is not None:
+            entry["picked_from"] = str(picked_from)
+        sources.append(entry)
+
+    for nid in sorted(prompt, key=_node_sort_key):
+        ct = prompt[nid].get("class_type", "")
+        v = (prompt[nid].get("inputs") or {}).get("video")
+        if ct.startswith("SaveVideo") and is_link(v):
+            add(v[0], v[1], "VIDEO", "video", picked_from=nid)
+    for nid in sorted(prompt, key=_node_sort_key):
+        if prompt[nid].get("class_type") != VHS_COMBINE_CLASS:
+            continue
+        v = (prompt[nid].get("inputs") or {}).get("images")
+        if not is_link(v):
+            continue
+        why = _vhs_unsupported(prompt[nid])
+        if why:
+            if warnings is not None:
+                warnings.append(f"{node_title(prompt, nid)} (#{nid}) was skipped as a video source: {why}.")
+            continue
+        add(v[0], v[1], "IMAGE", "frames", picked_from=nid, frames_from=nid)
+    for nid in sorted(prompt, key=_node_sort_key):
+        ct = prompt[nid].get("class_type")
+        info = _info(class_info, ct)
+        if info is None:
+            if ct == "CreateVideo":  # no registry (tests): the one core node we know produces VIDEO
+                add(nid, 0, "VIDEO", "video")
+            continue
+        if not info.get("missing"):
+            for idx, rt in enumerate(info.get("return_types") or []):
+                if rt == "VIDEO":
+                    add(nid, idx, "VIDEO", "video")
+    return sources
+
+
+def source_to_output(src):
+    """A source entry -> the stored `workflow_output` shape. Image outputs stay {node_id, output_index} only."""
+    out = {"node_id": str(src["node_id"]), "output_index": int(src.get("output_index", 0) or 0)}
+    if src.get("media") == "video":
+        out["media"] = "video"
+        if src.get("frames_from") is not None:
+            out["frames_from"] = str(src["frames_from"])
+    return out
+
+
 def default_output(prompt, class_info=None):
-    """The socket that should feed the collector: {node_id, output_index, picked_from?} or None."""
-    sources = find_image_sources(prompt, class_info)
-    return sources[0] if sources else None
+    """
+    The socket that should feed the collector, in `workflow_output` shape, or None.
+    A SaveImage / PreviewImage feeder wins (image workflows behave as they always did); otherwise the
+    best video source; otherwise any IMAGE socket.
+    """
+    images = find_image_sources(prompt, class_info)
+    if images and images[0].get("picked_from") is not None:
+        return images[0]
+    videos = find_video_sources(prompt, class_info)
+    if videos:
+        return source_to_output(videos[0])
+    return images[0] if images else None
 
 
 def describe_nodes(prompt, class_info=None):
@@ -510,9 +595,11 @@ def coerce_like(value, template_value):
     return value
 
 
-def template_hash(prompt, output, run_other_outputs=False):
-    payload = json.dumps({"p": prompt, "o": [str(output[0]), int(output[1])], "r": bool(run_other_outputs)},
-                         sort_keys=True, separators=(",", ":"), default=str)
+def template_hash(prompt, output, run_other_outputs=False, media="image", frames_from=None):
+    body = {"p": prompt, "o": [str(output[0]), int(output[1])], "r": bool(run_other_outputs)}
+    if media == "video":  # image templates keep the exact payload they always had (resume of old sessions)
+        body["m"], body["f"] = "video", (None if frames_from is None else str(frames_from))
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -520,10 +607,14 @@ def _strip_meta(prompt):
     return {nid: {k: v for k, v in node.items() if k != "_meta"} for nid, node in prompt.items()}
 
 
-def fingerprint(substituted_prompt, output):
-    """Resume key of one job: sha256 of the substituted template (no _meta, no collector) + output socket."""
-    payload = json.dumps({"p": _strip_meta(substituted_prompt), "o": [str(output[0]), int(output[1])]},
-                         sort_keys=True, separators=(",", ":"), default=str)
+def fingerprint(substituted_prompt, output, media="image", frames_from=None):
+    """Resume key of one job: sha256 of the substituted template (no _meta, no collector) + output socket.
+    Video collections add the media kind (and the VHS node for frames), so a video and an image
+    collection of the same socket never skip each other; image fingerprints are unchanged."""
+    body = {"p": _strip_meta(substituted_prompt), "o": [str(output[0]), int(output[1])]}
+    if media == "video":
+        body["m"], body["f"] = "video", (None if frames_from is None else str(frames_from))
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
 
@@ -547,16 +638,43 @@ def collector_node_id(prompt):
     return str(cid)
 
 
-def build_job_prompt(template, subs, output, collector_inputs):
+def build_job_prompt(template, subs, output, collector_inputs, media="image", frames_from=None):
     """
     Substitute `subs` into a copy of the template and append the collector node.
-    Nothing else is touched. Returns (prompt, collector_id).
+    Nothing else is touched, except for a frames-sourced video (VHS), where a core `CreateVideo` node is
+    spliced in front of the collector (images / fps / audio copied from the VHS node of the substituted
+    prompt), so the collector only ever sees a VIDEO. Returns (prompt, collector_id).
     """
     prompt = apply_subs(template, subs)
+    if media != "video":
+        cid = collector_node_id(prompt)
+        inputs = {"images": [str(output[0]), int(output[1])]}
+        inputs.update(collector_inputs or {})
+        prompt[cid] = {"class_type": COLLECTOR_CLASS, "inputs": inputs, "_meta": {"title": "USCG Sweep Collect"}}
+        return prompt, cid
+    source = [str(output[0]), int(output[1])]
+    if frames_from is not None and str(frames_from) in prompt:
+        vhs_inputs = prompt[str(frames_from)].get("inputs") or {}
+        images = vhs_inputs.get("images")
+        cv_inputs = {"images": [str(images[0]), int(images[1])] if is_link(images) else source}
+        fps = vhs_inputs.get("frame_rate", 8)
+        if is_link(fps):
+            cv_inputs["fps"] = [str(fps[0]), int(fps[1])]
+        else:
+            try:
+                cv_inputs["fps"] = float(fps)
+            except (TypeError, ValueError):
+                cv_inputs["fps"] = 8.0
+        audio = vhs_inputs.get("audio")
+        if is_link(audio):
+            cv_inputs["audio"] = [str(audio[0]), int(audio[1])]
+        cv_id = collector_node_id(prompt)
+        prompt[cv_id] = {"class_type": "CreateVideo", "inputs": cv_inputs, "_meta": {"title": "USCG Sweep Create Video"}}
+        source = [cv_id, 0]
     cid = collector_node_id(prompt)
-    inputs = {"images": [str(output[0]), int(output[1])]}
+    inputs = {"video": source}
     inputs.update(collector_inputs or {})
-    prompt[cid] = {"class_type": COLLECTOR_CLASS, "inputs": inputs, "_meta": {"title": "USCG Sweep Collect"}}
+    prompt[cid] = {"class_type": COLLECTOR_VIDEO_CLASS, "inputs": inputs, "_meta": {"title": "USCG Sweep Collect Video"}}
     return prompt, cid
 
 
@@ -808,17 +926,27 @@ def order_axes(prompt, axes, anc_set):
 
 
 def normalize_output(entry, prompt, class_info=None):
+    """(node_id, output_index, media, frames_from) of the socket to collect. media is "image" or "video"."""
     wo = entry.get("workflow_output")
-    if isinstance(wo, dict) and wo.get("node_id") is not None:
-        nid, idx = str(wo["node_id"]), int(wo.get("output_index", 0) or 0)
-    else:
-        d = default_output(prompt, class_info)
-        if not d:
-            raise ValueError("No image output found. Pick the image socket to collect in the workflow section.")
-        nid, idx = d["node_id"], d["output_index"]
+    if not (isinstance(wo, dict) and wo.get("node_id") is not None):
+        wo = default_output(prompt, class_info)
+        if not wo:
+            raise ValueError("No image or video output found. Pick the socket to collect in the workflow section.")
+    nid, idx = str(wo["node_id"]), int(wo.get("output_index", 0) or 0)
+    media = str(wo.get("media") or "image").lower()
+    if media not in ("image", "video"):
+        raise ValueError(f"Unknown output media '{media}' (expected image or video).")
+    frames_from = wo.get("frames_from")
+    frames_from = None if (frames_from is None or media != "video") else str(frames_from)
     if nid not in prompt:
         raise ValueError(f"The chosen output node {nid} is not in the workflow.")
-    return nid, idx
+    if frames_from is not None:
+        if frames_from not in prompt:
+            raise ValueError(f"The video frames node {frames_from} is not in the workflow.")
+        why = _vhs_unsupported(prompt[frames_from])
+        if why:
+            raise ValueError(f"{node_title(prompt, frames_from)} (#{frames_from}) cannot be used as a video source: {why}.")
+    return nid, idx, media, frames_from
 
 
 def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=None, class_info=None):
@@ -830,10 +958,11 @@ def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=N
     Each job conf is flat (4.3 in the plan) and carries wf_subs; the template is NOT copied into confs.
     """
     prompt = parse_api_workflow(entry.get("workflow"))
-    out_id, out_idx = normalize_output(entry, prompt, class_info)
+    out_id, out_idx, media, frames_from = normalize_output(entry, prompt, class_info)
     run_other = bool(entry.get("workflow_run_other_outputs", False))
     warnings = []
-    anc = ancestors_ordered(prompt, out_id)
+    anchor = frames_from or out_id  # frames mode: the VHS node, so its own inputs (frame_rate) count as upstream
+    anc = ancestors_ordered(prompt, anchor)
     anc_set = set(anc)
     bindings = entry.get("workflow_bindings") or []
 
@@ -851,11 +980,15 @@ def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=N
         if total > MAX_JOBS:
             raise ValueError(f"This sweep would create more than {MAX_JOBS} jobs; narrow the axes.")
 
-    sources, encoders, lora_nodes = _field_sources(prompt, out_id)
-    thash = template_hash(prompt, (out_id, out_idx), run_other)
+    sources, encoders, lora_nodes = _field_sources(prompt, anchor)
+    thash = template_hash(prompt, (out_id, out_idx), run_other, media, frames_from)
     source_name = str(entry.get("workflow_source") or "")
-    base = {"model_type": "workflow", "media_type": "image", "wf_template_hash": thash,
+    base = {"model_type": "workflow", "media_type": media, "wf_template_hash": thash,
             "wf_source": source_name, "wf_output": f"{out_id}:{out_idx}"}
+    if media == "video":
+        base["wf_output_media"] = "video"
+        if frames_from is not None:
+            base["wf_frames_from"] = frames_from
 
     jobs = []
     for combo in itertools.product(*[range(len(a.options)) for a in axes]):
@@ -874,14 +1007,15 @@ def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=N
         conf["negative"] = conf.get("negative", "") if isinstance(conf.get("negative", ""), str) else ""
         conf["wf_subs"] = [[n, i, v] for n, i, v in subs]
         conf["wf_params"] = params
-        conf["wf_fingerprint"] = fingerprint(substituted, (out_id, out_idx))
+        conf["wf_fingerprint"] = fingerprint(substituted, (out_id, out_idx), media, frames_from)
         jobs.append(conf)
 
     return {
         "jobs": jobs,
         "axes": [{"label": a.label, "count": len(a.options), "order": i} for i, a in enumerate(axes)],
         "warnings": warnings,
-        "template": {"hash": thash, "prompt": prompt, "output": [out_id, out_idx], "run_other_outputs": run_other},
+        "template": {"hash": thash, "prompt": prompt, "output": [out_id, out_idx], "run_other_outputs": run_other,
+                     "media": media, "frames_from": frames_from},
     }
 
 
@@ -956,14 +1090,17 @@ def parse_for_ui(api_json, class_info=comfy_class_info):
     """Response body of POST /config_tester/sweep/parse. Raises ValueError for unusable input."""
     prompt = parse_api_workflow(api_json)
     sources = find_image_sources(prompt, class_info)
-    default = sources[0] if sources else None
-    suggestions = suggest_bindings(prompt, default, class_info) if default else []
     warnings = []
+    video_sources = find_video_sources(prompt, class_info, warnings)
+    default = default_output(prompt, class_info)
+    anchor = {"node_id": default.get("frames_from") or default["node_id"]} if default else None
+    suggestions = suggest_bindings(prompt, anchor, class_info) if default else []
     nodes_ = describe_nodes(prompt, class_info)
     missing = sorted({n["class_type"] for n in nodes_ if n["missing_class"]})
     if missing:
         warnings.append("These node types are not installed in this ComfyUI: " + ", ".join(missing))
-    if not sources:
-        warnings.append("No IMAGE output was found; pick the image socket to collect manually.")
+    if not sources and not video_sources:
+        warnings.append("No image or video output was found; pick the socket to collect manually.")
     return {"ok": True, "nodes": nodes_, "outputs": find_output_nodes(prompt, class_info),
-            "image_sources": sources, "suggestions": suggestions, "warnings": warnings, "errors": []}
+            "image_sources": sources, "video_sources": video_sources, "default_output": default,
+            "suggestions": suggestions, "warnings": warnings, "errors": []}

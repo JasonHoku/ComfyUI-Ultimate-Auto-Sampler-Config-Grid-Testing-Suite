@@ -325,6 +325,11 @@ def append_items(manifest_path, items, remove_ids=(), session_name=None, default
                             os.remove(path)
                         except OSError:
                             pass
+                    if path and it.get("media_type") == "video":  # a video's poster sits next to it (<stem>.preview.png)
+                        try:
+                            os.remove(os.path.splitext(path)[0] + ".preview.png")
+                        except OSError:
+                            pass
                 else:
                     kept.append(it)
             data["items"] = kept

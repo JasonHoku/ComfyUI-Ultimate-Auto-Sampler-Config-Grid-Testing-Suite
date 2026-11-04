@@ -1,0 +1,4 @@
+{
+  "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 8, "color": 0}, "_meta": {"title": "EmptyImage"}},
+  "2": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["1", 0], "frame_rate": 8, "loop_count": 0, "filename_prefix": "USCG-test", "format": "video/h264-mp4", "pingpong": false, "save_output": true}, "_meta": {"title": "Video Combine"}}
+}

@@ -1,0 +1,5 @@
+{
+  "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 8, "color": 0}, "_meta": {"title": "EmptyImage"}},
+  "2": {"class_type": "CreateVideo", "inputs": {"images": ["1", 0], "fps": 8.0}, "_meta": {"title": "Create Video"}},
+  "3": {"class_type": "SaveVideo", "inputs": {"video": ["2", 0], "filename_prefix": "video/USCG-test", "format": "mp4", "format.codec": "auto"}, "_meta": {"title": "Save Video"}}
+}

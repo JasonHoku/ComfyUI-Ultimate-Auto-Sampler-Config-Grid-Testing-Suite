@@ -2,7 +2,7 @@
  * Config Builder Workflow Sweep Module
  *
  * UI for a config array of kind "workflow": load an API-format ComfyUI workflow (Export (API)),
- * pick the image socket to collect, turn literal inputs into sweep axes ("bindings"), dry-run the
+ * pick the image or video socket to collect, turn literal inputs into sweep axes ("bindings"), dry-run the
  * generated prompts and start / pause / resume / cancel the sweep. Python side: workflow_sweep.py
  * (expansion), workflow_sweep_runner.py (queue feeder), routes /config_tester/sweep/*.
  *
@@ -98,6 +98,23 @@ function isLink(v) {
 function nodeTitle(prompt, id) {
     const n = prompt && prompt[id];
     return (n && ((n._meta && n._meta.title) || n.class_type)) || String(id);
+}
+
+/** Stable <option> value of a collectable socket: `node:index:media:frames_from` (media defaults to image). */
+export function outputKey(o) {
+    return `${o.node_id}:${o.output_index || 0}:${o.media || "image"}:${o.frames_from || ""}`;
+}
+
+/** Inverse of outputKey -> the stored `wf.output` shape. Image outputs carry only node_id/output_index. */
+export function outputFromKey(key) {
+    const [n, i, media, frames] = String(key).split(":");
+    if (n === undefined || n === "") return null;
+    const out = { node_id: n, output_index: parseInt(i, 10) || 0 };
+    if (media === "video") {
+        out.media = "video";
+        if (frames) out.frames_from = frames;
+    }
+    return out;
 }
 
 /** Node ids upstream of (and including) the output socket's node. */
@@ -317,8 +334,14 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
             Object.assign(configArray.workflow, { api_prompt: obj, source_name: name || "" });
             parseCache.set(configArray.workflow.api_prompt, Promise.resolve(parsed));
             info = parsed;
-            const best = (parsed.image_sources || [])[0];
-            if (best) configArray.workflow.output = { node_id: best.node_id, output_index: best.output_index, picked_from: best.picked_from };
+            const best = parsed.default_output || (parsed.image_sources || [])[0];
+            if (best) {
+                configArray.workflow.output = { node_id: best.node_id, output_index: best.output_index, picked_from: best.picked_from };
+                if (best.media === "video") {
+                    configArray.workflow.output.media = "video";
+                    if (best.frames_from) configArray.workflow.output.frames_from = best.frames_from;
+                }
+            }
             save();
         } catch (e) {
             parseError = String(e.message || e);
@@ -330,26 +353,37 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
     // ---- output picker ------------------------------------------------
     function renderOutput(container) {
         const row = el("div", {}, "display: flex; gap: 8px; align-items: center; flex-wrap: wrap;");
-        row.appendChild(el("label", { className: "cb-label", textContent: "Image to collect" }, "min-width: 110px;"));
+        row.appendChild(el("label", { className: "cb-label", textContent: "Output to collect" }, "min-width: 110px;"));
         const sel = el("select", { className: "cb-select" }, "flex: 1; min-width: 220px;");
         const sources = (info && info.image_sources) || [];
-        const cur = wf.output && wf.output.node_id !== undefined ? `${wf.output.node_id}:${wf.output.output_index || 0}` : "";
-        if (!sources.length) sel.appendChild(el("option", { value: "", textContent: "(no IMAGE output found)" }));
-        sources.forEach(s => {
-            const label = `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} output ${s.output_index}` + (s.picked_from ? ` (feeds ${nodeTitle(wf.api_prompt, s.picked_from)} #${s.picked_from})` : "");
-            sel.appendChild(el("option", { value: `${s.node_id}:${s.output_index}`, textContent: label, selected: `${s.node_id}:${s.output_index}` === cur }));
+        const videos = (info && info.video_sources) || [];
+        const cur = wf.output && wf.output.node_id !== undefined ? outputKey(wf.output) : "";
+        if (!sources.length && !videos.length) sel.appendChild(el("option", { value: "", textContent: "(no image or video output found)" }));
+        const addGroup = (title, list, labelOf) => {
+            if (!list.length) return;
+            const group = el("optgroup", { label: title });
+            list.forEach(s => group.appendChild(el("option", { value: outputKey(s), textContent: labelOf(s), selected: outputKey(s) === cur })));
+            sel.appendChild(group);
+        };
+        addGroup("Images", sources, s => `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} output ${s.output_index}` + (s.picked_from ? ` (feeds ${nodeTitle(wf.api_prompt, s.picked_from)} #${s.picked_from})` : ""));
+        addGroup("Video", videos, s => {
+            if (s.kind === "frames") {
+                const fps = wf.api_prompt && wf.api_prompt[s.frames_from] && wf.api_prompt[s.frames_from].inputs && wf.api_prompt[s.frames_from].inputs.frame_rate;
+                return `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} frames (feeds ${nodeTitle(wf.api_prompt, s.frames_from)} #${s.frames_from}${typeof fps === "number" ? `, fps ${fps}` : ""})`;
+            }
+            return `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} output ${s.output_index}` + (s.picked_from ? ` (feeds ${nodeTitle(wf.api_prompt, s.picked_from)} #${s.picked_from})` : "");
         });
         sel.onchange = () => {
-            const [n, i] = sel.value.split(":");
-            if (n === undefined || n === "") return;
-            wf.output = { node_id: n, output_index: parseInt(i, 10) || 0 };
+            const out = outputFromKey(sel.value);
+            if (!out) return;
+            wf.output = out;
             save(); rerender();
         };
         row.appendChild(sel);
         const cb = el("input", { type: "checkbox", checked: !!wf.run_other_outputs });
         cb.onchange = () => { wf.run_other_outputs = cb.checked; save(); };
         const lab = el("label", {}, "font-size: 11px; color: #aaa; display: flex; gap: 4px; align-items: center;");
-        lab.append(cb, document.createTextNode("Also run the workflow's own outputs (SaveImage etc.)"));
+        lab.append(cb, document.createTextNode("Also run the workflow's own outputs (SaveImage / SaveVideo etc.)"));
         row.appendChild(lab);
         container.appendChild(row);
     }
@@ -403,7 +437,7 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
         if (!info || !wf.api_prompt) return;
         const used = boundTargets(wf);
         const prompt = wf.api_prompt;
-        const upstream = wf.output && wf.output.node_id !== undefined ? ancestorsOf(prompt, wf.output.node_id) : null;
+        const upstream = wf.output && wf.output.node_id !== undefined ? ancestorsOf(prompt, wf.output.frames_from || wf.output.node_id) : null;
 
         const head = el("div", {}, "display: flex; gap: 8px; align-items: center; flex-wrap: wrap;");
         head.appendChild(el("strong", { textContent: "Workflow nodes" }, "font-size: 12px;"));

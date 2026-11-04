@@ -59,9 +59,9 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── upscale_runner.py            # Dashboard async upscaling background thread (642 lines)
 ├── civitai.py                   # Facade for the ComfyUI-USCG-CivitAI companion, no network code here (40 lines)
 ├── distribution.py              # Facade for the ComfyUI-USCG-Distributed companion, no network code here (107 lines)
-├── workflow_sweep.py            # Workflow Sweep core: parse API workflow, bindings -> jobs, prompt substitution, fingerprints (pure, no torch/server) (969 lines)
-├── workflow_sweep_runner.py     # Workflow Sweep runner: ComfyBridge (in-process post_prompt mirror), windowed feeder thread, pause/resume/cancel, route helpers (912 lines)
-├── workflow_sweep_collect.py    # USCGSweepCollect output node: saves each job's image + manifest item into the USCG session (140 lines)
+├── workflow_sweep.py            # Workflow Sweep core: parse API workflow, bindings -> jobs, prompt substitution, fingerprints (pure, no torch/server) (1106 lines)
+├── workflow_sweep_runner.py     # Workflow Sweep runner: ComfyBridge (in-process post_prompt mirror), windowed feeder thread, pause/resume/cancel, route helpers (1027 lines)
+├── workflow_sweep_collect.py    # USCGSweepCollect / USCGSweepCollectVideo output nodes: save each job's image (or mp4 + poster) + manifest item into the USCG session (281 lines)
 ├── html_generator.py            # Reads /resources/ to build the Dashboard HTML (66 lines)
 ├── run_api.py                   # Pure helpers for POST /config_tester/run + run_status, no server imports (144 lines)
 ├── conftest.py                  # Registry import stub: lets pytest import this package without ComfyUI (213 lines)
@@ -77,7 +77,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │       ├── conf-builder-config-management.js # Save/Load/Duplicate config logic, all Builder rendering (7736 lines)
 │       ├── conf-builder-utilities.js      # Model-list cache, iteration counting, LoRA string helpers (866 lines)
 │       ├── conf-builder-distribution.js   # Distribution settings UI (workers, toggles) (620 lines)
-│       ├── conf-builder-workflow-sweep.js # Workflow Sweep UI (load API workflow, axes, dry run, start/pause/cancel) (744 lines)
+│       ├── conf-builder-workflow-sweep.js # Workflow Sweep UI (load API workflow, axes, dry run, start/pause/cancel, image/video output picker) (806 lines)
 │       └── conf-builder-readme.md         # Notes on the Builder module split (134 lines)
 │
 ├── resources/                   # [The Dashboard SPA Core] (listed in html_generator.js_files order)
@@ -195,6 +195,7 @@ Defined at the end of `__init__.py`:
 | `UltimateConfigBuilder` | `UltimateConfigBuilder` | Visual config builder — outputs `configs_json` string |
 | `SmartJSONText` | `SmartJSONTextNode` | JSON text widget with syntax highlighting |
 | `USCGSweepCollect` | `USCGSweepCollect` | Workflow Sweep output node (`workflow_sweep_collect.py`): saves each job's image + manifest item into the USCG session |
+| `USCGSweepCollectVideo` | `USCGSweepCollectVideo` | Workflow Sweep video output node (same file): takes a VIDEO, saves one mp4 via `VideoInput.save_to` + a middle-frame poster, writes an LTX-shaped manifest item. VHS frames are converted by a core `CreateVideo` node the sweep splices into the job prompt (`workflow_sweep.build_job_prompt`) |
 
 `WEB_DIRECTORY = "./web"` — tells ComfyUI to serve `web/` files at `/extensions/`.
 
@@ -254,7 +255,7 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 | POST | `/config_tester/compute_metrics` | `__init__.py` | `{session_name, overwrite?}` | Start the background metrics job for a session; returns `{job_id, total_images}` |
 | GET | `/config_tester/metrics_status` | `__init__.py` | `?job_id=` | Metrics job progress |
 | POST | `/config_tester/cancel_metrics` | `__init__.py` | `{job_id}` | Cancel a metrics job; returns `{cancelled}` |
-| POST | `/config_tester/sweep/parse` | `__init__.py` | `{api_json}` | Workflow Sweep: describe an API-format workflow (nodes, outputs, image sources, suggested bindings) |
+| POST | `/config_tester/sweep/parse` | `__init__.py` | `{api_json}` | Workflow Sweep: describe an API-format workflow (nodes, outputs, `image_sources`, `video_sources`, `default_output`, suggested bindings) |
 | POST | `/config_tester/sweep/dry_run` | `__init__.py` | `{state or configs_json, limit?}` | Workflow Sweep: first N concrete prompts + validation of job 1; queues nothing |
 | GET | `/config_tester/sweep/job_prompt` | `__init__.py` | `?session_name=&sweep_id=&job_index=` | Workflow Sweep: `{prompt, params, fingerprint, output, ...}`, the job's API prompt exactly as it ran (template + substitutions) minus the USCG collector node; ids only, no paths (400 bad id/index, 404 unknown) |
 | POST | `/config_tester/sweep/start` | `__init__.py` | `{state or configs_json, node_id?, client_id?}` | Workflow Sweep: start a sweep `{state or configs_json, node_id?}` (400 invalid; 200 `attached:true` when the IDENTICAL sweep is already active; 409 `{error, sweep_id, session_name}` for a different one) |
@@ -876,7 +877,6 @@ __init__.py
 29. **Image Metrics Run Context** - `image_metrics.begin_run(spec)` (wrapped around `run_generation_loop` in `sampler_node.py`) returns a token and `end_run(token)` closes only that context, so a second run or the dashboard upscale thread can never clobber it. Generation-side hooks read the active context (`decode_latent_with_vae(..., metrics_sink=)`, `flush_batch_with_vae`, orchestrator upscale inserts via `image_metrics.finalize`); the dashboard upscale thread (`upscale_runner.py`) must NOT read generation-run state, so it passes an explicit spec derived from the source item (`spec_from_item`). Every place that copies a source item into an upscaled entry excludes `"metrics"` (never inherit); the new entry is re-measured. `metrics` is session-level (`_session_settings.metrics`), not a per-config key.
 
 30. **Workflow Sweep never blocks the executor.** `USCGSweepCollect` and the Generator in workflow mode only start/record work; the runner feeds sweep prompts through `PromptServer.instance.prompt_queue` from its own thread (an in-process mirror of `server.py post_prompt`, loop-bound calls via `ComfyBridge.run_on_loop`, never from the loop thread, no lock held across it). A node that waited on a prompt it queued would deadlock ComfyUI's single executor thread. The expansion/substitution core (`workflow_sweep.py`) is pure; only `ComfyBridge` touches ComfyUI, so tests use a fake bridge.
-
 31. **pytest package-name trap**: pytest runs with `--import-mode=importlib` and a root `pytest.ini`. A parent folder named `integration`, `metrics` etc. (no hyphen) is imported as a package and the stub conftest breaks. Worktree folder names need a hyphen; never add `tests/__init__.py`.
 
 32. **Manifest writers preserve disk state**: every writer (generation saves, the remote VAE worker, the `save_manifest` route) keeps the on-disk `comparisons` (`manifest_utils.preserve_disk_comparisons`) and the per-item `metrics` written by `metrics_runner` (an item's on-disk `metrics` survives when the in-memory copy has none, in `manifest_utils.merge_manifest_user_changes`). Only `update_manifest_comparisons` writes votes; only `metrics_runner` rewrites `metrics` in place.
@@ -888,6 +888,8 @@ __init__.py
 35. **Dynamic-VRAM re-prepare**: on ComfyUI 0.4x (comfy_aimdo) `load_models_gpu` re-runs `ModelPatcherDynamic.load()` on every encode; the repeated "prepared for dynamic VRAM loading" log line is the symptom. TE batching (`te_batch_size`) self-checks batch 1 against a single encode and halves on OOM; non-batchable prompts keep the per-prompt path.
 
 36. **`html_generator.js_files` order is load-bearing** (one shared script scope): `logic_ratings.js` (pure) before `logic_ui.js`, `logic_compare.js` after `logic_pipeline.js`, `logic_standalone.js` LAST (top-level-page overrides). CI assembles the page and syntax-checks it.
+
+37. **Workflow Sweep video outputs.** `workflow_output` carries optional `media: "video"` and (VHS frames) `frames_from: <VHS node id>`; both are emitted only for video, and `fingerprint()` / `template_hash()` add `m`/`f` to the hashed payload only for video, so image fingerprints stay byte-identical (pinned by golden values in `tests/test_workflow_sweep_video.py`; changing the image payload would orphan every old session's resume). VHS frames are converted IN THE GRAPH by a spliced core `CreateVideo` (`build_job_prompt`), never in the collector, so the executor handles cache/hidden inputs. `USCGSweepCollectVideo` saves with `VideoInput.save_to` (SaveVideo itself needs executor-populated hidden inputs). `manifest_utils.append_items(remove_ids=...)` deletes a removed video's `<stem>.preview.png` along with the mp4. No new top-level Builder field, so the rule-5 checklist does not apply.
 
 ---
 

@@ -1380,7 +1380,7 @@ function createCard(d) {
         : `<img ondblclick="toggleFavorite(this)" data-src="${d.file}" alt="Image ${d.id}" draggable="false">`;
     // Workflow Sweep items: the Revise modal builds a standard config and would lose the workflow template
     // (they get a JOB button instead: openM shows the read-only Workflow job panel)
-    const reviseBtn = isVideo ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">${d.model_type === 'workflow' ? 'JOB' : 'REVISE'}</button>`;
+    const reviseBtn = (isVideo && d.model_type !== 'workflow') ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">${d.model_type === 'workflow' ? 'JOB' : 'REVISE'}</button>`;
     const upscaleBtn = isVideo ? '' : `<button class="upscale-btn" onclick="openUpscaleModal(${d.id})" title="Upscale this image">\u2B06</button>`;
     const videoBadge = isVideo ? '<div class="video-badge">\u25B6 VIDEO</div>' : '';
     const previewBadge = d.preview
@@ -1558,7 +1558,8 @@ function openM(id) {
     window.currentModalId = id;
     const d = activeData.find(x => x.id === id);
     if (!d) return;
-    document.getElementById('m-img').src = d.file;
+    // a video item opens its poster (middle frame) in the modal; the card itself plays the video
+    document.getElementById('m-img').src = (d.media_type === 'video' && d.poster) ? d.poster : d.file;
     _setModalWorkflowMode(d);
     _uscgSyncModalDrag(d);
     const previewNote = document.getElementById('m-preview-note');
@@ -1611,7 +1612,7 @@ function openM(id) {
         if (x.rejected) return;
         if (x.seed === d.seed) {
             const i = document.createElement('img');
-            i.src = x.file;
+            i.src = (x.media_type === 'video' && x.poster) ? x.poster : x.file;
             i.onclick = () => openM(x.id);
             if (x.id === id) i.style.borderColor = "var(--accent)";
             r.appendChild(i);

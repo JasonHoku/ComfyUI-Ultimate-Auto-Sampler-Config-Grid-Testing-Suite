@@ -40,11 +40,11 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `metadata_packer.py` | 561 | PNG metadata embedding for CivitAI. `pack_metadata_into_image()` accepts `workflow_data` kwarg |
 | `run_api.py` | 144 | Pure helpers behind `POST /config_tester/run` and `GET /config_tester/run_status` |
 | `image_metrics.py`, `metrics_runner.py` | 668, 167 | Optional per-image metrics at save time; background job that backfills them for old sessions |
-| `workflow_sweep.py`, `workflow_sweep_runner.py`, `workflow_sweep_collect.py` | 969, 912, 140 | Workflow Sweep: pure expansion core, in-process queue feeder (never blocks the executor), `USCGSweepCollect` output node |
+| `workflow_sweep.py`, `workflow_sweep_runner.py`, `workflow_sweep_collect.py` | 1106, 1027, 281 | Workflow Sweep: pure expansion core, in-process queue feeder (never blocks the executor), `USCGSweepCollect` / `USCGSweepCollectVideo` output nodes |
 | `web/conf_builder/conf-builder-main.js` | 779 | Node registration. Default state and its migration blocks define ALL fields including upscaling/cooldown |
 | `web/conf_builder/conf-builder-utilities.js` | 866 | Model-list cache (`LS_CACHE_VERSION`), `getIterationCount()`, LoRA string helpers. No config converter: the preview calls `/configbuilder/preview` |
 | `web/conf_builder/conf-builder-config-management.js` | 7736 | All config builder UI rendering. Upscaling section, preview fetch |
-| `web/conf_builder/conf-builder-workflow-sweep.js` | 744 | Workflow Sweep UI (load API workflow, axes, dry run, start/pause/cancel) |
+| `web/conf_builder/conf-builder-workflow-sweep.js` | 806 | Workflow Sweep UI (load API workflow, axes, dry run, start/pause/cancel) |
 | `resources/logic_utils.js` | 1073 | Dashboard helpers: `exportFavorites()`, `deleteNonFavorites()`, `loadSession()`, `scanDirectory()` |
 | `resources/logic_ui.js` | 2907 | Dashboard DOM: cards, modals, `buildComfyNodesWorkflow()`, analytics |
 | `resources/logic_virtual.js` | 1092 | Virtual scroller: renders only visible cards from thousands |

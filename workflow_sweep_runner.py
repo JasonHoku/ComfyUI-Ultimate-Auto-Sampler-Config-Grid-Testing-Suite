@@ -420,7 +420,8 @@ def build_job_request(sw, job):
                 "image_format": sw.settings.get("image_format", "webp")}
     prompt, cid = wfs.build_job_prompt(tpl["prompt"], conf["wf_subs"], tpl["output"],
                                        {"session_name": sw.session,
-                                        "job_json": json.dumps(job_json, ensure_ascii=False)})
+                                        "job_json": json.dumps(job_json, ensure_ascii=False)},
+                                       tpl.get("media", "image"), tpl.get("frames_from"))
     partial = None if tpl["run_other_outputs"] else [cid]
     return prompt, partial
 
@@ -599,7 +600,7 @@ def _poll(sw, inflight):
                 if job["collected"]:
                     _finish_done(sw, job, detail, now)
                 elif now - job["success_seen_at"] > COLLECT_GRACE:
-                    _fail_job(sw, job, "error", "the job ran but the collector produced no image")
+                    _fail_job(sw, job, "error", "the job ran but the collector produced no output")
                     _after_terminal(sw)
             elif kind == "error":
                 _fail_job(sw, job, "error", detail["error"])
@@ -940,7 +941,9 @@ def _write_spec(sw):
                 "sweep_id": sw.id, "session_name": sw.session, "state": sw.state, "reason": sw.reason,
                 "created_at": sw.created_at, "settings": sw.settings, "axes": [a for c in sw.axes for a in c["axes"]], "warnings": sw.warnings,
                 "templates": {h: {"prompt": t["prompt"], "output": t["output"],
-                                  "run_other_outputs": t["run_other_outputs"]} for h, t in sw.templates.items()},
+                                  "run_other_outputs": t["run_other_outputs"],
+                                  "media": t.get("media", "image"), "frames_from": t.get("frames_from")}
+                              for h, t in sw.templates.items()},
                 "jobs": [{"index": j["index"], "fingerprint": j["fingerprint"], "status": j["status"],
                           "prompt_id": j["prompt_id"], "error": j["error"], "duration": j["duration"],
                           "template": j["conf"].get("wf_template_hash"), "subs": j["conf"].get("wf_subs"),
