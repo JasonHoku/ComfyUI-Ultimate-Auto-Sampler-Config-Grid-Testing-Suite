@@ -336,6 +336,23 @@ def append_items(manifest_path, items, remove_ids=(), session_name=None, default
         return data
 
 
+def item_filename(item):
+    """The image file name of a manifest item: its "filename" key when present, else the ``filename=`` query
+    parameter of its ``file`` (/view?...) URL, URL-decoded. Generated items only carry ``file``; upscaled and
+    scanned items also carry ``filename``. Returns "" when neither is usable."""
+    if not isinstance(item, dict):
+        return ""
+    name = item.get("filename")
+    if name:
+        return str(name)
+    url = item.get("file") or ""
+    m = re.search(r"[?&]filename=([^&]+)", str(url))
+    if not m:
+        return ""
+    from urllib.parse import unquote
+    return unquote(m.group(1))
+
+
 def base_dims_of(item):
     """{"base_width","base_height"} of the generated image an upscale of `item` starts from ({} if unknown)."""
     bw, bh = item.get("base_width"), item.get("base_height")

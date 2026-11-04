@@ -17,7 +17,7 @@ from comfy.model_management import InterruptProcessingException
 
 from .trigger_words import collect_unique_prompts_with_triggers, build_prompt_with_triggers, clear_trigger_caches
 from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators, pinned_clip, DEFAULT_TE_BATCH_SIZE
-from .manifest_utils import load_existing_manifest, save_manifest
+from .manifest_utils import load_existing_manifest, save_manifest, item_filename
 from .model_loader import (
     load_checkpoint, load_loras, cleanup_model_references,
     get_latent_channels, get_latent_downscale_ratio, make_empty_latent, load_loras_for_preencoding,
@@ -442,7 +442,8 @@ def run_deferred_upscales(
             print(f"[GridTester] ⚠️ Deferred upscale #{job_idx+1}: base image not found in manifest, skipping")
             continue
 
-        base_filename = base_item.get("filename")
+        # generated items carry only a /view URL ("file"); upscaled/scanned ones also have "filename"
+        base_filename = item_filename(base_item)
         if not base_filename:
             print(f"[GridTester] ⚠️ Deferred upscale #{job_idx+1}: no filename in manifest, skipping")
             continue
