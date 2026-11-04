@@ -1,13 +1,17 @@
 import os
 import json
 
-def get_html_template(title, manifest_data, node_id):
+def get_html_template(title, manifest_data, node_id, standalone=False):
     # 1. Normalize Data
     if isinstance(manifest_data, list):
         manifest_data = {"items": manifest_data, "meta": {"model": "", "positive": "", "negative": ""}}
     
     # Indent JSON for readability
     json_str = json.dumps(manifest_data, indent=2)
+    # The manifest is inlined inside a <script> element: a note/prompt containing "</script>" would
+    # end it early (page break / script injection). "<\/" is an equivalent JSON escape, so
+    # JSON.parse (web/dashboard.js's incremental refresh) still reads the original text.
+    json_str = json_str.replace("</", "<\\/")
 
     # 2. Resolve File Paths
     current_dir = os.path.dirname(__file__)
@@ -22,7 +26,8 @@ def get_html_template(title, manifest_data, node_id):
         "logic_virtual.js",  # The Virtual Scroll Engine & Viewport
         "logic_pipeline.js", # Sorting & Filtering Logic
         "logic_events.js",   # Event Listeners (Message, Keyboard)
-        "logic_init.js"      # Initialization
+        "logic_init.js",     # Initialization
+        "logic_standalone.js"  # Standalone-page mode (own websocket, run API); must stay LAST
     ]
 
     try:
@@ -52,6 +57,7 @@ def get_html_template(title, manifest_data, node_id):
     final_html = html_template \
         .replace("__TITLE__", str(title)) \
         .replace("__NODE_ID__", str(node_id)) \
+        .replace("__STANDALONE_FLAG__", "true" if standalone else "false") \
         .replace("let fullManifest = __JSON_DATA__;", wrapped_json) \
         .replace("__CSS_CONTENT__", css_content) \
         .replace("__JS_CONTENT__", js_content)
