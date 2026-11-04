@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.requires_torch
+
 
 def test_load_florence2_model_caches_per_name(monkeypatch):
     """Same model name -> load called once."""

@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.requires_torch
+
 
 def _make_image(w=512, h=512):
     return torch.zeros((1, h, w, 3), dtype=torch.float32)

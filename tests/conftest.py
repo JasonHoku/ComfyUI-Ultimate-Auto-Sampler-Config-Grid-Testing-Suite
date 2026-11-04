@@ -243,3 +243,25 @@ sys.modules[_CIVITAI_FQ] = _civitai_mod
 sys.modules["civitai"] = _civitai_mod
 setattr(sys.modules[_PKG_NAME], "civitai", _civitai_mod)
 _civitai_spec.loader.exec_module(_civitai_mod)
+
+
+# -- Real-torch probe: opt-in skip for tests marked `requires_torch` ----------
+import pytest  # noqa: E402
+
+
+def _has_real_torch():
+    t = sys.modules.get("torch")
+    return (t is not None and isinstance(getattr(t, "__file__", None), str)
+            and callable(getattr(t, "zeros", None)) and hasattr(t, "inference_mode"))
+
+
+def pytest_collection_modifyitems(config, items):
+    if _has_real_torch():
+        return
+    if os.environ.get("USCG_REQUIRE_TORCH") == "1":
+        return  # let them run and FAIL loudly: the torch job must never skip silently
+    skip = pytest.mark.skip(reason="needs real torch (conftest torch stub active); "
+                                   "run with ComfyUI's python or the pytest-torch CI job")
+    for item in items:
+        if item.get_closest_marker("requires_torch"):
+            item.add_marker(skip)

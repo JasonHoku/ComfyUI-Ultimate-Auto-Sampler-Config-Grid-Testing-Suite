@@ -4,6 +4,8 @@ import torch
 
 from florence2_hires import _crop_image_by_mask
 
+pytestmark = pytest.mark.requires_torch
+
 
 def _make_image(w, h):
     """Make a deterministic (1, H, W, 3) image where pixel value encodes its (x, y)."""

@@ -7,3 +7,6 @@
 /.claude_data/
 /.claude/
 docs/
+test-results/
+.pytest_cache/
+playwright-report/
