@@ -784,3 +784,268 @@ def sanitize_session_name(session_name):
     if not session_name:
         session_name = "default_session"
     return session_name
+
+# ==============================================================================
+# Job plan, job ordering, config fingerprints and preview-pass helpers.
+# All pure Python (no torch) so they can be unit-tested without ComfyUI.
+# ==============================================================================
+
+import hashlib
+
+JOB_ORDERS = ("as_written", "minimize_reloads")
+
+
+def build_job_plan(expanded, input_jobs):
+    """Flatten the nested ``for job in input_jobs: for conf in expanded`` loop.
+
+    Returns entries in exactly the order the nested loop visits them:
+    ``{"conf", "conf_idx", "job_idx", "job", "w", "h", "batch_idx"}``.
+    A config with its own ``resolution`` appears only once (at job_idx 0), takes
+    w/h from that resolution and uses batch_idx 0. w/h/batch_idx are set fresh for
+    every entry, so a per-config resolution can never leak into later configs.
+    ``len(plan)`` equals ``configs_with_res + configs_without_res * len(input_jobs)``.
+    """
+    plan = []
+    for job_idx, job in enumerate(input_jobs):
+        for conf_idx, conf in enumerate(expanded):
+            w, h = job["width"], job["height"]
+            batch_idx = job["batch_idx"]
+            if conf.get("resolution") is not None:
+                if job_idx > 0:
+                    continue
+                w, h = conf["resolution"]
+                batch_idx = 0
+            plan.append({
+                "conf": conf, "conf_idx": conf_idx, "job_idx": job_idx,
+                "job": job, "w": w, "h": h, "batch_idx": batch_idx,
+            })
+    return plan
+
+
+def _norm_vae_value(v):
+    if not v or str(v) in ("None", "none"):
+        return "Default"
+    return v
+
+
+def _plan_hashable(v):
+    if isinstance(v, (list, tuple)):
+        return tuple(_plan_hashable(x) for x in v)
+    return v
+
+
+def order_job_plan(plan, mode, model_key_fn):
+    """Order a flat job plan.
+
+    ``as_written`` returns the plan unchanged. ``minimize_reloads`` does a stable
+    sort on (model, lora, vae, resolution, prompt) where every rank is the
+    FIRST-APPEARANCE index of the value in the as-written plan, so groups keep
+    their written relative order (nothing is sorted alphabetically).
+    """
+    if mode != "minimize_reloads" or len(plan) < 2:
+        return plan
+
+    def _rank_table(values):
+        table = {}
+        for v in values:
+            if v not in table:
+                table[v] = len(table)
+        return table
+
+    def _fields(pj):
+        c = pj["conf"]
+        return (
+            _plan_hashable(model_key_fn(c)),
+            c.get("lora_expanded", c.get("lora", "None")),
+            _norm_vae_value(c.get("vae", "Default")),
+            (pj["w"], pj["h"], pj["batch_idx"]),
+            (c.get("positive", ""), c.get("negative", "")),
+        )
+
+    fields = [_fields(pj) for pj in plan]
+    tables = [_rank_table(f[i] for f in fields) for i in range(5)]
+    keys = [tuple(tables[i][f[i]] for i in range(5)) for f in fields]
+    order = sorted(range(len(plan)), key=lambda i: keys[i])  # stable
+    return [plan[i] for i in order]
+
+
+def count_switches(plan, model_key_fn):
+    """Count reload-relevant transitions along a plan (the first job counts as a load).
+
+    model_loads: changes of model key; lora_switches: changes of (model key, LoRA
+    stack); vae_switches: changes of (model key, VAE); res_changes: changes of
+    (w, h) between consecutive jobs (the first job does not count).
+    """
+    out = {"model_loads": 0, "lora_switches": 0, "vae_switches": 0, "res_changes": 0}
+    prev = None
+    for pj in plan:
+        c = pj["conf"]
+        mk = _plan_hashable(model_key_fn(c))
+        lora = c.get("lora_expanded", c.get("lora", "None"))
+        vae = _norm_vae_value(c.get("vae", "Default"))
+        res = (pj["w"], pj["h"])
+        if prev is None:
+            out["model_loads"] += 1
+            out["lora_switches"] += 1
+            out["vae_switches"] += 1
+        else:
+            if mk != prev[0]:
+                out["model_loads"] += 1
+            if (mk, lora) != (prev[0], prev[1]):
+                out["lora_switches"] += 1
+            if (mk, vae) != (prev[0], prev[2]):
+                out["vae_switches"] += 1
+            if res != prev[3]:
+                out["res_changes"] += 1
+        prev = (mk, lora, vae, res)
+    return out
+
+
+FP_VERSION = "fp1"
+_FP_EXTRA_FIELDS = (
+    "model_sampling_override", "model_sampling_shift", "model_sampling_flux_max_shift",
+    "model_sampling_flux_base_shift", "use_advanced_sampling", "advanced_guider", "advanced_scheduler",
+    "flux_guidance_value", "use_deep_shrink", "deep_shrink_block_number", "deep_shrink_downscale_factor",
+    "deep_shrink_start_percent", "deep_shrink_end_percent", "deep_shrink_downscale_after_skip",
+    "deep_shrink_downscale_method", "deep_shrink_upscale_method", "use_slg", "slg_double_layers",
+    "slg_single_layers", "slg_start_percent", "slg_end_percent",
+)
+
+
+def _fp_round(x):
+    try:
+        return round(float(x), 4)
+    except (TypeError, ValueError):
+        return x
+
+
+def config_fingerprint(conf, width, height, seed=None, upscale_pipeline=None):
+    """Stable identity of one grid cell (a config at a FULL resolution and seed).
+
+    Works on a conf or on a manifest item (items are conf copies plus extra keys).
+    Steps, preview_*/full_* keys and bookkeeping fields are excluded on purpose, so a
+    preview (fewer steps) and its full render share one fingerprint.
+    """
+    lora = conf.get("lora_expanded") or conf.get("lora") or "None"
+    pos = conf.get("config_positive")
+    if pos is None:
+        pos = conf.get("positive", "")
+    neg = conf.get("config_negative")
+    if neg is None:
+        neg = conf.get("negative", "")
+    s = seed if seed is not None else conf.get("seed", 0)
+    try:
+        s = int(s)
+    except (TypeError, ValueError):
+        pass
+    try:
+        clip_skip = int(conf.get("clip_skip", 0) or 0)
+    except (TypeError, ValueError):
+        clip_skip = 0
+    payload = {
+        "model": conf.get("model"),
+        "model_type": conf.get("model_type", "checkpoint"),
+        "lora": lora,
+        "vae": _norm_vae_value(conf.get("vae", "Default")),
+        "text_encoders": list(conf.get("text_encoders", []) or []),
+        "clip_type": conf.get("clip_type", "stable_diffusion"),
+        "clip_skip": clip_skip,
+        "attention_mode": conf.get("attention_mode", "default"),
+        "sampler": conf.get("sampler"),
+        "scheduler": conf.get("scheduler"),
+        "cfg": _fp_round(conf.get("cfg")),
+        "denoise": _fp_round(conf.get("denoise")),
+        "seed": s,
+        "positive": str(pos).strip(),
+        "negative": str(neg).strip(),
+        "width": int(width),
+        "height": int(height),
+        "upscale_pipeline": upscale_pipeline or "",
+    }
+    for k in _FP_EXTRA_FIELDS:
+        if k in conf:
+            v = conf[k]
+            payload[k] = _fp_round(v) if isinstance(v, float) else v
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"{FP_VERSION}:" + hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def item_fingerprint(item):
+    """Fingerprint of a manifest item: stored ``config_fp`` or computed (legacy items)."""
+    fp = item.get("config_fp")
+    if fp:
+        return fp
+    w = item.get("full_width", item.get("width"))
+    h = item.get("full_height", item.get("height"))
+    probe = item
+    if "full_cfg" in item:
+        probe = dict(item)
+        probe["cfg"] = item["full_cfg"]
+    try:
+        return config_fingerprint(probe, w, h, item.get("seed"))
+    except (TypeError, ValueError):
+        return None
+
+
+def preview_dims(width, height, scale, ratio):
+    """Snap a scaled preview resolution to the model's latent ratio (never below one cell)."""
+    try:
+        ratio = int(ratio)
+    except (TypeError, ValueError):
+        ratio = 8
+    if ratio <= 0:
+        ratio = 8
+    if scale >= 1:
+        return width, height
+    return (max(ratio, round(width * scale / ratio) * ratio),
+            max(ratio, round(height * scale / ratio) * ratio))
+
+
+def build_preview_index(items, tombstones=()):
+    """Map fp -> {"rejected", "favorited", "seed"} over PREVIEW items (items[0] is newest)."""
+    idx = {}
+    for it in items:
+        if it.get("preview") is not True:
+            continue
+        fp = it.get("preview_of") or item_fingerprint(it)
+        if not fp:
+            continue
+        e = idx.setdefault(fp, {"rejected": False, "favorited": False, "seed": it.get("seed")})
+        if it.get("favorited"):
+            e["favorited"] = True
+        if it.get("rejected"):
+            e["rejected"] = True
+    for fp in tombstones or ():
+        e = idx.setdefault(fp, {"rejected": False, "favorited": False, "seed": None})
+        e["rejected"] = True
+    for e in idx.values():
+        if e["favorited"]:
+            e["rejected"] = False
+    return idx
+
+
+def should_skip_for_previews(fp, index, skip_rejected, only_favorited):
+    """None, "rejected_preview" or "no_favorited_preview" for a FULL-pass cell.
+
+    A cell with no preview at all is never skipped (nothing was previewed to judge).
+    """
+    if not index or fp not in index:
+        return None
+    e = index[fp]
+    if only_favorited and not e["favorited"]:
+        return "no_favorited_preview"
+    if skip_rejected and e["rejected"]:
+        return "rejected_preview"
+    return None
+
+
+def build_full_fp_set(items):
+    """Fingerprints that already have a FULL (non-preview) image; a preview run skips them."""
+    out = set()
+    for it in items:
+        if it.get("preview") is True:
+            continue
+        for fp in (it.get("base_fp"), item_fingerprint(it)):
+            if fp:
+                out.add(fp)
+    return out
