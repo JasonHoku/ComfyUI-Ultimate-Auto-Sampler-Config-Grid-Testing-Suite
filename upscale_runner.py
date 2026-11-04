@@ -19,6 +19,7 @@ from .model_loader import load_checkpoint, load_vae_by_name
 from .batch_encoding import encode_prompt_with_combinators, encode_pair_cached
 from .image_generation import upscale_image, decode_latent_with_vae, create_image_metadata
 from .manifest_utils import save_manifest
+from . import image_metrics
 
 import comfy.model_management as mm
 
@@ -203,6 +204,9 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
             pass
 
         for img_idx, item in enumerate(target_items):
+            # Never inherit the source's metrics; recompute them only when the source had
+            # them. This thread must not read generation-run state, so the spec is explicit.
+            item_metrics_spec = image_metrics.spec_from_item(item)
             if job["cancel"].is_set():
                 print(f"[DashboardUpscale] 🛑 Cancelled — clearing VRAM...")
                 try:
@@ -332,7 +336,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 k: v for k, v in item.items()
                                 if k not in ("id", "gen_index", "file", "filename", "upscaled", "width", "height", "duration",
                                              "upscale_source", "upscale_pipeline", "upscale_mode",
-                                             "upscale_ratio", "upscale_denoise", "upscale_model")
+                                             "upscale_ratio", "upscale_denoise", "upscale_model", "metrics")
                             }
                             upscaled_meta.update({
                                 "id": upscale_id,
@@ -347,6 +351,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 "upscale_mode": "seedvr2",
                                 "upscale_model": sv_config.get("dit_model", ""),
                             })
+                            image_metrics.finalize(upscaled_meta, result_pil, spec=item_metrics_spec)
                             manifest_data["items"].insert(0, upscaled_meta)
                             upscale_combo_idx += 1
                         else:
@@ -444,6 +449,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 current_index=len(manifest_data["items"]),
                                 hires_denoise=f2_config["hires_denoise"],
                             )
+                            image_metrics.finalize(entry, result_pil, spec=item_metrics_spec)
                             manifest_data["items"].insert(0, entry)
                             upscale_combo_idx += 1
                         else:
@@ -494,8 +500,13 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                         is_last_combo = combo == combos[-1]
                         is_final_output = is_last_step and is_last_combo
 
+                        up_metrics_sink = {}
+                        up_metrics_img = None
                         if isinstance(upscale_result, dict) and "samples" in upscale_result:
-                            upscaled_pil = decode_latent_with_vae(loaded_vae, upscale_result["samples"])
+                            up_metrics_img = upscaled_pil = decode_latent_with_vae(
+                                loaded_vae, upscale_result["samples"],
+                                metrics_sink=up_metrics_sink if (is_final_output and item_metrics_spec) else None,
+                                metrics_spec=item_metrics_spec)
                             up_w, up_h = upscaled_pil.size
                             if is_final_output:
                                 upscale_id = int(time.time() * 100000) + up_random.randint(0, 1000)
@@ -508,6 +519,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                                 else:
                                     upscaled_pil.save(_up_path, format="WEBP", quality=95)
                         elif isinstance(upscale_result, PILImage.Image):
+                            up_metrics_img = upscale_result
                             up_w, up_h = upscale_result.size
                             if is_final_output:
                                 upscale_id = int(time.time() * 100000) + up_random.randint(0, 1000)
@@ -534,7 +546,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                             k: v for k, v in item.items()
                             if k not in ("id", "gen_index", "file", "filename", "upscaled", "width", "height", "duration",
                                          "upscale_source", "upscale_pipeline", "upscale_mode",
-                                         "upscale_ratio", "upscale_denoise", "upscale_model")
+                                         "upscale_ratio", "upscale_denoise", "upscale_model", "metrics")
                         }
                         # gen_index: place upscaled images at the end (newest) since they were just created
                         # Use current manifest length so each new upscale gets the next sequential position
@@ -561,6 +573,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                             upscaled_meta["hires_prompt_behavior"] = hires_prompt_behavior_rt
                             upscaled_meta["hires_prompt_text"] = hires_prompt_text_rt
 
+                        image_metrics.finalize(upscaled_meta, up_metrics_img, up_metrics_sink, spec=item_metrics_spec)
                         manifest_data["items"].insert(0, upscaled_meta)
                         upscale_combo_idx += 1
 

@@ -9,9 +9,7 @@ import pytest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PKG = os.path.basename(_ROOT)
-_spec = importlib.util.spec_from_file_location(f"{_PKG}.image_metrics_real", os.path.join(_ROOT, "image_metrics.py"))
-im = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(im)
+im = importlib.import_module(f"{_PKG}.image_metrics")   # package module: same instance the hooks use
 
 ALL = im.BUILTIN_METRICS
 

@@ -314,7 +314,7 @@ class _RunContext:
 
 
 _ctx_lock = threading.Lock()
-_current = None   # the active generation run's context (or None)
+_stack = []       # contexts of runs still open; the newest is the "current" one
 _CURRENT = object()   # sentinel: "use the active run's spec"
 
 
@@ -326,10 +326,9 @@ def begin_run(spec):
     meanwhile. The dashboard upscale thread does not use this context at all
     (it passes an explicit spec to attach()).
     """
-    global _current
     ctx = _RunContext(normalize_spec(spec))
     with _ctx_lock:
-        _current = ctx
+        _stack.append(ctx)
     return ctx
 
 
@@ -339,14 +338,13 @@ def end_run(token=None):
     With a token only that context is closed (and `current` cleared only if it
     still points at it). Without a token the active context is closed.
     """
-    global _current
     with _ctx_lock:
-        ctx = token if token is not None else _current
+        ctx = token if token is not None else (_stack[-1] if _stack else None)
         if ctx is None or ctx.closed:
             return
         ctx.closed = True
-        if _current is ctx:
-            _current = None
+        if ctx in _stack:
+            _stack.remove(ctx)
     with ctx.lock:
         times = list(ctx.times)
         ctx.loader_cache.clear()
@@ -356,13 +354,13 @@ def end_run(token=None):
 
 
 def current_spec():
-    ctx = _current
-    return ctx.spec if ctx is not None and not ctx.closed else None
+    ctx = _active_ctx()
+    return ctx.spec if ctx is not None else None
 
 
 def _active_ctx():
-    ctx = _current
-    return ctx if ctx is not None and not ctx.closed else None
+    with _ctx_lock:
+        return _stack[-1] if _stack else None
 
 
 def _warn_once(ctx, key, msg):
@@ -434,13 +432,40 @@ def attach(meta, image, spec=_CURRENT, builtins=True, adapters=True):
         if adapters and ctx is not None and spec.get("adapters"):
             metrics.update(_run_adapters(ctx, spec["adapters"], image, meta))
         if metrics:
-            existing = meta.get("metrics")
-            if isinstance(existing, dict):
-                existing.update(metrics)
-            else:
-                meta["metrics"] = metrics
+            meta["metrics"] = metrics      # replaces: a derived image never inherits its source's metrics
     except Exception as e:
         _warn_once(ctx, "skip", f"metrics skipped: {e}")
+
+
+def spec_from_item(item):
+    """Builtin-only spec from a source item's stored metrics (None when it has none).
+
+    Used by the dashboard upscale thread, which has no session settings and must
+    not read generation-run state: an upscale of a measured image is measured the
+    same way, an upscale of an unmeasured image is not.
+    """
+    m = item.get("metrics") if isinstance(item, dict) else None
+    if not isinstance(m, dict):
+        return None
+    keys = [k for k in BUILTIN_METRICS if k in m]
+    return {"builtins": keys, "adapters": []} if keys else None
+
+
+def finalize(meta, image, sink=None, spec=_CURRENT):
+    """Metrics for a newly saved image. `sink` = builtins already computed at decode time.
+
+    Always drops any metrics copied from a source item first (never inherit).
+    spec omitted -> the active run's context; explicit spec/None -> exactly that
+    (never touches generation-run state). Never raises.
+    """
+    meta.pop("metrics", None)
+    explicit = spec is not _CURRENT
+    if sink:
+        meta["metrics"] = dict(sink)
+        if not explicit:
+            attach_adapters(meta, image)
+    elif image is not None:
+        attach(meta, image, spec=spec)
 
 
 def attach_adapters(meta, image):

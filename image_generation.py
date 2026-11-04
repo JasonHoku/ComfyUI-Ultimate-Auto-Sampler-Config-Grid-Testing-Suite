@@ -53,6 +53,9 @@ import nodes
 import numpy as np
 from PIL import Image
 
+from . import image_metrics
+from .image_metrics import _CURRENT as _METRICS_RUN
+
 
 def _latent_ratio(patched_model):
     """Pixels per latent cell for this model (8 for SD/SDXL/Flux.1, 16 for the Flux.2 family)."""
@@ -820,13 +823,17 @@ def upscale_image(result_latent, vae, patched_model, upscaling_config, config, p
 # @torch.inference_mode() — see module docstring. VAE decode is a model forward
 # pass and needs inference_mode to avoid pinning intermediate activations.
 @torch.inference_mode()
-def decode_latent_with_vae(vae, latent_samples):
+def decode_latent_with_vae(vae, latent_samples, metrics_sink=None, metrics_spec=_METRICS_RUN):
     """
     Decode latent samples to pixel space using VAE.
 
     Args:
         vae: VAE model
         latent_samples: Latent tensor to decode
+        metrics_sink: optional dict; when given (and metrics are on) the image
+            metrics are computed on the decoded GPU tensor and written into it
+        metrics_spec: omitted -> the active generation run's spec; an explicit
+            spec (or None) for threads that must not read generation-run state
 
     Returns:
         PIL.Image: Decoded image
@@ -855,6 +862,9 @@ def decode_latent_with_vae(vae, latent_samples):
     # already non-grad). Kept for safety in case this function is ever called
     # without the decorator, but inference_mode is the primary defense — see
     # module docstring for why.
+    if metrics_sink is not None:
+        image_metrics.sink_update(metrics_sink, decoded, metrics_spec)
+
     img_np = decoded.detach().cpu().float().numpy()
 
     # Remove extra dimensions (handle shapes like (1, 1, H, W, C) or (1, H, W, C))
@@ -1048,7 +1058,8 @@ def flush_batch_with_vae(pending_batch, vae, img_dir, existing_data, session_nam
 
     for latent_samples, meta in pending_batch:
         # Decode latent to image
-        image = decode_latent_with_vae(vae, latent_samples)
+        metrics_sink = {}
+        image = decode_latent_with_vae(vae, latent_samples, metrics_sink=metrics_sink)
 
         # Generate ID using same format as remote_vae
         ts = int(time.time() * 100000) + random.randint(0, 1000)
@@ -1075,6 +1086,11 @@ def flush_batch_with_vae(pending_batch, vae, img_dir, existing_data, session_nam
             "file": f"/view?filename={filename}&type=output&subfolder=benchmarks/{session_name}/images",
             "rejected": False
         })
+
+        # Optional image metrics (builtins came from the decode sink; adapters run here)
+        if metrics_sink:
+            meta["metrics"] = metrics_sink
+        image_metrics.attach_adapters(meta, image)
         
         # Update manifest - insert at beginning (like remote_vae)
         existing_data["items"].insert(0, meta)

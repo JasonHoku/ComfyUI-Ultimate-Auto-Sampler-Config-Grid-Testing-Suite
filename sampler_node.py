@@ -44,6 +44,7 @@ except ImportError:
     PromptServer = None
 
 from .html_generator import get_html_template
+from . import image_metrics
 
 
 class SamplerGridTester:
@@ -327,17 +328,26 @@ class SamplerGridTester:
                 except (TypeError, ValueError):
                     pass
 
-        return run_generation_loop(
-            self,
-            ckpt_name, positive_text, negative_text, seed, denoise, vae_batch_size,
-            overwrite_existing, flush_batch_every, configs_json, resolutions_json,
-            session_name, unique_id, add_random_seeds_to_gens, lora_triggerwords_mode,
-            remote_vae_endpoint, save_conditioning_cache_to_file, enable_model_cache,
-            optional_model, optional_clip, optional_vae,
-            optional_positive, optional_negative, optional_latent,
-            distribution_config=dist_config,  # Extracted from configs_json
-            session_settings=session_settings  # Extracted from configs_json
-        )
+        # Optional per-image metrics (Builder "Compute image metrics"). The run context is
+        # token based so end_run() only ever closes the context THIS run opened.
+        metrics_spec = image_metrics.normalize_spec(session_settings.get("metrics") if session_settings else None)
+        if metrics_spec:
+            print(f"[GridTester] ⚙️ metrics: {metrics_spec['builtins'] + metrics_spec['adapters']}")
+        metrics_token = image_metrics.begin_run(metrics_spec)
+        try:
+            return run_generation_loop(
+                self,
+                ckpt_name, positive_text, negative_text, seed, denoise, vae_batch_size,
+                overwrite_existing, flush_batch_every, configs_json, resolutions_json,
+                session_name, unique_id, add_random_seeds_to_gens, lora_triggerwords_mode,
+                remote_vae_endpoint, save_conditioning_cache_to_file, enable_model_cache,
+                optional_model, optional_clip, optional_vae,
+                optional_positive, optional_negative, optional_latent,
+                distribution_config=dist_config,  # Extracted from configs_json
+                session_settings=session_settings  # Extracted from configs_json
+            )
+        finally:
+            image_metrics.end_run(metrics_token)
 
 
 # Node class mappings for ComfyUI
