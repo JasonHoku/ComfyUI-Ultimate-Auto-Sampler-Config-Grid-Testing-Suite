@@ -23,7 +23,9 @@ var CMP_EXCLUDED_KEYS = new Set([
     'image_path', 'preview_path', 'video_path', 'hash', 'hires_denoise',
     // per-image outcomes / bookkeeping, not settings
     'config_fp', 'base_fp', 'metrics', 'preview_of', 'source_relpath',
-    'florence2_bbox', 'florence2_detection_count', 'florence2_no_detection'
+    'florence2_bbox', 'florence2_detection_count', 'florence2_no_detection',
+    // workflow-sweep per-job bookkeeping (wf_params are the settings and stay in)
+    'wf_fingerprint', 'wf_sweep_id', 'wf_job_index', 'poster'
 ]);
 var CMP_EXCLUDED_RE = /^upscale_|^hires_prompt_|_hash$|^worker|^_/;
 
