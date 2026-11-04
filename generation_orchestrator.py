@@ -2251,7 +2251,7 @@ def run_generation_loop(
                                         pass
                                 upscale_combo_idx += 1
                             else:
-                                # Re-encode for next step in chain (VAE.encode takes BHWC, no movedim)
+                                # Re-encode for next step in chain (VAE.encode takes BHWC)
                                 import torch as seedvr_torch
                                 result_tensor = seedvr_torch.from_numpy(pil_to_image_array(result_pil))
                                 pipe_latent = loaded_vae.encode(result_tensor[:, :, :, :3])
