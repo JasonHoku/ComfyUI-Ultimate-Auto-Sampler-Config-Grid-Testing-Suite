@@ -1,0 +1,312 @@
+{
+  "id": "caca1078-129b-5104-a76c-a36a556e8d86",
+  "revision": 0,
+  "last_node_id": 4,
+  "last_link_id": 2,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UltimateConfigBuilder",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        1250,
+        1500
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "session_name",
+          "name": "session_name",
+          "type": "STRING",
+          "widget": {
+            "name": "session_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "load_session",
+          "name": "load_session",
+          "type": "COMBO",
+          "widget": {
+            "name": "load_session"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "samplers",
+          "name": "samplers",
+          "type": "STRING",
+          "widget": {
+            "name": "samplers"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "schedulers",
+          "name": "schedulers",
+          "type": "STRING",
+          "widget": {
+            "name": "schedulers"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "steps",
+          "name": "steps",
+          "type": "STRING",
+          "widget": {
+            "name": "steps"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "cfg",
+          "name": "cfg",
+          "type": "STRING",
+          "widget": {
+            "name": "cfg"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "lora_config",
+          "name": "lora_config",
+          "type": "STRING",
+          "widget": {
+            "name": "lora_config"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "include_none",
+          "name": "include_none",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "include_none"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "STRING",
+          "widget": {
+            "name": "model"
+          },
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "configs_json",
+          "name": "configs_json",
+          "type": "STRING",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "ultimate-auto-sampler-config-grid-testing-suite",
+        "Node name for S&R": "UltimateConfigBuilder"
+      },
+      "widgets_values": [
+        "example_krea2_turbo",
+        "None",
+        "euler",
+        "simple",
+        "6, 8",
+        "1",
+        "{\n  \"session_name\": \"example_krea2_turbo\",\n  \"config_name\": \"example_krea2_turbo\",\n  \"auto_save\": false,\n  \"include_none\": false,\n  \"label_mode\": false,\n  \"global_positive_groups\": [\n    [\n      \"a cozy reading nook by a rain-streaked window, warm lamp light, soft focus, detailed\"\n    ]\n  ],\n  \"global_negative\": \"\",\n  \"distribution_enabled\": false,\n  \"worker_urls\": [],\n  \"claim_timeout\": 600,\n  \"use_master_encoding\": false,\n  \"config_arrays\": [\n    {\n      \"name\": \"Krea 2 Turbo\",\n      \"samplers\": [\n        \"euler\"\n      ],\n      \"schedulers\": [\n        \"simple\"\n      ],\n      \"steps\": \"6, 8\",\n      \"cfg\": \"1\",\n      \"models\": [\n        {\n          \"path\": \"krea2_turbo_fp8_scaled.safetensors\",\n          \"type\": \"diffusion_model\"\n        }\n      ],\n      \"vaes\": [\n        \"qwen_image_vae.safetensors\"\n      ],\n      \"text_encoders\": [\n        \"qwen3vl_4b_fp8_scaled.safetensors\"\n      ],\n      \"clip_type\": \"krea2\",\n      \"gguf_options\": {},\n      \"loras\": [\n        \"None\"\n      ],\n      \"lora_omit_triggers\": [],\n      \"lora_triggerwords_append_settings\": {},\n      \"lora_bypass_states\": {},\n      \"lora_strength_lock\": {},\n      \"model_bypass_states\": {},\n      \"vae_bypass_states\": {},\n      \"te_bypass_states\": {},\n      \"combine\": false,\n      \"positive_prompt_groups\": [],\n      \"negative_prompt\": \"\",\n      \"use_custom_prompts\": false,\n      \"model_prompt_prefix\": \"\",\n      \"model_prompt_suffix\": \"\",\n      \"attention_modes\": [\n        \"default\"\n      ],\n      \"model_sampling_override\": \"none\",\n      \"model_sampling_shift\": \"1.73\",\n      \"model_sampling_flux_max_shift\": \"1.15\",\n      \"model_sampling_flux_base_shift\": \"0.5\",\n      \"use_advanced_sampling\": false,\n      \"advanced_guider\": \"cfg_guider\",\n      \"advanced_scheduler\": \"basic\",\n      \"use_flux_guidance\": false,\n      \"flux_guidance_value\": \"3.5\",\n      \"use_deep_shrink\": false,\n      \"deep_shrink_block_number\": 3,\n      \"deep_shrink_downscale_factor\": 2.0,\n      \"deep_shrink_start_percent\": 0.0,\n      \"deep_shrink_end_percent\": 0.35,\n      \"deep_shrink_downscale_after_skip\": true,\n      \"deep_shrink_downscale_method\": \"bicubic\",\n      \"deep_shrink_upscale_method\": \"bicubic\",\n      \"use_slg\": false,\n      \"slg_double_layers\": \"\",\n      \"slg_single_layers\": \"22\",\n      \"slg_start_percent\": 0.0,\n      \"slg_end_percent\": 0.5,\n      \"seed_behavior\": \"fixed\",\n      \"resolutions\": [\n        \"1024x1024\"\n      ]\n    }\n  ],\n  \"upscaling\": {\n    \"enabled\": false,\n    \"save_pre_upscale\": false,\n    \"run_upscales_at_end\": false,\n    \"hires_prompt_adjust\": false,\n    \"hires_prompt_behavior\": \"append_end\",\n    \"hires_prompt_text\": \"\",\n    \"pipelines\": [\n      {\n        \"active\": true,\n        \"name\": \"Pipeline 1\",\n        \"steps\": [\n          {\n            \"active\": true,\n            \"mode\": \"hires_only\",\n            \"repeat\": 1,\n            \"upscale_models\": [],\n            \"upscale_ratios\": \"1.5\",\n            \"upscale_size\": \"2.0\",\n            \"hires_denoise\": \"0.3\",\n            \"hires_steps\": 0,\n            \"tiled_vae\": false,\n            \"tile_size\": 512,\n            \"tile_overlap\": 64,\n            \"temporal_size\": 512,\n            \"temporal_overlap\": 64,\n            \"resize_method\": \"bilinear\",\n            \"hires_tiled_sampling\": false,\n            \"hires_tile_width\": 512,\n            \"hires_tile_height\": 512,\n            \"hires_mask_blur\": 8,\n            \"hires_tile_padding\": 32,\n            \"hires_force_uniform_tiles\": false\n          }\n        ]\n      }\n    ]\n  },\n  \"cooldown\": {\n    \"enabled\": false,\n    \"seconds\": 5,\n    \"every_n\": 1,\n    \"clear_vram\": false\n  },\n  \"image_format\": \"webp\",\n  \"overwrite_existing\": false,\n  \"flush_batch_every\": 1,\n  \"lora_triggerwords_mode\": \"None\",\n  \"save_conditioning_cache_to_file\": false,\n  \"enable_model_cache\": false,\n  \"vae_batch_size\": 1,\n  \"add_random_seeds_to_gens\": 0\n}",
+        false,
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "UltimateSamplerGrid",
+      "pos": [
+        1300,
+        0
+      ],
+      "size": [
+        420,
+        300
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "optional_model",
+          "name": "optional_model",
+          "type": "MODEL",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "optional_clip",
+          "name": "optional_clip",
+          "type": "CLIP",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "optional_vae",
+          "name": "optional_vae",
+          "type": "VAE",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "optional_positive",
+          "name": "optional_positive",
+          "type": "CONDITIONING",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "optional_negative",
+          "name": "optional_negative",
+          "type": "CONDITIONING",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "optional_latent",
+          "name": "optional_latent",
+          "type": "LATENT",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "configs_json",
+          "name": "configs_json",
+          "type": "STRING",
+          "widget": {
+            "name": "configs_json"
+          },
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "dashboard_html",
+          "name": "dashboard_html",
+          "type": "STRING",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "ultimate-auto-sampler-config-grid-testing-suite",
+        "Node name for S&R": "UltimateSamplerGrid"
+      },
+      "widgets_values": [
+        "[]"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "UltimateGridDashboard",
+      "pos": [
+        1760,
+        0
+      ],
+      "size": [
+        1400,
+        1000
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "dashboard_html",
+          "name": "dashboard_html",
+          "shape": 7,
+          "type": "STRING",
+          "link": 2
+        },
+        {
+          "localized_name": "session_name",
+          "name": "session_name",
+          "type": "STRING",
+          "widget": {
+            "name": "session_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "ultimate-auto-sampler-config-grid-testing-suite",
+        "Node name for S&R": "UltimateGridDashboard"
+      },
+      "widgets_values": [
+        "example_krea2_turbo",
+        null,
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 4,
+      "type": "MarkdownNote",
+      "pos": [
+        0,
+        -260
+      ],
+      "size": [
+        600,
+        220
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "### Krea 2 Turbo example\nNeeds: `krea2_turbo_fp8_scaled.safetensors`, `qwen3vl_4b_fp8_scaled.safetensors`, `qwen_image_vae.safetensors`\n\nSee `examples/README.md` for the folder each file goes in. Missing files show up as missing in the Config Builder; pick your own equivalents there."
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      6,
+      "STRING"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6,
+      "offset": [
+        100,
+        300
+      ]
+    }
+  },
+  "version": 0.4
+}

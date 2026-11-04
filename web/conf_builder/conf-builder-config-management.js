@@ -3093,8 +3093,11 @@ function renderTextEncodersSection(node, container, configArray, arrayIdx, model
             teRow.appendChild(teBypassLabel);
         }
 
+        const teOptions = (modelLists.textEncoders && modelLists.textEncoders.length > 0)
+            ? modelLists.textEncoders
+            : ["None"];
         const teSearchable = createSearchableSelect(
-            modelLists.textEncoders || ["None"],
+            teOptions,
             te || "None",
             (value) => {
                 node.state.config_arrays[arrayIdx].text_encoders[teIdx] = normalizePath(value);

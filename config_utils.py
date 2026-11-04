@@ -412,6 +412,20 @@ def _expand_ltx_entry(entry):
     else:
         input_image_axis = to_list(raw_input_image) if raw_input_image is not None else [None]
 
+    # positive / negative: run through parse_prompt_input_nested so that nested
+    # array syntax from the Config Builder's Cartesian prompt builder is expanded
+    # correctly. Mirrors the same logic used in expand_configs() for the image path.
+    # A plain string passes through unchanged; [["p1", "p2"]] (Config Builder output)
+    # is treated as a flat list of 2 option strings -> 2 separate video runs.
+    def _expand_prompt_field(raw):
+        if isinstance(raw, (list, tuple)):
+            result = parse_prompt_input_nested(json.dumps(list(raw)))
+        elif isinstance(raw, str) and raw.strip():
+            result = parse_prompt_input_nested(raw)
+        else:
+            result = [""]
+        return [str(p) for p in result]
+
     # All other fields: simple to_list
     field_axes = {
         "model": to_list(e.get("model", "")),
@@ -433,8 +447,8 @@ def _expand_ltx_entry(entry):
         "img_compression": to_list(e.get("img_compression", 18)),
         "audio_mode": to_list(e.get("audio_mode", "on")),
         "lora": to_list(e.get("lora", "None")),
-        "positive": to_list(e.get("positive", "")),
-        "negative": to_list(e.get("negative", "")),
+        "positive": _expand_prompt_field(e.get("positive", "")),
+        "negative": _expand_prompt_field(e.get("negative", "")),
         "width": to_list(e.get("width", 446)),
         "height": to_list(e.get("height", 576)),
     }
@@ -448,6 +462,27 @@ def _expand_ltx_entry(entry):
         cfg["model_type"] = "ltx_video"
         expanded.append(cfg)
     return expanded
+
+
+_EXTRA_SEEDS_SALT = "uscg-extra-seeds-v1"
+
+
+def derive_extra_seeds(base_seed, count):
+    """Deterministic extra seeds for "Additional Random Seeds".
+
+    The same (base_seed, count prefix) always yields the same seeds, so a
+    re-run or an interrupted run resumed later (skip matching is by seed)
+    renders the same images; a different base seed yields different extras.
+    """
+    import random
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        return []
+    if count <= 0:
+        return []
+    rng = random.Random(f"{_EXTRA_SEEDS_SALT}:{base_seed}")
+    return [rng.randint(0, 2**32 - 1) for _ in range(count)]
 
 
 def expand_configs(raw_configs, pos_prompts, neg_prompts, denoise_values, seed, extra_seeds, ckpt_name=None):
