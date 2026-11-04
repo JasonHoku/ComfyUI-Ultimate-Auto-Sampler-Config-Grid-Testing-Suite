@@ -176,7 +176,7 @@ def test_post_phase_source():
     s = _src("_run_distributed_generation")
     assert '"meta": item_meta' not in s
     assert "_run_distributed_upscales(" in s and "_build_distributed_upscale_queue(" in s
-    assert s.index("_pre_run_ids =") < s.index("manager.populate_jobs(")
+    assert s.index("_pre_run_ids =") < min(i for i in (s.find("manager.populate_jobs("), s.find("_populate_distributed_manager(")) if i >= 0)
     assert "run_deferred_upscales(" not in s
 
 
