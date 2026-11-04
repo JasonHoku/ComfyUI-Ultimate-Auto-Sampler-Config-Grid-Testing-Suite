@@ -345,9 +345,8 @@ ComfyUI/custom_nodes/ComfyUI-Ultimate-Auto-Sampler/
 ├── manifest_utils.py                # Manifest read/write/merge helpers
 ├── html_generator.py                # Reads /resources/ to build dashboard HTML
 │
-├── distribution_manager.py          # Distributed job queue coordinator (master)
-├── distribution_worker.py           # Worker thread for remote processing
-├── distribution_routes.py           # Distribution API endpoints
+├── distribution.py                  # Facade: distributed mode lives in the ComfyUI-USCG-Distributed companion
+├── civitai.py                       # Facade: CivitAI downloads live in the ComfyUI-USCG-CivitAI companion
 │
 ├── web/                             # [ComfyUI Integration Layer]
 │   ├── dashboard.js                 # Dashboard node registration & messaging
@@ -1451,22 +1450,26 @@ Fetch metadata for a checkpoint model from CivitAI (same as LoRA metadata but fo
 }
 ```
 
-### `/configbuilder/scan_directory` (POST)
-Scan an external directory for image sessions and load them into the dashboard.
+### `/config_tester/scan_directory` (POST)
+Scan an external directory of images into a dashboard session (symlinks under `benchmarks/<session>/images`, a manifest built from the images' embedded metadata). A re-scan keeps item ids, favorites, notes, votes and metrics.
 
 **Request:**
 ```json
 {
-  "path": "D:/other_comfyui/output/benchmarks/my_session"
+  "directory_path": "D:/other_comfyui/output/benchmarks/my_session",
+  "session_name": "my_session"
 }
 ```
 
 **Response:**
 ```json
 {
-  "success": true,
-  "images_found": 42,
-  "manifest": { ... }
+  "session_name": "my_session",
+  "item_count": 42,
+  "with_metadata": 40,
+  "without_metadata": 2,
+  "skipped": 0,
+  "from_manifest": 0
 }
 ```
 
@@ -1710,9 +1713,9 @@ Tests live in `tests/` and must not contain network or process-spawning code (no
 
 10. **Default state migration** — When adding new fields to the Config Builder state (in `conf-builder-main.js`), also add a migration check in the `onNodeCreated` function (around line 363) to backfill the default value for existing saved workflows.
 
-11. **claim_timeout default is 600** — This value appears in `distribution_manager.py`, `config_builder_node.py`, `conf-builder-distribution.js`, and `conf-builder-main.js`. Keep all four in sync.
+11. **claim_timeout default is 600** — This value appears in the ComfyUI-USCG-Distributed companion's `distribution_manager.py`, `config_builder_node.py`, `conf-builder-distribution.js`, and `conf-builder-main.js`. Keep all four in sync.
 
-12. **ComfyUI Registry security** — No `import requests`, no `subprocess`/`eval`/`exec`, no custom file-serving endpoints. Use `urllib.request` for HTTP and ComfyUI's `/view` endpoint for serving files. See `ProjectStructure.md` for full rules.
+12. **ComfyUI Registry security** — No outbound HTTP at all in this package: no `import requests`, no `urllib.request`, `http.client`, `socket` or `aiohttp.ClientSession`. Network code lives in the companion plugins (ComfyUI-USCG-RemoteVAE, -Distributed, -CivitAI); dev-only scripts that need HTTP live under `docs/tools/` (gitignored, never shipped). No `subprocess`/`eval`/`exec`, no custom file-serving endpoints; serve files through ComfyUI's `/view` endpoint. See `ProjectStructure.md` for full rules.
 
 13. **Job plan and config fingerprint** — `run_generation_loop` walks a flat `job_plan` (`config_utils.build_job_plan`, one entry per job, binding `conf, conf_idx, job_idx, job, w, h, batch_idx`) instead of nested resolution x config loops; `order_job_plan` reorders it for `job_order: minimize_reloads` (stable sort on first-appearance ranks). `check_if_job_completed(..., preview=False)` keeps its positional signature (the distributed companion calls it positionally); the new `preview` flag is keyword-only and previews/full items never match each other. `config_fingerprint()` is the identity of a grid cell (stored as `config_fp` on every new item; preview items add `preview`, `preview_of`, `full_*`; upscaled items add `base_fp`). Bump `FP_VERSION` (and keep the old reader) if you ever change its payload; a golden-value test pins it. Preview/promotion/job-order features are ignored by the distributed path.
 

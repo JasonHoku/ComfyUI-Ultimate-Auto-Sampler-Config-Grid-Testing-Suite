@@ -1,6 +1,6 @@
 // Run: node tests/superseded_previews.test.js  (dashboard superseded-preview logic, no browser needed)
 const fs = require('fs');
-const src = fs.readFileSync(require('path').join(__dirname, '..', 'resources', 'logic_pipeline.js'), 'utf8');
+const src = fs.readFileSync(require('path').join(__dirname, '..', '..', 'resources', 'logic_pipeline.js'), 'utf8');
 function grab(name) {
   const i = src.indexOf('function ' + name + '(');
   let depth = 0, j = src.indexOf('{', i);

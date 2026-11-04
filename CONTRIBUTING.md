@@ -125,7 +125,7 @@ When adding a new state field that should appear in `configs_json`:
 **Distributed mode exists.** Workers consume the already-rendered `configs_json` over the wire. Don't assume single-machine execution in generation orchestrator code.
 
 **ComfyUI Registry security constraints** (violations get the version flagged and hidden from Manager):
-- No `import requests` — use `urllib.request` (stdlib)
+- No outbound HTTP in this package (no `requests`, `urllib.request`, `http.client`, `socket`, `aiohttp.ClientSession`): network code lives in the companion plugins; dev-only HTTP scripts go under `docs/tools/` (gitignored)
 - No `subprocess`, `os.system`, `eval()`, or `exec()`
 - No runtime `pip install`
 - No custom file-serving endpoints — use ComfyUI's `/view` endpoint for images and `WEB_DIRECTORY` for JS

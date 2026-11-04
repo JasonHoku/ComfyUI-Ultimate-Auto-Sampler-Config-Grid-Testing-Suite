@@ -4,8 +4,10 @@ This node is published to the ComfyUI Registry. Every version is scanned by an a
 security scanner. Versions that fail the scan receive `NodeVersionStatusFlagged` status and
 are hidden from ComfyUI Manager. **All contributors must follow these rules:**
 
-1. **No `import requests`** — Use `urllib.request` (stdlib) instead. The scanner flags
-   outbound HTTP libraries as potential data exfiltration vectors.
+1. **No outbound HTTP in this package** — no `import requests`, and no `urllib.request`, `http.client`, `socket` or
+   `aiohttp.ClientSession` either: the scanner flags outbound HTTP as a potential data exfiltration vector. Network code
+   lives in the companion plugins (ComfyUI-USCG-RemoteVAE, -Distributed, -CivitAI); dev-only scripts that need HTTP live
+   under `docs/tools/` (gitignored, never shipped).
 2. **No `subprocess`, `os.system`, `eval()`, `exec()`** — These are blocked as arbitrary
    code execution risks.
 3. **No runtime `pip install`** — Package installation must go through `requirements.txt`
@@ -177,6 +179,8 @@ ComfyUI/output/
 │                                        └─────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+DistributionMgr and WorkerThread in the diagram now live in the ComfyUI-USCG-Distributed companion plugin; this package keeps `distribution.py` as a thin facade (and `civitai.py` for ComfyUI-USCG-CivitAI).
 
 ---
 
@@ -841,7 +845,7 @@ __init__.py
 
 15. **`logic_pipeline.js` Legacy Init Guard** — Lines 489-505 have a `DOMContentLoaded` handler that calls `loadSession()` ONLY when `fullManifest.items.length > 0`. Without this guard, `loadSession()` triggers an alert popup for non-existent sessions. The proper initialization path is `logic_init.js` → `init()` → `showSessionLandingIfEmpty()`.
 
-16. **Distribution Default Values Must Stay in Sync** — `claim_timeout` default (600) appears in: `distribution_manager.py` (constructor), `config_builder_node.py` (fallback), `conf-builder-distribution.js` (slider default), `conf-builder-main.js` (default state). All four must match. Same for `use_master_encoding` default (false).
+16. **Distribution Default Values Must Stay in Sync** — `claim_timeout` default (600) appears in: the ComfyUI-USCG-Distributed companion's `distribution_manager.py` (constructor), `config_builder_node.py` (fallback), `conf-builder-distribution.js` (slider default), `conf-builder-main.js` (default state). All four must match. Same for `use_master_encoding` default (false).
 
 17. **Conditioning Serialization Uses np.copy()** — `_serializable_to_conditioning()` in `generation_orchestrator.py` must call `np.frombuffer(...).copy()` before `torch.from_numpy()` because `np.frombuffer()` returns read-only arrays incompatible with GPU tensor operations.
 
@@ -849,7 +853,7 @@ __init__.py
 
 19. **State Migration for New Fields** — When adding new fields to the Config Builder default state in `conf-builder-main.js` (around line 80), also add a migration check (around line 363 in the `onConfigure` handler) to backfill the default for existing saved workflows. Without migration, old workflows will have `undefined` for the new field.
 
-20. **ComfyUI Registry Security** — No `import requests`, no `subprocess`/`os.system`/`eval()`/`exec()`, no runtime `pip install`, no custom file-serving endpoints, no code obfuscation. Use `urllib.request` for HTTP. Use ComfyUI's `/view` endpoint for serving files. Sanitize all user-supplied paths. See top of this file for full rules.
+20. **ComfyUI Registry Security** — No `import requests`, no `subprocess`/`os.system`/`eval()`/`exec()`, no runtime `pip install`, no custom file-serving endpoints, no code obfuscation. No outbound HTTP at all in this package: no `import requests`, no `urllib.request`, `http.client`, `socket` or `aiohttp.ClientSession`. Network code lives in the companion plugins (ComfyUI-USCG-RemoteVAE, -Distributed, -CivitAI); dev-only scripts that need HTTP live under `docs/tools/` (gitignored, never shipped). Use ComfyUI's `/view` endpoint for serving files. Sanitize all user-supplied paths. See top of this file for full rules.
 
 21. **Image File URL Format** — Must be `/view?filename={name}&type=output&subfolder=benchmarks/{session}/images` for ComfyUI's built-in view endpoint. Both `flush_batch_with_vae()` (image_generation.py line 649) and upscaling (orchestrator line 1191) must use this exact format. Missing `type` or `subfolder` params causes 404s.
 
