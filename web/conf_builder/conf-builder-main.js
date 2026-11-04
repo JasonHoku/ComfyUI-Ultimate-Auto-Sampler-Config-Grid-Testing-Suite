@@ -8,6 +8,17 @@ import { app } from "../../../scripts/app.js";
 // Cache-busting timestamp (regenerated on every page load)
 const CACHE_BUST = Date.now();
 
+// Small info toast (falls back to alert when the frontend has no toast extension)
+function notify(detail) {
+    try {
+        if (app.extensionManager?.toast?.add) {
+            app.extensionManager.toast.add({ severity: "info", summary: "USCG", detail, life: 8000 });
+            return;
+        }
+    } catch (e) { /* fall through */ }
+    alert(detail);
+}
+
 // Module storage
 let utilities, uiComponents, configManagement, distributionModule;
 
@@ -418,7 +429,12 @@ app.registerExtension({
                                 if (configs && !Array.isArray(configs) && configs.configs) {
                                     configs = configs.configs;
                                 }
-                                let loadedArrays = utilities.convertConfigsToConfigArrays(configs);
+                                // Workflow Sweep entries (model_type "workflow") restore through workflowConfigToArray;
+                                // standard entries keep the existing path. Original order is preserved.
+                                const isWfCfg = (c) => c && c.model_type === "workflow";
+                                const wfCfgs = configs.filter(isWfCfg);
+                                const stdCfgs = configs.filter(c => !isWfCfg(c));
+                                let loadedArrays = stdCfgs.length ? utilities.convertConfigsToConfigArrays(stdCfgs) : [];
                                 const normalize = (str) => str.replace(/\\/g, "/");
 
                                 loadedArrays.forEach(arr => {
@@ -486,6 +502,15 @@ app.registerExtension({
                                     if (arr.kind === undefined) arr.kind = "standard";
                                 });
 
+                                if (wfCfgs.length) {
+                                    const { workflowConfigToArray } = await import("./conf-builder-workflow-sweep.js");
+                                    const wfArrays = wfCfgs.map((c, i) => workflowConfigToArray(c, i));
+                                    const merged = [];
+                                    let si = 0, wi = 0;
+                                    configs.forEach(c => merged.push(isWfCfg(c) ? wfArrays[wi++] : loadedArrays[si++]));
+                                    loadedArrays = merged.filter(Boolean);
+                                }
+
                                 this.state.config_arrays = loadedArrays;
 
                                 // Restore global prompts from loaded configs
@@ -513,6 +538,11 @@ app.registerExtension({
                             } catch (e) {
                                 console.error("[ConfigBuilder] Error parsing configs_json:", e);
                             }
+                        }
+
+                        // A sweep session saved before its configs were stored: nothing to restore, say so
+                        if (meta.workflow_sweep && !meta.configs_json) {
+                            notify("This session was made by a Workflow Sweep before its configs were saved. Load the workflow JSON again into a Workflow Sweep array; finished jobs are skipped by fingerprint.");
                         }
 
                         this.state.session_name = sessionName;

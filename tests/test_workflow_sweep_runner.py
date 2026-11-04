@@ -16,6 +16,15 @@ import workflow_sweep as wfs  # noqa: E402
 import workflow_sweep_runner as runner  # noqa: E402
 
 
+def _real_manifest_utils():
+    # conftest registers a stub manifest_utils; load the real file for update_meta
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("manifest_utils_real_sweep", os.path.join(ROOT, "manifest_utils.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def load(name):
     with open(os.path.join(ROOT, "tests", "fixtures", name), "r", encoding="utf-8") as f:
         return json.load(f)
@@ -116,6 +125,7 @@ class FakeBridge:
 def env(tmp_path, monkeypatch):
     import folder_paths
     monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(runner, "manifest_utils", _real_manifest_utils(), raising=False)
     runner.reset_registry()
     bridge = FakeBridge()
     yield types.SimpleNamespace(bridge=bridge, tmp=tmp_path)
@@ -626,3 +636,163 @@ def test_bridge_queue_helpers(monkeypatch):
     assert b.history_entry("nope") is None
     assert b.delete_queued("q1") is True and removed == [True]
     assert b.interrupt("r1") is True and b.interrupt("q1") is False
+
+
+# --------------------------------------------------------------------------- attach to the identical sweep
+
+def _cfg_body(configs, session):
+    return {"configs_json": json.dumps({"configs": configs, "_session_settings": {"session_name": session}})}
+
+
+def test_same_sweep_attaches_and_queues_nothing(env):
+    sw = runner.start_sweep([entry()], {"session_name": "wf_test"}, "n1", None, env.bridge, class_info=None)
+    n = len(env.bridge.enqueued)
+    again = runner.start_sweep([entry()], {"session_name": "wf_test"}, "n2", None, env.bridge, class_info=None)
+    assert again is sw
+    assert len(runner._sweeps) == 1 and len(env.bridge.enqueued) == n
+    runner.cancel(sw.id)
+    sw.thread.join(5)
+
+
+def test_api_start_same_sweep_returns_attached_200(env):
+    sw = make(env)
+    assert runner.pause(sw.id)[0]
+    status, body = asyncio.run(runner.api_start(_cfg_body([entry()], "wf_test"), bridge=env.bridge, class_info=None))
+    assert status == 200 and body["attached"] is True and body["sweep_id"] == sw.id
+    assert body["state"] == "paused" and sw.state == "paused"      # attach never changes the sweep state
+    assert len(runner._sweeps) == 1 and env.bridge.enqueued == []
+
+
+def test_different_sweep_409_with_session_and_message(env):
+    sw = make(env)
+    # different values
+    status, body = asyncio.run(runner.api_start(_cfg_body([entry((7, 8))], "wf_test"), bridge=env.bridge, class_info=None))
+    assert status == 409 and body["sweep_id"] == sw.id and body["session_name"] == "wf_test"
+    assert "NOT started" in body["error"] and "already active" in body["error"]
+    # same workflow, different session
+    status, body = asyncio.run(runner.api_start(_cfg_body([entry()], "other_session"), bridge=env.bridge, class_info=None))
+    assert status == 409
+    # same workflow and session but a different start_at_job / overwrite_existing is NOT the same sweep
+    for extra in ({"start_at_job": 2}, {"overwrite_existing": True}):
+        with pytest.raises(runner.SweepBusy) as ei:
+            runner.prepare_sweep([entry()], {"session_name": "wf_test", **extra}, None, None, env.bridge, class_info=None)
+        assert not isinstance(ei.value, runner.SweepAlreadyRunning)
+    with pytest.raises(runner.SweepBusy) as ei:
+        runner.prepare_sweep([entry((7, 8))], {"session_name": "wf_test"}, None, None, env.bridge, class_info=None)
+    assert not isinstance(ei.value, runner.SweepAlreadyRunning) and "NOT started" in str(ei.value)
+    assert len(runner._sweeps) == 1
+
+
+def test_extra_seeds_deterministic_and_attach(env):
+    sw = make(env, settings={"add_random_seeds_to_gens": 2})
+    raw = {"configs": [entry()], "_session_settings": {"session_name": "wf_test", "add_random_seeds_to_gens": 2}}
+    status, body = asyncio.run(runner.api_start({"configs_json": json.dumps(raw)}, bridge=env.bridge, class_info=None))
+    assert status == 200 and body["attached"] is True and body["sweep_id"] == sw.id
+
+
+def test_launch_race_same_sweep(env):
+    a = runner.prepare_sweep([entry()], {"session_name": "race"}, None, None, env.bridge, class_info=None)
+    b = runner.prepare_sweep([entry()], {"session_name": "race"}, None, None, env.bridge, class_info=None)
+    runner.launch(a, start_thread=False)
+    with pytest.raises(runner.SweepAlreadyRunning) as ei:
+        runner.launch(b, start_thread=False)
+    assert ei.value.sweep is a and b.id not in runner._sweeps
+
+
+def test_pause_and_resume_emit_progress(env):
+    sw = make(env)
+    env.bridge.events.clear()
+    runner.pause(sw.id)
+    runner.resume(sw.id)
+    states = [d["state"] for d in env.bridge.progress_events()]
+    assert states == ["paused", "running"]
+
+
+# --------------------------------------------------------------------------- job_prompt + sweep meta
+
+def test_job_prompt_matches_apply_subs_and_has_no_collector(env):
+    sw = make(env, [entry((1, 2, 3))])
+    status, body = runner.job_prompt("wf_test", sw.id, 1)
+    job = sw.jobs[1]
+    tpl = sw.templates[job["conf"]["wf_template_hash"]]
+    assert status == 200 and body["prompt"] == wfs.apply_subs(tpl["prompt"], job["conf"]["wf_subs"])
+    assert "USCGSweepCollect" not in json.dumps(body["prompt"])
+    assert body["fingerprint"] == job["fingerprint"] and body["job_index"] == 1 and body["params"] is not None
+    # from the spec file, after the in-memory registry is gone
+    runner.reset_registry()
+    status2, body2 = runner.job_prompt("wf_test", sw.id, "1")
+    assert status2 == 200 and body2["prompt"] == body["prompt"] and body2["fingerprint"] == body["fingerprint"]
+
+
+def test_job_prompt_validation_and_404(env):
+    sw = make(env)
+    for sid, idx in (("../x", 0), ("abc", 0), (sw.id, -1), (sw.id, "x"), (sw.id, "1.5"), ("", 0)):
+        assert runner.job_prompt("wf_test", sid, idx)[0] == 400, (sid, idx)
+    assert runner.job_prompt("wf_test", "deadbeef0000", 0)[0] == 404
+    assert runner.job_prompt("wf_test", sw.id, 99)[0] == 404
+    assert runner.job_prompt("some_other_session", sw.id, 0)[0] == 404   # wrong session never leaks another's job
+
+
+def test_new_manifest_meta_carries_configs_json(env):
+    sw = make(env)
+    meta = wfs.read_manifest_items(wfs.session_paths("wf_test")["manifest"])["meta"]
+    parsed = json.loads(meta["configs_json"])
+    assert parsed["configs"][0]["model_type"] == "workflow" and parsed["_session_settings"]["session_name"] == "wf_test"
+    assert meta["workflow_sweep"] is True
+
+
+def test_existing_sweep_manifest_meta_refreshed_but_standard_untouched(env):
+    paths = wfs.session_paths("wf_test")
+    os.makedirs(paths["images"], exist_ok=True)
+    old = {"session_name": "wf_test", "meta": {"workflow_sweep": True, "configs_json": ""}, "items": [{"id": 5, "file": "x"}]}
+    with open(paths["manifest"], "w") as f:
+        json.dump(old, f)
+    make(env)
+    data = wfs.read_manifest_items(paths["manifest"])
+    assert json.loads(data["meta"]["configs_json"])["configs"] and data["items"] == [{"id": 5, "file": "x"}]
+    runner.reset_registry()
+    std = {"session_name": "std_sess", "meta": {"configs_json": "{}"}, "items": []}
+    p2 = wfs.session_paths("std_sess")
+    os.makedirs(p2["images"], exist_ok=True)
+    with open(p2["manifest"], "w") as f:
+        json.dump(std, f)
+    before = open(p2["manifest"], "rb").read()
+    make(env, settings={"session_name": "std_sess"})
+    assert open(p2["manifest"], "rb").read() == before
+
+
+def test_update_meta_preserves_items_written_since(tmp_path):
+    mu = _real_manifest_utils()
+    path = str(tmp_path / "manifest.json")
+    with open(path, "w") as f:
+        json.dump({"meta": {"a": 1}, "items": []}, f)
+    with open(path, "w") as f:                      # another writer adds an item after the caller last looked
+        json.dump({"meta": {"a": 1}, "items": [{"id": 9}]}, f)
+    mu.update_meta(path, {"configs_json": "z"})
+    data = json.load(open(path))
+    assert data["items"] == [{"id": 9}] and data["meta"] == {"a": 1, "configs_json": "z"}
+
+
+def _job_seeds(sw):
+    return sorted(j["conf"]["seed"] for j in sw.jobs)
+
+
+def test_extra_seeds_use_derive_extra_seeds_and_base_seed(env):
+    cu = wfs._cu()
+    one = lambda **s: runner.prepare_sweep([entry((1,))], {"session_name": "s", "add_random_seeds_to_gens": 2, **s},
+                                           None, None, env.bridge, class_info=None)
+    a, b = one(), one()
+    assert _job_seeds(a) == _job_seeds(b) == sorted({1, *cu.derive_extra_seeds(0, 2)})
+    assert _job_seeds(one(seed=5)) != _job_seeds(a)
+
+
+def test_resume_with_extra_seeds_skips_everything(env):
+    sw = make(env, [entry((1,))], {"add_random_seeds_to_gens": 2})
+    complete_all(sw, env.bridge)
+    assert sw.state == "completed" and len(sw.jobs) > 1
+    # the (fake) collector wrote no items: record what a real run leaves in the manifest
+    _write_manifest(env, [{"id": 100 + j["index"], "wf_fingerprint": j["fingerprint"]} for j in sw.jobs])
+    runner.reset_registry()
+    again = runner.prepare_sweep([entry((1,))], {"session_name": "wf_test", "add_random_seeds_to_gens": 2},
+                                 None, None, env.bridge, class_info=None)
+    assert again.to_run == 0 and again.skipped_existing == len(again.jobs) > 1

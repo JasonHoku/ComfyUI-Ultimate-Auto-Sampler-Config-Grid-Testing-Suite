@@ -104,9 +104,17 @@ def test_run_tests_starts_sweep_and_returns_dashboard_without_waiting(sampler_no
         assert captured["manifest"]["session_name"] == "gen_wf" and captured["manifest"]["items"] == []
         sw = runner._active_sweep()
         assert sw is not None and sw.origin_node == "77" and len(sw.jobs) == 2   # returned while jobs are pending
-        # a second Generator run while the sweep is active is refused with a readable error
-        with pytest.raises(RuntimeError, match="already active"):
-            sampler_node.SamplerGridTester().run_tests(cfg, unique_id="77")
+        # an IDENTICAL second Generator run attaches: same dashboard, one sweep, nothing re-queued
+        n_enq = len(bridge.enqueued)
+        out2 = sampler_node.SamplerGridTester().run_tests(cfg, unique_id="77")
+        assert out2 == ("<html>",) and captured["title"] == "gen_wf"
+        assert len(runner._sweeps) == 1 and runner._active_sweep() is sw and len(bridge.enqueued) >= n_enq
+        # a DIFFERENT sweep while one is active is refused with a readable error
+        other = wf_config()
+        other["workflow_bindings"][0]["values"] = [5, 6]
+        cfg2 = json.dumps({"configs": [other], "_session_settings": {"session_name": "gen_wf", "start_at_job": 0}})
+        with pytest.raises(RuntimeError, match="NOT started"):
+            sampler_node.SamplerGridTester().run_tests(cfg2, unique_id="77")
     finally:
         sw = runner._active_sweep()
         if sw is not None:

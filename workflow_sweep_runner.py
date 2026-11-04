@@ -20,7 +20,7 @@ import asyncio
 import inspect
 import json
 import os
-import random
+import re
 import threading
 import time
 import traceback
@@ -28,8 +28,10 @@ import uuid
 
 try:
     from . import workflow_sweep as wfs
+    from . import manifest_utils
 except ImportError:  # imported as a top-level module (tests)
     import workflow_sweep as wfs
+    import manifest_utils
 
 
 WINDOW = 2                 # max sweep prompts queued/running at once
@@ -44,10 +46,26 @@ TERMINAL_JOB = ("done", "error", "invalid", "skipped", "cancelled")
 
 
 class SweepBusy(Exception):
-    """Another workflow sweep is still active (route -> 409)."""
-    def __init__(self, sweep_id):
-        super().__init__(f"A workflow sweep is already active ({sweep_id}). Cancel it or wait for it to finish.")
+    """Another (different) workflow sweep is still active (route -> 409)."""
+    def __init__(self, sweep_id, session=None, sweep=None):
+        if sweep is not None:
+            with sweep.lock:
+                detail = f"session '{sweep.session}', sweep {sweep_id}, {sweep.count('done')}/{sweep.to_run} done, {sweep.state}"
+            session = sweep.session
+        else:
+            detail = f"session '{session}', sweep {sweep_id}" if session else f"sweep {sweep_id}"
+        super().__init__(f"A workflow sweep is already active ({detail}). This run was NOT started. "
+                         f"Pause or cancel it in the Builder's Workflow Sweep panel (or POST "
+                         f"/config_tester/sweep/cancel {{sweep_id}}), or wait for it to finish.")
         self.sweep_id = sweep_id
+        self.session = session
+
+
+class SweepAlreadyRunning(SweepBusy):
+    """The identical sweep is already active: callers attach to it instead of failing."""
+    def __init__(self, sweep):
+        super().__init__(sweep.id, sweep=sweep)
+        self.sweep = sweep
 
 
 def summarize_errors(error, node_errors, prompt=None):
@@ -297,6 +315,15 @@ def _active_sweep():
     return None
 
 
+def _same_sweep(busy, session, fingerprints, start_at=0, overwrite=False):
+    """True when `busy` is the sweep the caller is trying to start: same session, same ordered job
+    fingerprints, same start_at_job and overwrite_existing."""
+    return (busy.session == session
+            and [j["fingerprint"] for j in busy.jobs] == list(fingerprints)
+            and int(busy.settings.get("start_at_job", 0) or 0) == int(start_at or 0)
+            and bool(busy.settings.get("overwrite_existing", False)) == bool(overwrite))
+
+
 def _find(sweep_id=None, session=None):
     with _registry_lock:
         if sweep_id:
@@ -331,9 +358,6 @@ def prepare_sweep(configs, session_settings=None, origin_node=None, client_id=No
     Expand + fingerprint + skip finished jobs. Raises ValueError (readable) or SweepBusy.
     Pure apart from reading the session manifest.
     """
-    busy = _active_sweep() if check_busy else None
-    if busy is not None:
-        raise SweepBusy(busy.id)
     settings = dict(session_settings or {})
     if not isinstance(configs, list) or not configs:
         raise ValueError("There are no configs to run.")
@@ -343,7 +367,8 @@ def prepare_sweep(configs, session_settings=None, origin_node=None, client_id=No
     except (TypeError, ValueError):
         n_extra = 0
     if n_extra > 0:
-        extra_seeds = [random.randint(0, 2**32 - 1) for _ in range(n_extra)]
+        # deterministic (same helper and base seed 0 as the Generator): a re-run or resume yields the same jobs
+        extra_seeds = wfs._cu().derive_extra_seeds(settings.get("seed", 0), n_extra)
     plan = wfs.plan_workflow_configs(configs, extra_seeds, class_info=class_info)
 
     paths = wfs.session_paths(settings.get("session_name") or "workflow_sweep")
@@ -352,6 +377,12 @@ def prepare_sweep(configs, session_settings=None, origin_node=None, client_id=No
         start_at = max(0, int(settings.get("start_at_job", 0) or 0))
     except (TypeError, ValueError):
         start_at = 0
+    busy = _active_sweep() if check_busy else None
+    if busy is not None:
+        fps = [c["wf_fingerprint"] for c in plan["jobs"]]
+        if _same_sweep(busy, paths["session"], fps, start_at, overwrite):
+            raise SweepAlreadyRunning(busy)
+        raise SweepBusy(busy.id, sweep=busy)
     by_fp, gen_base = _manifest_state(paths["manifest"])
 
     jobs = []
@@ -376,6 +407,7 @@ def prepare_sweep(configs, session_settings=None, origin_node=None, client_id=No
                list(plan["warnings"]), plan["axes"], bridge or get_bridge())
     if sw.client_id is None:
         sw.client_id = f"uscg-sweep-{sw.id}"
+    sw.source_configs = configs
     return sw
 
 
@@ -404,11 +436,19 @@ async def validate_first(sw):
         raise ValueError("The first job is not valid: " + summarize_errors(error, node_errors, prompt))
 
 
+def _configs_json(sw):
+    """Builder-loadable configs for the manifest meta (the workflow entries, so Load Session can restore them)."""
+    cfgs = getattr(sw, "source_configs", None)
+    if not cfgs:
+        return ""
+    return json.dumps({"configs": cfgs, "_session_settings": {"session_name": sw.session}})
+
+
 def _new_meta(sw):
     first = sw.jobs[0]["conf"] if sw.jobs else {}
     return {"positive": first.get("positive", ""), "negative": first.get("negative", ""),
             "model": first.get("model", ""), "seed": first.get("seed", 0) if isinstance(first.get("seed", 0), int) else 0,
-            "vae_batch_size": 1, "configs_json": "", "resolutions_json": "[]",
+            "vae_batch_size": 1, "configs_json": _configs_json(sw), "resolutions_json": "[]",
             "image_format": sw.settings.get("image_format", "webp"), "workflow_sweep": True}
 
 
@@ -422,6 +462,12 @@ def ensure_manifest(sw):
             json.dump(data, f, indent=4)
         return data
     data = wfs.read_manifest_items(paths["manifest"])
+    cj = _configs_json(sw)
+    if cj and (data.get("meta") or {}).get("workflow_sweep"):
+        try:
+            manifest_utils.update_meta(paths["manifest"], {"configs_json": cj})
+        except Exception as e:
+            print(f"[GridTester] ⚠️ Could not refresh the sweep session's saved configs: {e}")
     return data
 
 
@@ -430,7 +476,10 @@ def launch(sw, start_thread=True):
     with _registry_lock:
         busy = _active_sweep()
         if busy is not None and busy is not sw:
-            raise SweepBusy(busy.id)
+            if _same_sweep(busy, sw.session, [j["fingerprint"] for j in sw.jobs],
+                           sw.settings.get("start_at_job", 0), sw.settings.get("overwrite_existing", False)):
+                raise SweepAlreadyRunning(busy)
+            raise SweepBusy(busy.id, sweep=busy)
         _sweeps[sw.id] = sw
     ensure_manifest(sw)
     with sw.lock:
@@ -452,9 +501,14 @@ def start_sweep(configs, session_settings=None, origin_node=None, client_id=None
                 class_info=wfs.comfy_class_info):
     """Prepare + validate job 1 on the loop + launch. For a NON-loop thread (the Generator node).
     Returns immediately after launch; never waits for any sweep prompt."""
-    sw = prepare_sweep(configs, session_settings, origin_node, client_id, bridge, class_info)
-    sw.bridge.run_on_loop(validate_first(sw))
-    return launch(sw)
+    try:
+        sw = prepare_sweep(configs, session_settings, origin_node, client_id, bridge, class_info)
+        sw.bridge.run_on_loop(validate_first(sw))
+        return launch(sw)
+    except SweepAlreadyRunning as e:
+        print(f"[GridTester] 🔁 Same workflow sweep already running ({e.sweep.id}, session "
+              f"'{e.sweep.session}'): attaching, nothing re-queued")
+        return e.sweep
 
 
 # --------------------------------------------------------------------------- feeder thread
@@ -710,6 +764,7 @@ def pause(sweep_id):
             return False, f"sweep is {sw.state}"
         sw.state, sw.reason = "paused", "paused by user"
     sw.wake.set()
+    _progress(sw)
     return True, "paused"
 
 
@@ -726,6 +781,7 @@ def resume(sweep_id):
         sw.consecutive_errors = 0
         sw.state, sw.reason = "running", ""
     sw.wake.set()
+    _progress(sw)
     return True, "running"
 
 
@@ -782,6 +838,58 @@ def get_status(sweep_id=None, session=None):
                 "eta_str": _eta_str(avg * remaining) if recent and sw.state == "running" else "",
                 "avg_duration": round(avg, 1), "warnings": list(sw.warnings),
                 "last_errors": list(sw.last_errors)}
+
+
+_SWEEP_ID_RE = re.compile(r"^[0-9a-f]{6,32}$")
+
+
+def job_prompt(session_name, sweep_id, job_index):
+    """(http_status, body) for GET /config_tester/sweep/job_prompt: the API prompt of one sweep job
+    exactly as it ran (templates + subs), minus the USCG collector node. Takes ids, never paths: the
+    session name is sanitised by session_paths and the sweep id is regex-checked before it touches a path."""
+    sweep_id = str(sweep_id or "")
+    if not _SWEEP_ID_RE.match(sweep_id):
+        return 400, {"error": "sweep_id must be 6-32 lowercase hex characters."}
+    try:
+        idx = int(str(job_index).strip())
+        if idx < 0 or not re.match(r"^\d+$", str(job_index).strip()):
+            raise ValueError
+    except (TypeError, ValueError):
+        return 400, {"error": "job_index must be an integer >= 0."}
+    spec = None
+    sw = _find(sweep_id)
+    if sw is not None and sw.session == wfs.session_paths(session_name)["session"]:
+        with sw.lock:
+            if idx >= len(sw.jobs):
+                return 404, {"error": f"Sweep {sweep_id} has no job {idx}."}
+            job = sw.jobs[idx]
+            tpl = sw.templates.get(job["conf"].get("wf_template_hash"))
+            if tpl is None:
+                return 404, {"error": "The job's workflow template is not available."}
+            subs, params, fp = job["conf"].get("wf_subs") or [], job["conf"].get("wf_params"), job["fingerprint"]
+            template, output = tpl["prompt"], tpl["output"]
+    else:
+        path = os.path.join(wfs.session_paths(session_name)["sweeps"], sweep_id + ".json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                spec = json.load(f)
+        except (OSError, ValueError):
+            return 404, {"error": f"No sweep {sweep_id} was recorded for session '{session_name}'."}
+        jobs = spec.get("jobs") or []
+        if idx >= len(jobs):
+            return 404, {"error": f"Sweep {sweep_id} has no job {idx}."}
+        job = jobs[idx]
+        tpl = (spec.get("templates") or {}).get(job.get("template"))
+        if tpl is None:
+            return 404, {"error": "The job's workflow template is not in the sweep spec."}
+        subs, params, fp = job.get("subs") or [], job.get("params"), job.get("fingerprint")
+        template, output = tpl["prompt"], tpl.get("output")
+    try:
+        prompt = wfs.apply_subs(template, subs)
+    except ValueError as e:
+        return 404, {"error": str(e)}
+    return 200, {"sweep_id": sweep_id, "job_index": idx, "fingerprint": fp, "params": params,
+                 "output": output, "prompt": prompt}
 
 
 # --------------------------------------------------------------------------- progress + spec file
@@ -904,8 +1012,12 @@ async def api_start(body, bridge=None, class_info=wfs.comfy_class_info):
         sw = prepare_sweep(configs, settings, body.get("node_id"), body.get("client_id"), bridge, class_info)
         await validate_first(sw)
         launch(sw)
+    except SweepAlreadyRunning as e:
+        sw = e.sweep
+        return 200, {**(get_status(sw.id) or {}), "attached": True, "sweep_id": sw.id, "total": len(sw.jobs),
+                     "to_run": sw.to_run, "skipped_existing": sw.skipped_existing, "warnings": sw.warnings}
     except SweepBusy as e:
-        return 409, {"error": str(e), "sweep_id": e.sweep_id}
+        return 409, {"error": str(e), "sweep_id": e.sweep_id, "session_name": e.session}
     except ValueError as e:
         return 400, {"error": str(e)}
     return 200, {"sweep_id": sw.id, "total": len(sw.jobs), "to_run": sw.to_run,

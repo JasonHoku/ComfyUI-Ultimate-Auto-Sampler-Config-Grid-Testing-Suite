@@ -53,6 +53,30 @@ export function newWorkflowArray(index) {
     };
 }
 
+/**
+ * Inverse of config_builder_node._workflow_array_to_config: a saved workflow config entry (manifest
+ * meta.configs_json) back into a Builder array of kind "workflow". Never throws on odd input.
+ */
+export function workflowConfigToArray(cfg, idx = 0) {
+    const arr = newWorkflowArray(idx + 1);
+    cfg = (cfg && typeof cfg === "object") ? cfg : {};
+    if (cfg.name) arr.name = String(cfg.name);
+    arr.workflow = {
+        source_name: String(cfg.workflow_source || ""),
+        api_prompt: (cfg.workflow && typeof cfg.workflow === "object" && Object.keys(cfg.workflow).length) ? cfg.workflow : null,
+        output: (cfg.workflow_output && typeof cfg.workflow_output === "object") ? cfg.workflow_output : {},
+        run_other_outputs: !!cfg.workflow_run_other_outputs,
+        bindings: Array.isArray(cfg.workflow_bindings) ? cfg.workflow_bindings : [],
+    };
+    if (cfg._prompt_source === "custom" && Array.isArray(cfg.positive)) {
+        arr.positive_prompt_groups = cfg.positive;
+        arr.negative_prompt = typeof cfg.negative === "string" ? cfg.negative : "";
+        arr.use_custom_prompts = true;
+    }
+    ensureWorkflowState(arr);
+    return arr;
+}
+
 function el(tag, props = {}, css = "") {
     const e = document.createElement(tag);
     Object.assign(e, props);
@@ -609,6 +633,7 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
     }
 
     let statusLine = null;
+    let attachedNote = "";
     function paintStatus(extra) {
         if (!statusLine) return;
         const s = lastStatus;
@@ -621,7 +646,8 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
                 + (s.last_errors && s.last_errors.length ? `\nLast error (job ${s.last_errors[s.last_errors.length - 1].index + 1}): ${s.last_errors[s.last_errors.length - 1].error}` : "");
             (s.warnings || []).forEach(w => { text += `\n⚠️ ${w}`; });
         }
-        statusLine.textContent = text;
+        statusLine.textContent = attachedNote && s ? `${attachedNote}
+${text}` : text;
     }
 
     async function fetchStatus() {
@@ -648,14 +674,16 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
     }
 
     async function startSweep() {
+        attachedNote = "";
         paintStatus("Starting...");
         const { ok, status, data } = await post("/config_tester/sweep/start", { state: workflowOnlyState(node) });
         if (!ok) {
-            paintStatus(status === 409 ? `Already running: ${data.error}` : `Could not start: ${data.error || status}`);
+            paintStatus(status === 409 ? `${data.error}` : `Could not start: ${data.error || status}`);
             if (status === 409 && data.sweep_id) { sweepId = data.sweep_id; lastStatus = await fetchStatus(); rerender(); startPolling(); }
             return;
         }
         sweepId = data.sweep_id;
+        attachedNote = data.attached ? `Already running: attached to sweep ${data.sweep_id}` : "";
         lastStatus = await fetchStatus();
         rerender();
         startPolling();

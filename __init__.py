@@ -1508,6 +1508,18 @@ async def sweep_status(request):
         return web.json_response({"error": "No such sweep"}, status=404)
     return web.json_response(status)
 
+@server.PromptServer.instance.routes.get("/config_tester/sweep/job_prompt")
+async def sweep_job_prompt(request):
+    """The API-format prompt of one sweep job (derived JSON, no file is served; ids only)."""
+    try:
+        from .workflow_sweep_runner import job_prompt
+        status, body = job_prompt(request.query.get("session_name") or "", request.query.get("sweep_id") or "",
+                                  request.query.get("job_index", ""))
+        return web.json_response(body, status=status)
+    except Exception as e:
+        print(f"[ConfigTester] Error building the sweep job prompt: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
 async def _sweep_control(request, action):
     try:
         data = await request.json()

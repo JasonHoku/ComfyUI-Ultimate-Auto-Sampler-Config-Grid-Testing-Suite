@@ -82,6 +82,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (104 lines)
 │   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (510 lines)
 │   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable)
+│   ├── logic_wfparams.js        # Workflow Sweep wf_params helpers (keys, numeric detection, match, short labels); Quick/Logic Filter + label overlay use them (pure, node-testable)
 │   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (925 lines)
 │   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (1780 lines)
@@ -227,7 +228,8 @@ All routes registered via `PromptServer.instance.routes`.
 | POST | `/config_tester/scan_directory` | 746 | Scan external dir, create symlinks, generate manifest |
 | POST | `/config_tester/sweep/parse` | - | Workflow Sweep: describe an API-format workflow `{api_json}` (nodes, outputs, image sources, suggested bindings) |
 | POST | `/config_tester/sweep/dry_run` | - | Workflow Sweep: first N concrete prompts + validation of job 1 `{state or configs_json, limit}`; queues nothing |
-| POST | `/config_tester/sweep/start` | - | Workflow Sweep: start a sweep `{state or configs_json, node_id?}` (400 invalid, 409 one already active) |
+| POST | `/config_tester/sweep/start` | - | Workflow Sweep: start a sweep `{state or configs_json, node_id?}` (400 invalid; 200 `attached:true` when the IDENTICAL sweep is already active; 409 `{error, sweep_id, session_name}` for a different one) |
+| GET | `/config_tester/sweep/job_prompt` | - | Workflow Sweep: `?session_name=&sweep_id=&job_index=` -> `{prompt, params, fingerprint, ...}`, the job's API prompt without the collector (ids only, no paths; 400 bad id/index, 404 unknown) |
 | GET | `/config_tester/sweep/status` | - | Workflow Sweep: `?sweep_id=` or `?session_name=` (state, counts, ETA, last errors) |
 | POST | `/config_tester/sweep/pause`, `/resume`, `/cancel` | - | Workflow Sweep controls `{sweep_id}` |
 
@@ -297,7 +299,7 @@ All routes registered via `PromptServer.instance.routes`.
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id)` — reads all `/resources/` files, inlines into `template.html`
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests — everything inlined
 
@@ -900,6 +902,7 @@ __init__.py
 | `logic_utils.js` | `loadSession()`, `exportFavorites()`, `scanDirectory()`, `triggerGen()`, `toggleFullscreen()`, `deleteNonFavorites()` |
 | `logic_virtual.js` | `renderDOM()`, `updateVisibleItems()`, `calculateVisibleRange()`, `autoFitZoom()`, `goToImage()` |
 | `logic_pipeline.js` | `updateDataPipeline()`, `executePipeline()`, `processNewData()`, `incrementalFilter()` |
+| `logic_wfparams.js` | `wfParamKeys()`, `wfParamValue/Number()`, `wfParamMatches()`, `wfShortLabel()`, `wfDisplay()` (pure; tests in `tests/js/wfparams.test.js`) |
 | `logic_ratings.js` | `computeBradleyTerry()`, `buildPairSource()`, `nextPair()`, `axisDiff()`, `computeScoreboard()` (pure; tests in `tests/js/ratings.test.js`, run `node --test tests/js/*.test.js`) |
 | `logic_compare.js` | `openCompareMode()`, `cmpVoteSide()`, `cmpUndo()`, `openScoreboard()`, `getItemRating()`, `compareRatings()`, `onComparisonsReplaced()` |
 | `logic_events.js` | Message handler for `progress_update`, `update_data`, `distribution_status` |

@@ -142,7 +142,8 @@ var labelMode = labelMode || {
         hiresPromptBehavior: false,
         hiresPromptText: false,
         rating: false,           // Pairwise-review rating badge
-        metrics: false
+        metrics: false,
+        wfParams: false          // Workflow Sweep: varied wf_params as tags
     }
 };
 

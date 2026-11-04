@@ -112,6 +112,25 @@ def _atomic_write_json(path, data):
         pass
 
 
+def update_meta(manifest_path, updates):
+    """
+    Locked read-modify-write of ONLY keys of the manifest's "meta" dict (items written since the
+    caller last looked are preserved). Raises on a missing/unreadable manifest; nothing is written then.
+    """
+    with _manifest_lock:
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("manifest is not a JSON object")
+        meta = data.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.update(updates)
+        data["meta"] = meta
+        _atomic_write_json(manifest_path, data)
+        return meta
+
+
 def update_manifest_comparisons(manifest_path, append=(), remove_keys=(), clear=False):
     """
     Locked read-modify-write of ONLY the "comparisons" list.
