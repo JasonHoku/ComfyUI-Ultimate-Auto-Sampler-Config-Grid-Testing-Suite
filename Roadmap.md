@@ -129,7 +129,7 @@ A button in the builder UI to pack short sha256 into config with an explanation 
 * **Problem:** Can only load full sessions, not merge snippets.
 
 
-#### **23. Pseudo-JSON Nodes (Recursion)** (low priority)
+#### **23. Pseudo-JSON Nodes (Recursion)** (low priority) - STARTED: v1 is the **Workflow Sweep** (Builder: Add Workflow Sweep): any API-format workflow runs as-is with chosen inputs swept (see README, 'Workflow Sweep'). Still open: inserting nodes into the USCG pipeline itself, video outputs, mixed workflow + standard runs.
 * **Problem:** Advanced. Running a raw JSON workflow as a sub-node. Inserting any node into any part of the genereation would make this tool have an immense customizability increase.
 More info needed on how this could work, would like to see a visual interface for it in the builder UI eventaully. (big job, very low priority)
 

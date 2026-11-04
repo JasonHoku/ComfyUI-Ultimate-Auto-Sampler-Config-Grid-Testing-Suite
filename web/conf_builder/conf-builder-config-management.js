@@ -31,6 +31,7 @@ import {
 } from './conf-builder-ui-components.js';
 
 import { renderDistributionSection, renderDistributionSettingsSection } from './conf-builder-distribution.js';
+import { createWorkflowArrayElement, renderWorkflowSweepSection, newWorkflowArray } from './conf-builder-workflow-sweep.js';
 
 // 3-level hierarchy: Model Type > Orientation > Sizes
 const RESOLUTION_PRESETS = {
@@ -172,6 +173,11 @@ function debouncedRenderUI(node, arrayIdx) {
  * Falls back to full renderUI if the target section isn't found in the DOM.
  */
 function rerenderConfigSection(node, arrayIdx) {
+    // Workflow Sweep arrays have their own section layout: always take the full re-render path
+    if (node.state.config_arrays[arrayIdx] && node.state.config_arrays[arrayIdx].kind === "workflow") {
+        debouncedRenderUI(node);
+        return;
+    }
     const target = document.getElementById(`cb-config-${arrayIdx}`);
     if (!target) {
         // Section not in DOM (collapsed or first render) — fall back to full render
@@ -7365,6 +7371,18 @@ export async function renderUI(node, availableLoras, modelLists, loraFolders, av
     };
     headerBar.appendChild(addConfigBtn);
 
+    // Workflow Sweep: sweep any API-format ComfyUI workflow (see conf-builder-workflow-sweep.js)
+    const addWorkflowBtn = document.createElement("button");
+    addWorkflowBtn.className = "cb-button primary";
+    addWorkflowBtn.textContent = "➕ Add Workflow Sweep";
+    addWorkflowBtn.title = "Sweep any ComfyUI API-format workflow through ComfyUI's own executor";
+    addWorkflowBtn.onclick = () => {
+        node.state.config_arrays.push(newWorkflowArray(node.state.config_arrays.length + 1));
+        node.saveState();
+        node.renderUI();
+    };
+    headerBar.appendChild(addWorkflowBtn);
+
     // Config Array Presets (save/load entire config arrays)
     const configPresetSelect = document.createElement("select");
     configPresetSelect.style.cssText = "background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; font-size: 10px; max-width: 140px;";
@@ -7481,6 +7499,14 @@ export async function renderUI(node, availableLoras, modelLists, loraFolders, av
     arraysContainer.className = "cb-arrays-container";
 
     node.state.config_arrays.forEach((configArray, arrayIdx) => {
+        if (configArray.kind === "workflow") {
+            // Workflow Sweep array: banner + prompts + workflow section (no models/LoRAs/VAEs)
+            const wfElement = createWorkflowArrayElement(node, configArray, arrayIdx, CONFIG_COLORS[arrayIdx % CONFIG_COLORS.length]);
+            renderConfigPromptsSection(node, wfElement, configArray, arrayIdx);
+            renderWorkflowSweepSection(node, wfElement, configArray, arrayIdx);
+            arraysContainer.appendChild(wfElement);
+            return;
+        }
         const arrayElement = createConfigArrayElement(node, configArray, arrayIdx, modelLists);
         renderConfigPromptsSection(node, arrayElement, configArray, arrayIdx);
         renderModelsSection(node, arrayElement, configArray, arrayIdx, modelLists);

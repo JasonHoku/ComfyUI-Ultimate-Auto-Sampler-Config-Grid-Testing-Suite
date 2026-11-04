@@ -1329,7 +1329,8 @@ function createCard(d) {
     const mediaElement = isVideo
         ? `<video ondblclick="toggleFavorite(this)" data-src="${d.file}" muted loop playsinline preload="metadata" draggable="false"></video>`
         : `<img ondblclick="toggleFavorite(this)" data-src="${d.file}" alt="Image ${d.id}" draggable="false">`;
-    const reviseBtn = isVideo ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">REVISE</button>`;
+    // Workflow Sweep items: the Revise modal builds a standard config and would lose the workflow template
+    const reviseBtn = (isVideo || d.model_type === 'workflow') ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">REVISE</button>`;
     const upscaleBtn = isVideo ? '' : `<button class="upscale-btn" onclick="openUpscaleModal(${d.id})" title="Upscale this image">\u2B06</button>`;
     const videoBadge = isVideo ? '<div class="video-badge">\u25B6 VIDEO</div>' : '';
 

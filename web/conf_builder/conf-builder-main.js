@@ -114,6 +114,7 @@ app.registerExtension({
                     use_master_encoding: false,
                     config_arrays: [{
                         name: "Config 1",
+                        kind: "standard",
                         samplers: ["euler", "dpmpp_2m"],
                         schedulers: ["normal", "karras"],
                         steps: "20, 30",
@@ -311,6 +312,7 @@ app.registerExtension({
                                     if (arr.slg_single_layers === undefined) arr.slg_single_layers = "22";
                                     if (arr.slg_start_percent === undefined) arr.slg_start_percent = 0.0;
                                     if (arr.slg_end_percent === undefined) arr.slg_end_percent = 0.5;
+                                    if (arr.kind === undefined) arr.kind = "standard";
                                 });
                             }
 
@@ -461,6 +463,7 @@ app.registerExtension({
                                     if (arr.slg_single_layers === undefined) arr.slg_single_layers = "22";
                                     if (arr.slg_start_percent === undefined) arr.slg_start_percent = 0.0;
                                     if (arr.slg_end_percent === undefined) arr.slg_end_percent = 0.5;
+                                    if (arr.kind === undefined) arr.kind = "standard";
                                 });
 
                                 this.state.config_arrays = loadedArrays;
@@ -637,6 +640,7 @@ app.registerExtension({
                                 if (arr.slg_single_layers === undefined) arr.slg_single_layers = "22";
                                 if (arr.slg_start_percent === undefined) arr.slg_start_percent = 0.0;
                                 if (arr.slg_end_percent === undefined) arr.slg_end_percent = 0.5;
+                                if (arr.kind === undefined) arr.kind = "standard";
                             });
                         } else if (existing.lora_config) {
                             this.state = this.migrateOldFormat(existing);
