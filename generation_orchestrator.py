@@ -16,7 +16,7 @@ import comfy.sd  # Required for async workers
 from comfy.model_management import InterruptProcessingException
 
 from .trigger_words import collect_unique_prompts_with_triggers, build_prompt_with_triggers, clear_trigger_caches
-from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators, pinned_clip
+from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators, pinned_clip, DEFAULT_TE_BATCH_SIZE
 from .manifest_utils import load_existing_manifest, save_manifest
 from .model_loader import (
     load_checkpoint, load_loras, cleanup_model_references,
@@ -1152,9 +1152,20 @@ def run_generation_loop(
         if clip_skip != 0:
             print(f"[GridTester] 🔧 Using clip_skip={clip_skip}")
 
+        # Text-encoder batching (several prompts per TE forward). Session-level Run Setting;
+        # te_batch_verify is a hidden dev key (never emitted by the Builder) used by the live check.
+        try:
+            te_batch_size = max(1, int((session_settings or {}).get("te_batch_size", DEFAULT_TE_BATCH_SIZE)))
+        except (TypeError, ValueError):
+            te_batch_size = DEFAULT_TE_BATCH_SIZE
+        te_batch_verify = bool((session_settings or {}).get("te_batch_verify", False))
+        if te_batch_size > 1:
+            print(f"[GridTester] ⚙️ te_batch_size={te_batch_size} (text-encoder batching)")
+
         try:
             conditioning_cache = batch_encode_prompts(
-                patched_clip, unique_positives, unique_negatives, cond_cache, clip_skip, enable_disk_cache=save_conditioning_cache_to_file
+                patched_clip, unique_positives, unique_negatives, cond_cache, clip_skip, enable_disk_cache=save_conditioning_cache_to_file,
+                te_batch_size=te_batch_size, te_batch_verify=te_batch_verify
             )
         except InterruptProcessingException:
             print(f"\n[GridTester] 🛑 INTERRUPTED during pre-encoding - Stopping all jobs")

@@ -200,3 +200,21 @@ def test_legacy_dual_array_preserves_cartesian_form():
     expected = "legacyLora:[0.5, 1.0]:[0.7, 1.0]"
     assert any(l == expected for l in loras), \
         f"Expected legacy dual-array form {expected!r}. Got: {loras}"
+
+
+def _te_batch_size_for(**overrides):
+    state = make_state()
+    state.update(overrides)
+    parsed = json.loads(UltimateConfigBuilder.state_to_configs_json(state))
+    return parsed["_session_settings"]["te_batch_size"]
+
+
+def test_te_batch_size_defaults_off_and_is_clamped():
+    """te_batch_size is a session-level Run Setting: default 1 (off), junk/<1 -> 1."""
+    assert _te_batch_size_for() == 1
+    assert _te_batch_size_for(te_batch_size=8) == 8
+    assert _te_batch_size_for(te_batch_size="8") == 8
+    assert _te_batch_size_for(te_batch_size="junk") == 1
+    assert _te_batch_size_for(te_batch_size=None) == 1
+    assert _te_batch_size_for(te_batch_size=0) == 1
+    assert _te_batch_size_for(te_batch_size=-3) == 1

@@ -5,8 +5,10 @@ Supports prompt combinators: AND, CAT, AVG(), BREAK (native).
 """
 
 import contextlib
+import numbers
 import re
 import time
+import weakref
 import torch
 import gc
 import comfy.model_management
@@ -93,10 +95,376 @@ def encode_pair_cached(clip_model, cache, positive, negative, clip_skip=0):
 
 
 # ============================================================
+# === SEVERAL PROMPTS THROUGH ONE TEXT-ENCODER FORWARD ===
+# ============================================================
+# MOSS-Image's Qwen3.5-9B encoder spends ~0.55 s per forward in fixed overhead
+# (24 Gated DeltaNet layers, each a 63-iteration Python loop that doesn't depend on
+# the batch size). Encoding B prompts in ONE forward amortises it.
+#
+# Design "batched forward, per-prompt replay": the INNER model's ``encode`` (the call
+# ClipTokenWeightEncoder.encode_token_weights makes) is shadowed by a replay object.
+# The first call runs the real encode on the right-padded batch; every call returns
+# that prompt's slice, shaped exactly like a one-row forward. The existing
+# ``_encode_single`` then runs per prompt, so template stripping, mask popping,
+# clip_skip, device moves and dict building are the unmodified single-prompt code.
+
+# Default for the ``te_batch_size`` Run Setting. 1 = off (today's per-prompt path).
+DEFAULT_TE_BATCH_SIZE = 1
+
+# clip_name -> family label. An allowlist: a family is added only after the live check passes.
+TE_BATCH_FAMILIES = {"qwen35_9b": "MOSS-Image", "qwen3vl_4b": "Krea 2", "qwen25_7b": "Qwen-Image"}
+TE_BATCH_MAX_TOKENS = 4096        # cap on rows * longest-row tokens per forward (memory guard)
+TE_BATCH_SELFCHECK_RELL2 = 1e-3   # batched vs single cond tolerance
+
+_TE_BATCH_DISABLED = weakref.WeakSet()
+_TE_BATCH_DISABLED_IDS = set()    # fallback for objects that cannot be weak-referenced
+
+
+class _TEBatchUnsupported(Exception):
+    """The encoder's output didn't have the shape the batched path relies on."""
+
+
+def _te_disabled(clip_model):
+    try:
+        return clip_model in _TE_BATCH_DISABLED
+    except TypeError:
+        return id(clip_model) in _TE_BATCH_DISABLED_IDS
+
+
+def _te_disable(clip_model):
+    try:
+        _TE_BATCH_DISABLED.add(clip_model)
+    except TypeError:
+        _TE_BATCH_DISABLED_IDS.add(id(clip_model))
+
+
+def _te_batch_target(clip_model):
+    """-> ((inner, clip_name, pad_id), None) when this CLIP can batch, else (None, reason)."""
+    csm = getattr(clip_model, "cond_stage_model", None)
+    clip_attr = getattr(csm, "clip", None)
+    clip_name = getattr(csm, "clip_name", None)
+    if not isinstance(clip_attr, str) or not isinstance(clip_name, str):
+        return None, "multi-encoder or unsupported CLIP wrapper"
+    if clip_name not in TE_BATCH_FAMILIES:
+        return None, f"{clip_name} is not a verified batchable encoder"
+    inner = getattr(csm, clip_attr, None)
+    if inner is None or not callable(getattr(inner, "encode", None)) or not callable(getattr(inner, "process_tokens", None)):
+        return None, "encoder has no encode/process_tokens"
+    if getattr(inner, "enable_attention_masks", None) is not True or getattr(inner, "return_attention_masks", None) is not True:
+        return None, "encoder does not use attention masks"
+    special = getattr(inner, "special_tokens", None) or {}
+    if special.get("end") is not None:
+        return None, "encoder has an end token"
+    pad = special.get("pad")
+    if not isinstance(pad, numbers.Integral) or isinstance(pad, bool):
+        return None, "encoder has no pad token"
+    if getattr(clip_model, "use_clip_schedule", False):
+        return None, "scheduled CLIP"
+    if "encode" in vars(inner):
+        return None, "encoder already wrapped"
+    return (inner, clip_name, int(pad)), None
+
+
+def _batchable_ids(clip_model, text, clip_name, pad_id):
+    """-> ((tokens_dict, ids_list), None) or (None, reason). Tokenises ONCE; the dict is reused for the encode."""
+    if _has_combinators(text) or "BREAK" in text:
+        return None, "combinator"
+    tokens = clip_model.tokenize(text)
+    if list(tokens) != [clip_name] or len(tokens[clip_name]) != 1:
+        return None, "multi-section"
+    ids = []
+    for item in tokens[clip_name][0]:
+        if not isinstance(item, (tuple, list)) or len(item) < 2:
+            return None, "unexpected token entry"
+        t, w = item[0], item[1]
+        if not isinstance(t, numbers.Integral) or isinstance(t, bool):
+            return None, "embedding or image token"
+        if w != 1.0:
+            return None, "weighted"
+        ids.append(int(t))
+    if not ids:
+        return None, "empty"
+    if pad_id in ids:
+        return None, "pad id inside prompt"
+    return (tokens, ids), None
+
+
+def _own(t):
+    return t.clone() if hasattr(t, "clone") else t.copy()
+
+
+class _ReplayEncode:
+    """Stands in for ``inner.encode``: one real forward on the padded batch, then per-prompt slices."""
+
+    def __init__(self, real_encode, id_lists, pad_id):
+        self.real = real_encode
+        self.id_lists = id_lists
+        self.pad = pad_id
+        self.index = {tuple(ids): i for i, ids in enumerate(id_lists)}
+        self.T = max(len(ids) for ids in id_lists)
+        self.out = None
+        self.forwards = 0
+        self.misses = 0
+
+    def __call__(self, to_encode):
+        key = tuple(to_encode[0]) if len(to_encode) == 1 else None
+        if key not in self.index:
+            self.misses += 1  # safety net: unknown input runs the normal single path
+            return self.real(to_encode)
+        if self.out is None:
+            padded = [list(ids) + [self.pad] * (self.T - len(ids)) for ids in self.id_lists]
+            self.out = self.real(padded)
+            self.forwards += 1
+        return self._slice(self.index[key])
+
+    def _slice(self, i):
+        out = self.out
+        z, pooled = out[0], out[1]
+        B = len(self.id_lists)
+        L = len(self.id_lists[i])
+        if len(z.shape) < 2 or z.shape[0] != B or z.shape[-2] != self.T:
+            raise _TEBatchUnsupported(f"unexpected output shape {tuple(z.shape)}")
+        if pooled is not None:
+            raise _TEBatchUnsupported("pooled output")  # EOS-position pooled would move with padding
+        z_i = _own(z[i:i + 1, ..., :L, :])
+        if len(out) == 2:
+            return (z_i, None)
+        extra_i = {}
+        for k, v in out[2].items():
+            if k == "attention_mask":
+                if int(v[i].sum()) != L:
+                    raise _TEBatchUnsupported("attention mask length mismatch")
+                extra_i[k] = _own(v[i:i + 1, :L])
+            elif hasattr(v, "shape") and len(v.shape) and v.shape[0] == B:
+                extra_i[k] = _own(v[i:i + 1])
+            else:
+                raise _TEBatchUnsupported(f"extra output {k}")
+        return (z_i, None, extra_i)
+
+
+def _tensor_stats(a, b):
+    """-> (||a-b||, ||b||, max|a-b|) for torch tensors or numpy arrays."""
+    if hasattr(a, "detach"):
+        a32, b32 = a.detach().float(), b.detach().float()
+        d = a32 - b32
+        return float(d.norm()), float(b32.norm()), (float(d.abs().max()) if d.numel() else 0.0)
+    import numpy as np
+    a64, b64 = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
+    d = a64 - b64
+    return float(np.linalg.norm(d)), float(np.linalg.norm(b64)), (float(np.abs(d).max()) if d.size else 0.0)
+
+
+def _compare_conds(batched, single):
+    """-> (ok, reason, worst_relL2, worst_maxabs, shapes_equal). Compares keys, shapes, dtypes and values."""
+    if len(batched) != len(single):
+        return False, "conditioning length differs", 0.0, 0.0, False
+    worst_rel = worst_abs = 0.0
+    for (ca, da), (cb, db) in zip(batched, single):
+        pairs = [("cond", ca, cb)]
+        if sorted(da) != sorted(db):
+            return False, f"keys differ {sorted(da)} vs {sorted(db)}", worst_rel, worst_abs, False
+        for k in da:
+            pairs.append((k, da[k], db[k]))
+        for name, a, b in pairs:
+            if hasattr(a, "shape") or hasattr(b, "shape"):
+                if not (hasattr(a, "shape") and hasattr(b, "shape")) or tuple(a.shape) != tuple(b.shape):
+                    return False, f"{name} shape differs", worst_rel, worst_abs, False
+                if str(a.dtype) != str(b.dtype):
+                    return False, f"{name} dtype differs", worst_rel, worst_abs, False
+                dn, bn, mx = _tensor_stats(a, b)
+                worst_rel = max(worst_rel, dn / max(bn, 1e-12))
+                worst_abs = max(worst_abs, mx)
+            elif a != b:
+                return False, f"{name} value differs", worst_rel, worst_abs, True
+    ok = worst_rel <= TE_BATCH_SELFCHECK_RELL2
+    return ok, ("" if ok else f"relL2 {worst_rel:.2e} > {TE_BATCH_SELFCHECK_RELL2:g}"), worst_rel, worst_abs, True
+
+
+def _is_oom(e):
+    oom = getattr(comfy.model_management, "OOM_EXCEPTION", None)
+    if isinstance(oom, type) and isinstance(e, oom):
+        return True
+    return "out of memory" in str(e).lower()
+
+
+def encode_prompts_batched(clip_model, prompts, batch_size, clip_skip=0, verify=False):
+    """
+    Encode as many ``prompts`` as possible several-at-a-time in one text-encoder forward.
+
+    Returns (results: dict prompt -> conditioning, leftovers: list[str], stats: dict).
+    ``leftovers`` are prompts the caller must still encode the normal way (ineligible
+    prompt/encoder, singleton batches, failures). ``batch_size <= 1`` returns everything as
+    leftovers and touches nothing. The first batch of every call is self-checked against a
+    single-prompt encode of its shortest prompt (most padding); on mismatch batching is
+    disabled for this CLIP and every prompt is returned as a leftover.
+    """
+    prompts = list(prompts)
+    stats = {"batched": 0, "forwards": 0, "max_rows": 0, "reason": None, "verify": None}
+    try:
+        batch_size = int(batch_size)
+    except (TypeError, ValueError):
+        batch_size = 1
+    if batch_size <= 1 or not prompts:
+        return {}, prompts, stats
+    if _te_disabled(clip_model):
+        stats["reason"] = "disabled earlier in this run (self-check or unsupported output)"
+        return {}, prompts, stats
+    target, reason = _te_batch_target(clip_model)
+    if target is None:
+        stats["reason"] = reason
+        return {}, prompts, stats
+    inner, clip_name, pad_id = target
+
+    # eligibility + dedupe by token ids
+    tok = {}
+    by_ids = {}
+    for p in prompts:
+        got, _why = _batchable_ids(clip_model, p, clip_name, pad_id)
+        if got is None:
+            continue
+        tok[p] = got[0]
+        by_ids.setdefault(tuple(got[1]), []).append(p)
+    order = sorted(by_ids, key=len, reverse=True)  # longest first, stable
+
+    results = {}
+    singles = set()   # prompts that go the legacy way (singleton batches / OOM at 1)
+    state = {"bs": batch_size, "forwards": 0, "max_rows": 0, "checked": False, "worst_rel": 0.0,
+             "worst_abs": 0.0, "shapes_equal": True, "verified": 0, "verify_fail": 0}
+
+    def _fail(why):
+        _te_disable(clip_model)
+        print(f"[GridTester] ⚠️ TE batching self-check failed ({why}) - encoding per prompt")
+        return {}, prompts, stats
+
+    def _interrupted():
+        if comfy.model_management.processing_interrupted():
+            print(f"\n[GridTester] 🛑 INTERRUPTED during text-encoder batching - Stopping all encoding")
+            raise comfy.model_management.InterruptProcessingException()
+
+    def _run(batch):
+        """Encode ``batch`` (list of ids tuples) in one forward. Returns {prompt: cond}."""
+        id_lists = [list(ids) for ids in batch]
+        replay = _ReplayEncode(inner.encode, id_lists, pad_id)
+        local = {}
+        inner.encode = replay
+        try:
+            for ids in batch:
+                _interrupted()
+                p = by_ids[ids][0]
+                local[p] = _encode_single(clip_model, p, clip_skip, tokens=tok[p])
+        finally:
+            # always un-shadow, whatever happened (incl. CUDA OOM / interrupt)
+            vars(inner).pop("encode", None)
+            replay.out = None
+        if replay.misses:
+            raise _TEBatchUnsupported("replay miss")
+        state["forwards"] += replay.forwards
+        state["max_rows"] = max(state["max_rows"], len(batch))
+        return local
+
+    def _single_ref(p):
+        return _encode_single(clip_model, p, clip_skip, tokens=tok[p])
+
+    def _accept(batch, local):
+        """Self-check (first batch) / verify (dev), then merge. Returns a failure reason or None."""
+        skip = None
+        if not state["checked"]:
+            skip = by_ids[batch[-1]][0]  # shortest prompt of the first batch = most padding
+            ref = _single_ref(skip)
+            ok, why, rel, mx, same = _compare_conds(local[skip], ref)
+            if not ok:
+                return why
+            local[skip] = ref
+            state["checked"] = True
+            state["worst_rel"] = max(state["worst_rel"], rel)
+            state["worst_abs"] = max(state["worst_abs"], mx)
+        if verify:
+            for ids in batch:
+                p = by_ids[ids][0]
+                state["verified"] += 1
+                if p == skip:
+                    continue
+                ok, why, rel, mx, same = _compare_conds(local[p], _single_ref(p))
+                state["worst_rel"] = max(state["worst_rel"], rel)
+                state["worst_abs"] = max(state["worst_abs"], mx)
+                state["shapes_equal"] = state["shapes_equal"] and same
+                if not ok:
+                    state["verify_fail"] += 1
+        results.update(local)
+        return None
+
+    def _process(batch):
+        try:
+            local = _run(batch)
+        except comfy.model_management.InterruptProcessingException:
+            raise
+        except _TEBatchUnsupported:
+            raise
+        except Exception as e:
+            if not _is_oom(e):
+                raise
+            try:
+                comfy.model_management.soft_empty_cache()
+            except Exception:
+                pass
+            if len(batch) <= 1:
+                singles.update(by_ids[batch[0]])
+                return None
+            half = len(batch) // 2
+            print(f"[GridTester] ⚠️ TE batch OOM at B={len(batch)} - retrying at B={half}")
+            state["bs"] = min(state["bs"], half)
+            for part in (batch[:half], batch[half:]):
+                if len(part) <= 1:
+                    singles.update(by_ids[part[0]])
+                else:
+                    bad = _process(part)
+                    if bad:
+                        return bad
+            return None
+        return _accept(batch, local)
+
+    pending = list(order)
+    try:
+        while pending:
+            _interrupted()
+            tmax = len(pending[0])
+            n = 1
+            while n < state["bs"] and n < len(pending) and (n + 1) * tmax <= TE_BATCH_MAX_TOKENS:
+                n += 1
+            batch, pending = pending[:n], pending[n:]
+            if len(batch) == 1:
+                singles.update(by_ids[batch[0]])
+                continue
+            bad = _process(batch)
+            if bad:
+                return _fail(bad)
+    except _TEBatchUnsupported as e:
+        return _fail(f"unsupported encoder output: {e}")
+
+    # prompts that tokenised identically to a batched one share its conditioning
+    for plist in by_ids.values():
+        if plist[0] in results:
+            for other in plist[1:]:
+                results[other] = results[plist[0]]
+    leftovers = [p for p in prompts if p not in results]
+    stats["batched"] = len(results)
+    stats["forwards"] = state["forwards"]
+    stats["max_rows"] = state["max_rows"]
+    if verify and state["verified"]:
+        print(f"[GridTester] 🧪 TE batch verify: {state['verified']} prompts, worst relL2={state['worst_rel']:.2e}, "
+              f"worst max|Δ|={state['worst_abs']:.2e}, shapes equal: {'yes' if state['shapes_equal'] else 'no'}"
+              f"{'' if not state['verify_fail'] else ', FAILED: ' + str(state['verify_fail'])}")
+        stats["verify"] = {"prompts": state["verified"], "worst_rel": state["worst_rel"],
+                           "worst_abs": state["worst_abs"], "shapes_equal": state["shapes_equal"],
+                           "failed": state["verify_fail"]}
+    return results, leftovers, stats
+
+
+# ============================================================
 # === PROMPT COMBINATOR ENCODING (AND / CAT / AVG / BREAK) ===
 # ============================================================
 
-def _encode_single(clip_model, text, clip_skip=0):
+def _encode_single(clip_model, text, clip_skip=0, tokens=None):
     """
     Encode a single text segment. BREAK is handled natively by clip.tokenize().
 
@@ -104,6 +472,8 @@ def _encode_single(clip_model, text, clip_skip=0):
         clip_model: CLIP model instance
         text: Prompt text (may contain BREAK keyword)
         clip_skip: CLIP layer skip value
+        tokens: Pre-tokenized ``clip_model.tokenize(text)`` result (the batched
+            text-encoder path tokenises once to check eligibility and reuses it)
 
     Returns:
         Conditioning list: [[cond_tensor, pooled_dict]]
@@ -113,15 +483,23 @@ def _encode_single(clip_model, text, clip_skip=0):
         original_layer = clip_model.cond_stage_model.clip_layer
         clip_model.cond_stage_model.set_clip_options({"layer": clip_skip})
 
-    tokens = clip_model.tokenize(text)  # BREAK handled natively here
-    pooled_dict = clip_model.encode_from_tokens(tokens, return_pooled=True, return_dict=True)
+    try:
+        if tokens is None:
+            tokens = clip_model.tokenize(text)  # BREAK handled natively here
+        pooled_dict = clip_model.encode_from_tokens(tokens, return_pooled=True, return_dict=True)
+    finally:
+        # restore even when the encode raises (e.g. CUDA OOM that the batched path retries)
+        if original_layer is not None:
+            clip_model.cond_stage_model.set_clip_options({"layer": original_layer})
     cond = pooled_dict.pop("cond")
     result = [[cond, pooled_dict]]
 
-    if original_layer is not None:
-        clip_model.cond_stage_model.set_clip_options({"layer": original_layer})
-
     return result
+
+
+def _has_combinators(prompt):
+    """True when the prompt uses AND / CAT / AVG() (the slow path of encode_prompt_with_combinators)."""
+    return ' AND ' in prompt or ' CAT ' in prompt or 'AVG(' in prompt
 
 
 def _parse_and_segments(prompt):
@@ -268,7 +646,7 @@ def encode_prompt_with_combinators(clip_model, prompt, clip_skip=0):
         Conditioning list: [[cond_tensor, pooled_dict], ...]
     """
     # Fast path: if no combinators present, use direct encoding
-    if ' AND ' not in prompt and ' CAT ' not in prompt and 'AVG(' not in prompt:
+    if not _has_combinators(prompt):
         return _encode_single(clip_model, prompt, clip_skip)
 
     # 1. Split on AND
@@ -317,7 +695,8 @@ def encode_prompt_with_combinators(clip_model, prompt, clip_skip=0):
     return final
 
 
-def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positive", batch_size=64, clip_skip=0):
+def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positive", batch_size=64, clip_skip=0,
+                            te_batch_size=DEFAULT_TE_BATCH_SIZE, te_batch_verify=False):
     """
     Batch encode prompts while checking persistent cache first.
     Only encodes prompts that aren't already cached.
@@ -329,6 +708,9 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
         prompt_type: "positive" or "negative"
         batch_size: Number of prompts to encode at once
         clip_skip: Number of CLIP layers to skip from the end (0 = use last layer, -1 = skip 1 layer, -2 = skip 2 layers)
+        te_batch_size: Encode up to this many eligible prompts per text-encoder forward
+            (MOSS-Image / Krea 2 / Qwen-Image only; 1 = off, the per-prompt path)
+        te_batch_verify: Dev only. Re-encode every batched prompt singly and print the worst difference
         
     Returns:
         dict: Mapping of prompt text to conditioning tensors
@@ -360,10 +742,28 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
         # the whole loop; without it ComfyUI re-prepares it on every single encode.
         _t_enc_start = time.time()
         
-        prompts_list = list(prompts_to_encode)
-        total_batches = (len(prompts_list) + batch_size - 1) // batch_size
+        prompts_all = list(prompts_to_encode)
+        prompts_list = prompts_all
+        te_stats = None
         
-        with torch.no_grad(), pinned_clip(clip_model, prompts_list):
+        with torch.no_grad(), pinned_clip(clip_model, prompts_all):
+            if te_batch_size and te_batch_size > 1:
+                # Several prompts per text-encoder forward; whatever can't be batched comes
+                # back as leftovers and takes the unchanged per-prompt loop below.
+                try:
+                    batched, prompts_list, te_stats = encode_prompts_batched(
+                        clip_model, prompts_all, te_batch_size, clip_skip, te_batch_verify)
+                except comfy.model_management.InterruptProcessingException:
+                    raise
+                except Exception as e:
+                    print(f"[GridTester] ⚠️ TE batching failed ({e}) - encoding per prompt")
+                    batched, prompts_list, te_stats = {}, prompts_all, None
+                for prompt, conditioning in batched.items():
+                    results[prompt] = conditioning
+                    cond_cache.set(prompt, conditioning, prompt_type)
+                if te_stats and te_stats.get("reason"):
+                    print(f"[GridTester] ℹ️ TE batching off for this encoder ({te_stats['reason']})")
+            total_batches = (len(prompts_list) + batch_size - 1) // batch_size
             for batch_idx in range(0, len(prompts_list), batch_size):
                 batch_prompts = prompts_list[batch_idx:batch_idx + batch_size]
                 current_batch = (batch_idx // batch_size) + 1
@@ -399,14 +799,22 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
                     print(f"[GridTester]   Batch {current_batch}/{total_batches} | Encoded {encoded_count}/{len(prompts_list)}")
         
         _enc_elapsed = time.time() - _t_enc_start
-        _per_prompt_ms = (_enc_elapsed / len(prompts_list) * 1000.0) if prompts_list else 0.0
-        print(f"[GridTester] ✅ Batch encoding complete! {len(prompts_list)} prompts in {_enc_elapsed:.1f}s "
-              f"({_per_prompt_ms:.0f} ms/prompt, encoder prepared once)")
+        _per_prompt_ms = (_enc_elapsed / len(prompts_all) * 1000.0) if prompts_all else 0.0
+        _te_note = ""
+        if te_stats and te_stats.get("batched"):
+            _te_note = (f"; {te_stats['batched']} batched in {te_stats['forwards']} forwards of <={te_stats['max_rows']}, "
+                        f"{len(prompts_list)} per-prompt")
+            if te_stats.get("verify"):
+                v = te_stats["verify"]
+                _te_note += f", verify worst relL2={v['worst_rel']:.1e}"
+        print(f"[GridTester] ✅ Batch encoding complete! {len(prompts_all)} prompts in {_enc_elapsed:.1f}s "
+              f"({_per_prompt_ms:.0f} ms/prompt, encoder prepared once{_te_note})")
     
     return results
 
 
-def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_cache, clip_skip=0, enable_disk_cache=True):
+def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_cache, clip_skip=0, enable_disk_cache=True,
+                         te_batch_size=DEFAULT_TE_BATCH_SIZE, te_batch_verify=False):
     """
     Batch encode both positive and negative prompts.
     
@@ -417,6 +825,8 @@ def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_
         cond_cache: ConditioningCache instance
         clip_skip: Number of CLIP layers to skip from the end
         enable_disk_cache: Whether to save cache to disk (passed through to cache)
+        te_batch_size: Prompts per text-encoder forward (1 = off), see batch_encode_with_cache
+        te_batch_verify: Dev only, see batch_encode_with_cache
         
     Returns:
         dict: conditioning_cache with "positive" and "negative" keys
@@ -437,7 +847,9 @@ def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_
             cond_cache, 
             prompt_type="positive",
             batch_size=16,
-            clip_skip=clip_skip
+            clip_skip=clip_skip,
+            te_batch_size=te_batch_size,
+            te_batch_verify=te_batch_verify
         )
 
         conditioning_cache["negative"] = batch_encode_with_cache(
@@ -446,7 +858,9 @@ def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_
             cond_cache, 
             prompt_type="negative",
             batch_size=16,
-            clip_skip=clip_skip
+            clip_skip=clip_skip,
+            te_batch_size=te_batch_size,
+            te_batch_verify=te_batch_verify
         )
     
     # Save and print cache stats (only saves if disk cache is enabled)

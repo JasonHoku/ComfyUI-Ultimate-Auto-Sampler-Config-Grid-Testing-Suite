@@ -928,6 +928,12 @@ class UltimateConfigBuilder:
             session_settings["vae_batch_size"] = int(state.get("vae_batch_size", 1))
         except (TypeError, ValueError):
             session_settings["vae_batch_size"] = 1
+        # Text-encoder batching: prompts per TE forward (1 = off). Session-level like vae_batch_size.
+        from .batch_encoding import DEFAULT_TE_BATCH_SIZE
+        try:
+            session_settings["te_batch_size"] = max(1, int(state.get("te_batch_size", DEFAULT_TE_BATCH_SIZE)))
+        except (TypeError, ValueError):
+            session_settings["te_batch_size"] = DEFAULT_TE_BATCH_SIZE
 
         # session_name moves into session_settings too so the Generator's
         # session_name widget can be removed (Phase 2).

@@ -99,6 +99,7 @@ _GEN_ORCH_DEPS = {
     },
     "batch_encoding": {
         "batch_encode_prompts": lambda *a, **kw: None,
+        "DEFAULT_TE_BATCH_SIZE": 1,
         "encode_prompt_with_combinators": lambda *a, **kw: None,
         "pinned_clip": lambda clip=None, *a, **kw: __import__("contextlib").nullcontext(clip),
         "encode_pair_cached": lambda *a, **kw: (None, None),

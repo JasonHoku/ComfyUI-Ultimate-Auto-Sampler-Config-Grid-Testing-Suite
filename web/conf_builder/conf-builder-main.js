@@ -211,7 +211,8 @@ app.registerExtension({
                     save_conditioning_cache_to_file: false,
                     enable_model_cache: false,
                     vae_batch_size: 1,
-                    add_random_seeds_to_gens: 0
+                    add_random_seeds_to_gens: 0,
+                    te_batch_size: 1
                 };
 
                 // Create HTML container immediately
@@ -323,6 +324,7 @@ app.registerExtension({
                             if (this.state.enable_model_cache === undefined) this.state.enable_model_cache = false;
                             if (this.state.vae_batch_size === undefined) this.state.vae_batch_size = 1;
                             if (this.state.add_random_seeds_to_gens === undefined) this.state.add_random_seeds_to_gens = 0;
+                            if (this.state.te_batch_size === undefined) this.state.te_batch_size = 1;
 
                             this.saveState();
                             this.renderUI();
