@@ -124,6 +124,17 @@ def _apply_model_patch_node(node_id, model, label=None, **kwargs):
         return model
 
 
+def pil_to_image_array(pil_image):
+    """PIL image -> float32 numpy [1, H, W, 3] in [0, 1] (ComfyUI IMAGE layout, BHWC).
+
+    Wrap in torch.from_numpy() for VAE.encode() / node inputs. Same conversion as
+    seedvr2_upscale() and the Florence2 inline branch use. Pure numpy, no inference.
+    """
+    import numpy as np
+    arr = np.array(pil_image.convert("RGB")).astype(np.float32) / 255.0
+    return arr[None, ...]
+
+
 # NOTE: torch.inference_mode() decorator — see module docstring above for why
 # this is REQUIRED on all out-of-graph inference entry points. Removing it
 # will reintroduce the same 6× VRAM blowup we fixed in May 2026.
@@ -1207,17 +1218,6 @@ def flush_batch_with_remote_vae(pending_batch, remote_vae_worker, existing_data,
 # to SDXL KSampler. The CurrentNodeContext below sets up V3-API execution but
 # does NOT include inference_mode — that's our job at the function boundary.
 @torch.inference_mode()
-def pil_to_image_array(pil_image):
-    """PIL image -> float32 numpy [1, H, W, 3] in [0, 1] (ComfyUI IMAGE layout, BHWC).
-
-    Wrap in torch.from_numpy() for VAE.encode() / node inputs. Same conversion as
-    seedvr2_upscale() and the Florence2 inline branch use.
-    """
-    import numpy as np
-    arr = np.array(pil_image.convert("RGB")).astype(np.float32) / 255.0
-    return arr[None, ...]
-
-
 def seedvr2_upscale(pil_image, seedvr2_config):
     """
     Upscale an image using SeedVR2 diffusion-based upscaler.
