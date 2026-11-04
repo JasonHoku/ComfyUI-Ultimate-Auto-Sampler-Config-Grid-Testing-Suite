@@ -205,6 +205,7 @@ app.registerExtension({
                         clear_vram: false
                     },
                     image_format: "webp",
+                    metrics: { enabled: false, builtins: { sharpness: true, entropy: true, colorfulness: true, contrast: true, luma: true, saturation: true }, adapters: {} },
                     overwrite_existing: false,
                     flush_batch_every: 1,
                     lora_triggerwords_mode: "None",
@@ -333,6 +334,13 @@ app.registerExtension({
                             if (this.state.preview_pass === undefined) this.state.preview_pass = { enabled: false, steps: 8, scale: 0.5, cfg_override: null };
                             if (this.state.skip_rejected_previews === undefined) this.state.skip_rejected_previews = true;
                             if (this.state.only_favorited_previews === undefined) this.state.only_favorited_previews = false;
+                            // Migration: optional image metrics (session-level, default OFF)
+                            if (!this.state.metrics || typeof this.state.metrics !== "object") this.state.metrics = { enabled: false, builtins: {}, adapters: {} };
+                            if (!this.state.metrics.builtins) this.state.metrics.builtins = {};
+                            if (!this.state.metrics.adapters) this.state.metrics.adapters = {};
+                            ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation"].forEach(k => {
+                                if (this.state.metrics.builtins[k] === undefined) this.state.metrics.builtins[k] = true;
+                            });
 
                             this.saveState();
                             this.renderUI();

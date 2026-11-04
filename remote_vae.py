@@ -6,6 +6,8 @@ import threading
 import time
 import numpy as np
 from PIL import Image
+
+from . import image_metrics
 try:
     from diffusers.image_processor import VaeImageProcessor
 except ImportError as e:
@@ -152,6 +154,8 @@ class RemoteVAEDecodeWorker:
         if fmt not in ("webp", "png", "jpg", "jpeg"):
             fmt = "webp"
         self.image_format = fmt
+        # Captured now so a late worker thread is unaffected by end_run() ordering
+        self._metrics_spec = image_metrics.current_spec()
         self.queue = queue.Queue()
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
@@ -224,6 +228,9 @@ class RemoteVAEDecodeWorker:
                     "rejected": False
                 })
                 
+                # Optional image metrics from the postprocessed [B,C,H,W] 0-1 tensor
+                image_metrics.attach(meta, result[:1], spec=self._metrics_spec)
+
                 # Update manifest
                 import json
                 self.existing_data["items"].insert(0, meta)

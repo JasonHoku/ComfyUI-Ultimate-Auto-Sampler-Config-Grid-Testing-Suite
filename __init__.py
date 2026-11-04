@@ -1417,6 +1417,44 @@ async def cancel_upscale(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
+# --- Image metrics for an EXISTING session (background job, CPU only) ---
+@server.PromptServer.instance.routes.post("/config_tester/compute_metrics")
+async def compute_metrics(request):
+    """Start a job that computes image metrics for the session's items that have none."""
+    try:
+        data = await request.json()
+        session_name = re.sub(r'[^\w\-]', '', str(data.get("session_name") or ""))
+        if not session_name:
+            return web.json_response({"error": "Missing session_name"}, status=400)
+        base_dir = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name)
+        if not _is_path_within(base_dir, _get_benchmarks_base()):
+            return web.json_response({"error": "Forbidden: path outside benchmarks directory"}, status=403)
+        from .metrics_runner import start_metrics_job, get_metrics_status
+        job_id, error = start_metrics_job(session_name, overwrite=bool(data.get("overwrite", False)))
+        if error:
+            return web.json_response({"error": error}, status=400)
+        return web.json_response({"job_id": job_id, "total_images": get_metrics_status(job_id)["total"]})
+    except Exception as e:
+        print(f"[ConfigTester] Error starting metrics job: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+@server.PromptServer.instance.routes.get("/config_tester/metrics_status")
+async def metrics_status(request):
+    job_id = request.query.get("job_id", "")
+    if not job_id:
+        return web.json_response({"error": "Missing job_id"}, status=400)
+    from .metrics_runner import get_metrics_status
+    return web.json_response(get_metrics_status(job_id))
+
+@server.PromptServer.instance.routes.post("/config_tester/cancel_metrics")
+async def cancel_metrics(request):
+    try:
+        data = await request.json()
+        from .metrics_runner import cancel_metrics_job
+        return web.json_response({"cancelled": cancel_metrics_job(data.get("job_id", ""))})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
 
 def _create_image_links(source_dir, link_dir, items):
     """

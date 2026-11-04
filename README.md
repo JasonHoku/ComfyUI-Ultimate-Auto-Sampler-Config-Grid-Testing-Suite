@@ -186,6 +186,7 @@ If you'd rather build the graph yourself:
 * **Seed Behavior Settings:** Per-config seed control — `fixed` uses the node seed, `randomize` generates a new seed per image, `full_run_seed` overrides the node seed entirely.
 * **Configurable Label Mode:** Toggle overlay labels on dashboard cards showing model, sampler, scheduler, steps, CFG, and other parameters directly on each image.
 * **GPU Cooldown:** Automatic pause between generations to prevent thermal throttling. Configurable interval, duration, and optional VRAM clearing.
+* **Image Metrics (optional):** Run Settings checkbox that stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image in the manifest (see [Image Metrics](#image-metrics-optional)).
 
 ### 🌐 Distributed Processing (Multi-Machine)
 * **Multi-Worker Distribution:** Split large grid runs across multiple ComfyUI instances. A master node coordinates job distribution while workers process images in parallel and upload results back.
@@ -801,6 +802,29 @@ Both live in the **Run Settings** section of the Config Builder and default to t
 * ETA: preview and full jobs cost roughly 10x apart and the rolling average lags when slow models are grouped together; treat the ETA as approximate under Minimize.
 
 ---
+
+### Image Metrics (Optional)
+
+Run Settings has a **Compute Image Metrics** checkbox (default OFF). When it is on, every saved still image (base generations and upscales; videos are skipped) gets a `metrics` object in `manifest.json`, computed from the decoded image at save time (about 1-5 ms per image on the GPU, nothing when the box is unchecked):
+
+| Metric | What it is | Range |
+|---|---|---|
+| `sharpness` | Variance of the 3x3 Laplacian of luma on the 0-255 scale (OpenCV-style "variance of Laplacian") | 0 = flat, large = lots of edges |
+| `entropy` | Shannon entropy of the 256-bin luma histogram | 0-8 bits |
+| `colorfulness` | Hasler and Suesstrunk (2003) colorfulness | ~0 grey, >100 very colorful |
+| `contrast` | Standard deviation of luma (RMS contrast) | 0-0.5 |
+| `luma` | Mean brightness (Rec.601 luma) | 0-1 |
+| `saturation` | Mean HSV saturation | 0-1 |
+
+Notes:
+* Metrics are measured on an "analysis image": the long side is block-averaged down to at most 1024 px (by the smallest integer factor), so a 2x upscale stays comparable with its 1024 base image and the cost is capped. The constant is `ANALYSIS_MAX_SIDE` in `image_metrics.py`; changing it would make old sessions incomparable.
+* They measure image **signal, not taste**: noise raises sharpness and entropy, and a dark moody image is not a worse one. Use them to rank and filter, then look.
+* Upscales are measured again (a derived image never inherits its source's numbers). Dashboard-triggered upscales measure only when the source image had metrics.
+* Items produced by remote Distributed workers inside the companion plugin get no metrics yet; master-side saves and upscales do.
+* Optional scorer packs (aesthetic / reward models) plug in through `nodes.NODE_CLASS_MAPPINGS` without any import, and their scores are stored next to the built-ins. The shipped entries stay disabled until their node ids are verified against the real packs, so only the built-in metrics are available today. The Builder lists each pack with an installed / not installed hint (text only, nothing is downloaded).
+* **In the Dashboard:** once a session has metrics, the Sort popup gains one option per metric (descending, items without the metric sort last, in both the primary and secondary lists), the Logic Filter field list gains a **Metrics** group, and a **Metric range** row adds `>= min` / `<= max` filters in one click (placeholders show the observed range). The label panel has a **Metrics** checkbox that prints `Shp:812 Ent:7.41 Col:41.2 ...` on each card. Logic filters skip items that lack the field, so images without metrics (older items, videos) stay visible; Quick Filter is categorical and does not list metrics, use the Logic Filter for ranges. Sessions without metrics show none of this.
+* **Older sessions:** the cog panel's **IMAGE METRICS** section has **Compute metrics for this session**, a background job (CPU only, no VRAM, about 50 ms per image) that measures every image without metrics, skips videos, shows progress and can be cancelled by clicking the button again. It rewrites only the `metrics` field under the manifest lock, so favorites and notes you change meanwhile survive. Do not run it on a session that is still generating.
+* The setting is session-level (like GPU Cooldown), so it is NOT a per-config field: it lives in `_session_settings.metrics`, not in `_EXPECTED_CONFIG_KEYS` or `expand_configs`.
 
 ## 🖥️ Dashboard Interface
 

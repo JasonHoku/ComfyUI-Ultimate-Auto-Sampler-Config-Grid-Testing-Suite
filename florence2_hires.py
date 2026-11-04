@@ -850,7 +850,7 @@ def build_florence2_manifest_entry(
         if k not in ("id", "gen_index", "file", "filename", "upscaled",
                      "width", "height", "duration",
                      "upscale_source", "upscale_pipeline", "upscale_mode",
-                     "upscale_ratio", "upscale_denoise", "upscale_model")
+                     "upscale_ratio", "upscale_denoise", "upscale_model", "metrics")
     }
     base.update({
         "id": upscale_id,

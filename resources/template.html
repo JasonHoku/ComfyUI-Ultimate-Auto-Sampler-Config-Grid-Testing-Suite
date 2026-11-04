@@ -185,6 +185,10 @@
                             <label for="label-field-denoise" style="font-size: 10px; color: #00b4a0; cursor: pointer; user-select: none;">Denoise</label>
                         </div>
                         <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="checkbox" id="label-field-metrics" onchange="updateLabelFields()" style="width: 12px; height: 12px; cursor: pointer;">
+                            <label for="label-field-metrics" style="font-size: 10px; color: #7ab0e0; cursor: pointer; user-select: none;">Metrics</label>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 4px;">
                             <input type="checkbox" id="label-field-upscale" onchange="updateLabelFields()" style="width: 12px; height: 12px; cursor: pointer;">
                             <label for="label-field-upscale" style="font-size: 10px; color: #e06090; cursor: pointer; user-select: none;">Upscale (all)</label>
                         </div>
@@ -238,6 +242,20 @@
                             Hide values shared by every card (unique-only)
                         </label>
                     </div>
+                </div>
+            </div>
+
+            <!-- Section 3b: Image metrics for this session (background job) -->
+            <div class="cog-panel-section">
+                <div class="cog-panel-section-title">IMAGE METRICS</div>
+                <button class="session-action-btn" id="compute-metrics-btn"
+                    style="background: #2b5f9e; width: 100%; font-size: 11px; padding: 10px;"
+                    onclick="startSessionMetrics()" title="Measure sharpness, entropy, colorfulness, contrast, luma and saturation for every image that has no metrics yet (CPU only)">
+                    COMPUTE METRICS FOR THIS SESSION
+                </button>
+                <div id="compute-metrics-progress" style="display: none; margin-top: 6px; font-size: 10px; color: #9ab;"></div>
+                <div style="font-size: 9px; color: #666; margin-top: 6px;">
+                    Adds sortable/filterable metrics to older sessions. Skips videos and images that already have metrics. Do not run it while this session is still generating.
                 </div>
             </div>
 
@@ -627,6 +645,13 @@
                         <input type="number" id="logic-filter-value" class="search-filter-input" step="0.01"
                             placeholder="Value..." onkeypress="if(event.key==='Enter') addLogicFilter()" style="min-width: 70px;">
                         <button class="search-filter-add-btn" onclick="addLogicFilter()">ADD</button>
+                    </div>
+                    <div class="search-filter-row" id="metric-range-row" style="display: none; margin-top: 4px;">
+                        <span style="font-size: 10px; color: #888; white-space: nowrap;">Metric range:</span>
+                        <select id="metric-range-field" class="search-filter-select" onchange="updateMetricRangeHints()"></select>
+                        <input type="number" id="metric-range-min" class="search-filter-input" step="any" placeholder="min" style="min-width: 60px;" onkeypress="if(event.key==='Enter') addMetricRange()">
+                        <input type="number" id="metric-range-max" class="search-filter-input" step="any" placeholder="max" style="min-width: 60px;" onkeypress="if(event.key==='Enter') addMetricRange()">
+                        <button class="search-filter-add-btn" onclick="addMetricRange()">ADD</button>
                     </div>
                     <div id="active-logic-filters" class="active-search-filters"></div>
                 </div>

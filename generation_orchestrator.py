@@ -34,6 +34,7 @@ from .html_generator import get_html_template
 from .conditioning_cache import ConditioningCache
 from .remote_vae import RemoteVAEDecodeWorker, is_remote_vae_available, get_endpoint_names, INSTALL_INSTRUCTIONS
 from . import distribution
+from . import image_metrics
 
 try:
     from server import PromptServer
@@ -588,8 +589,13 @@ def run_deferred_upscales(
                     is_last_combo = combo == combos[-1]
                     is_final_output = is_last_step and is_last_combo
 
+                    up_metrics_sink = {}
+                    up_metrics_img = None
                     if isinstance(upscale_result, dict) and "samples" in upscale_result:
-                        upscaled_pil = decode_latent_with_vae(loaded_vae, upscale_result["samples"])
+                        upscaled_pil = decode_latent_with_vae(
+                            loaded_vae, upscale_result["samples"],
+                            metrics_sink=up_metrics_sink if is_final_output else None)
+                        up_metrics_img = upscaled_pil
                         up_w, up_h = upscaled_pil.size
                         if is_final_output:
                             upscale_id = int(time.time() * 100000) + up_random.randint(0, 1000)
@@ -599,6 +605,7 @@ def run_deferred_upscales(
                                 format="WEBP", quality=95
                             )
                     elif isinstance(upscale_result, PILImage.Image):
+                        up_metrics_img = upscale_result
                         up_w, up_h = upscale_result.size
                         if is_final_output:
                             upscale_id = int(time.time() * 100000) + up_random.randint(0, 1000)
@@ -640,6 +647,7 @@ def run_deferred_upscales(
                         upscaled_meta["hires_prompt_behavior"] = hires_prompt_behavior_rt
                         upscaled_meta["hires_prompt_text"] = hires_prompt_text_rt
 
+                    image_metrics.finalize(upscaled_meta, up_metrics_img, up_metrics_sink)
                     existing_data["items"].append(upscaled_meta)
                     upscale_combo_idx += 1
 
@@ -2163,6 +2171,7 @@ def run_generation_loop(
                                         "florence2_bbox": step_result.get("florence2_bbox"),
                                         "hires_denoise": f2_config["hires_denoise"],
                                     })
+                                    image_metrics.finalize(upscaled_meta, step_result["image_pil"])
                                     # Insert at beginning + set upscale_produced (matches L2255-2256
                                     # canonical pattern). Without upscale_produced=True, the base
                                     # image at L2337 would ALSO get saved as a duplicate.
@@ -2221,6 +2230,7 @@ def run_generation_loop(
                                         "upscale_mode": "seedvr2",
                                         "upscale_model": sv_config.get("dit_model", ""),
                                     })
+                                    image_metrics.finalize(upscaled_meta, result_pil)
                                     existing_data["items"].append(upscaled_meta)
                                     save_manifest(paths["manifest"], existing_data)
                                     if PromptServer is not None:
@@ -2311,10 +2321,15 @@ def run_generation_loop(
                                 # Generate timestamp-based ID (same convention as normal images)
                                 upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
                                 upscaled_filename = f"img_{upscale_id}_upscaled.webp"
+                                up_metrics_sink = {}
+                                up_metrics_img = None
 
                                 if isinstance(upscale_result, dict) and "samples" in upscale_result:
                                     # HiRes modes return latent — decode to get dimensions
-                                    upscaled_pil = decode_latent_with_vae(loaded_vae, upscale_result["samples"])
+                                    upscaled_pil = decode_latent_with_vae(
+                                        loaded_vae, upscale_result["samples"],
+                                        metrics_sink=up_metrics_sink if is_final_output else None)
+                                    up_metrics_img = upscaled_pil
                                     up_w, up_h = upscaled_pil.size
                                     # Only save to disk if this is a final output
                                     if is_final_output:
@@ -2328,6 +2343,7 @@ def run_generation_loop(
                                     pipe_h = up_h
                                 elif isinstance(upscale_result, PILImage.Image):
                                     # Model-only returns PIL directly
+                                    up_metrics_img = upscale_result
                                     up_w, up_h = upscale_result.size
                                     # Only save to disk if this is a final output
                                     if is_final_output:
@@ -2424,6 +2440,7 @@ def run_generation_loop(
 
                                     upscaled_meta["file"] = f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images"
                                     upscaled_meta["rejected"] = False
+                                    image_metrics.finalize(upscaled_meta, up_metrics_img, up_metrics_sink)
                                     # Insert at beginning (same order as flush_batch_with_vae)
                                     existing_data["items"].insert(0, upscaled_meta)
                                     upscale_produced = True

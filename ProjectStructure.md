@@ -38,6 +38,8 @@ ComfyUI-Ultimate-Sampler-Grid/
 │
 ├── generation_orchestrator.py   # The "Conductor" (Loop Logic, 2281 lines)
 ├── image_generation.py          # KSampler & VAE Wrappers (748 lines)
+├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters
+├── metrics_runner.py            # Background job: compute metrics for an existing session (CPU, manifest lock)
 ├── model_loader.py              # Checkpoint/LoRA/VAE/GGUF Loading Logic (805 lines)
 ├── model_cache.py               # 3-Tier Model Caching System (900 lines)
 ├── remote_vae.py                # Remote VAE Offloading (340 lines)
@@ -195,6 +197,10 @@ All routes registered via `PromptServer.instance.routes`.
 | POST | `/configbuilder/lookup_lora_metadata` | `config_builder_node.py` | 768 | Full CivitAI metadata for LoRA `{lora_name}` |
 | POST | `/configbuilder/lookup_model_metadata` | `config_builder_node.py` | 916 | Full CivitAI metadata for model `{model_name, model_type}` |
 | GET | `/configbuilder/model_lists` | `config_builder_node.py` | 1029 | All model/sampler/scheduler/VAE/upscale lists |
+| POST | `/config_tester/compute_metrics` | `__init__.py` | - | Start the background metrics job for a session (body: `{session_name, overwrite?}`) |
+| GET | `/config_tester/metrics_status` | `__init__.py` | - | Job progress (`?job_id=`) |
+| POST | `/config_tester/cancel_metrics` | `__init__.py` | - | Cancel a metrics job (body: `{job_id}`) |
+| GET | `/configbuilder/metrics_info` | `config_builder_node.py` | - | Built-in metric names + optional scorer-pack install status (Run Settings hint) |
 | POST | `/configbuilder/refresh_models` | `config_builder_node.py` | 1093 | Signal frontend cache clear |
 | GET | `/configbuilder/get_lora_triggers` | `config_builder_node.py` | 1115 | Get triggers for single LoRA |
 | POST | `/configbuilder/save_lora_triggers` | `config_builder_node.py` | 1138 | Save edited triggers for LoRA |
@@ -834,6 +840,8 @@ __init__.py
     - `save_manifest` (line 308): Full merge save — preserves server-side additions. Used for bulk operations.
 
 28. **Path Security** — All filesystem endpoints use `_is_path_within()` (line 27 in `__init__.py`) to validate paths stay within `benchmarks/` base directory. Session names sanitized with `re.sub(r'[^\w\-]', '', name)`.
+
+29. **Image Metrics Run Context** - `image_metrics.begin_run(spec)` (wrapped around `run_generation_loop` in `sampler_node.py`) returns a token and `end_run(token)` closes only that context, so a second run or the dashboard upscale thread can never clobber it. Generation-side hooks read the active context (`decode_latent_with_vae(..., metrics_sink=)`, `flush_batch_with_vae`, orchestrator upscale inserts via `image_metrics.finalize`); the dashboard upscale thread (`upscale_runner.py`) must NOT read generation-run state, so it passes an explicit spec derived from the source item (`spec_from_item`). Every place that copies a source item into an upscaled entry excludes `"metrics"` (never inherit); the new entry is re-measured. `metrics` is session-level (`_session_settings.metrics`), not a per-config key.
 
 ---
 
