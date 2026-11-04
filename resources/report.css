@@ -1843,7 +1843,6 @@ body {
     body.uscg-standalone .session-card { width: calc(50% - 6px) !important; }
     body.uscg-standalone #session-landing { padding: 16px 12px !important; }
 }
-=======
 /* ============================================================
    PAIRWISE REVIEW (compare overlay + scoreboard)
    ============================================================ */
