@@ -20,7 +20,6 @@ import asyncio
 import inspect
 import json
 import os
-import random
 import re
 import threading
 import time
@@ -368,7 +367,8 @@ def prepare_sweep(configs, session_settings=None, origin_node=None, client_id=No
     except (TypeError, ValueError):
         n_extra = 0
     if n_extra > 0:
-        extra_seeds = [random.randint(0, 2**32 - 1) for _ in range(n_extra)]
+        # deterministic (same helper and base seed 0 as the Generator): a re-run or resume yields the same jobs
+        extra_seeds = wfs._cu().derive_extra_seeds(settings.get("seed", 0), n_extra)
     plan = wfs.plan_workflow_configs(configs, extra_seeds, class_info=class_info)
 
     paths = wfs.session_paths(settings.get("session_name") or "workflow_sweep")

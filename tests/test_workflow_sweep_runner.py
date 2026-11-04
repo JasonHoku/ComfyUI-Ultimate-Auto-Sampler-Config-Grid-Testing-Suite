@@ -683,11 +683,11 @@ def test_different_sweep_409_with_session_and_message(env):
     assert len(runner._sweeps) == 1
 
 
-def test_random_extra_seeds_never_attach(env):
-    make(env)
-    raw = {"configs": [entry()], "_session_settings": {"session_name": "wf_test", "add_random_seeds_to_gens": 1}}
+def test_extra_seeds_deterministic_and_attach(env):
+    sw = make(env, settings={"add_random_seeds_to_gens": 2})
+    raw = {"configs": [entry()], "_session_settings": {"session_name": "wf_test", "add_random_seeds_to_gens": 2}}
     status, body = asyncio.run(runner.api_start({"configs_json": json.dumps(raw)}, bridge=env.bridge, class_info=None))
-    assert status == 409
+    assert status == 200 and body["attached"] is True and body["sweep_id"] == sw.id
 
 
 def test_launch_race_same_sweep(env):
@@ -771,3 +771,28 @@ def test_update_meta_preserves_items_written_since(tmp_path):
     mu.update_meta(path, {"configs_json": "z"})
     data = json.load(open(path))
     assert data["items"] == [{"id": 9}] and data["meta"] == {"a": 1, "configs_json": "z"}
+
+
+def _job_seeds(sw):
+    return sorted(j["conf"]["seed"] for j in sw.jobs)
+
+
+def test_extra_seeds_use_derive_extra_seeds_and_base_seed(env):
+    cu = wfs._cu()
+    one = lambda **s: runner.prepare_sweep([entry((1,))], {"session_name": "s", "add_random_seeds_to_gens": 2, **s},
+                                           None, None, env.bridge, class_info=None)
+    a, b = one(), one()
+    assert _job_seeds(a) == _job_seeds(b) == sorted({1, *cu.derive_extra_seeds(0, 2)})
+    assert _job_seeds(one(seed=5)) != _job_seeds(a)
+
+
+def test_resume_with_extra_seeds_skips_everything(env):
+    sw = make(env, [entry((1,))], {"add_random_seeds_to_gens": 2})
+    complete_all(sw, env.bridge)
+    assert sw.state == "completed" and len(sw.jobs) > 1
+    # the (fake) collector wrote no items: record what a real run leaves in the manifest
+    _write_manifest(env, [{"id": 100 + j["index"], "wf_fingerprint": j["fingerprint"]} for j in sw.jobs])
+    runner.reset_registry()
+    again = runner.prepare_sweep([entry((1,))], {"session_name": "wf_test", "add_random_seeds_to_gens": 2},
+                                 None, None, env.bridge, class_info=None)
+    assert again.to_run == 0 and again.skipped_existing == len(again.jobs) > 1
