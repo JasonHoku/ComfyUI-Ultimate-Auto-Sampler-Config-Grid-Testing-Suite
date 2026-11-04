@@ -42,8 +42,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: tests/requirements-ci.txt
-      - name: Install CPU torch (same minor as the GPU box)
-        run: pip install "torch==2.13.*" --index-url https://download.pytorch.org/whl/cpu
+      - name: Install CPU torch (latest CPU wheel; the tests only need the torch API, not a specific minor)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r tests/requirements-ci.txt
       - run: python -c "import torch; print(torch.__version__); assert hasattr(torch, 'inference_mode')"
       # expect: 152 passed, 0 skipped
