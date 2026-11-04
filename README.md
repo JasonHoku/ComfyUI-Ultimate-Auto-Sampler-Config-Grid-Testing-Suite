@@ -183,6 +183,7 @@ If you'd rather build the graph yourself:
 * **Seed Behavior Settings:** Per-config seed control — `fixed` uses the node seed, `randomize` generates a new seed per image, `full_run_seed` overrides the node seed entirely.
 * **Configurable Label Mode:** Toggle overlay labels on dashboard cards showing model, sampler, scheduler, steps, CFG, and other parameters directly on each image.
 * **GPU Cooldown:** Automatic pause between generations to prevent thermal throttling. Configurable interval, duration, and optional VRAM clearing.
+* **Image Metrics (optional):** Run Settings checkbox that stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image in the manifest (see [Image Metrics](#image-metrics-optional)).
 
 ### 🌐 Distributed Processing (Multi-Machine)
 * **Multi-Worker Distribution:** Split large grid runs across multiple ComfyUI instances. A master node coordinates job distribution while workers process images in parallel and upload results back.
@@ -776,6 +777,27 @@ This expands into all combinations (3 × 2 × 2 = 12 prompts):
 The editor provides a visual chip interface for building and editing these variation groups. Each group is displayed as a clickable chip that can be expanded to add/remove options. Multiple groups can be nested for exponential prompt variation.
 
 ---
+
+### Image Metrics (Optional)
+
+Run Settings has a **Compute Image Metrics** checkbox (default OFF). When it is on, every saved still image (base generations and upscales; videos are skipped) gets a `metrics` object in `manifest.json`, computed from the decoded image at save time (about 1-5 ms per image on the GPU, nothing when the box is unchecked):
+
+| Metric | What it is | Range |
+|---|---|---|
+| `sharpness` | Variance of the 3x3 Laplacian of luma on the 0-255 scale (OpenCV-style "variance of Laplacian") | 0 = flat, large = lots of edges |
+| `entropy` | Shannon entropy of the 256-bin luma histogram | 0-8 bits |
+| `colorfulness` | Hasler and Suesstrunk (2003) colorfulness | ~0 grey, >100 very colorful |
+| `contrast` | Standard deviation of luma (RMS contrast) | 0-0.5 |
+| `luma` | Mean brightness (Rec.601 luma) | 0-1 |
+| `saturation` | Mean HSV saturation | 0-1 |
+
+Notes:
+* Metrics are measured on an "analysis image": the long side is block-averaged down to at most 1024 px (by the smallest integer factor), so a 2x upscale stays comparable with its 1024 base image and the cost is capped. The constant is `ANALYSIS_MAX_SIDE` in `image_metrics.py`; changing it would make old sessions incomparable.
+* They measure image **signal, not taste**: noise raises sharpness and entropy, and a dark moody image is not a worse one. Use them to rank and filter, then look.
+* Upscales are measured again (a derived image never inherits its source's numbers). Dashboard-triggered upscales measure only when the source image had metrics.
+* Items produced by remote Distributed workers inside the companion plugin get no metrics yet; master-side saves and upscales do.
+* Optional scorer packs (aesthetic / reward models) plug in through `nodes.NODE_CLASS_MAPPINGS` without any import, and their scores are stored next to the built-ins. The shipped entries stay disabled until their node ids are verified against the real packs, so only the built-in metrics are available today. The Builder lists each pack with an installed / not installed hint (text only, nothing is downloaded).
+* The setting is session-level (like GPU Cooldown), so it is NOT a per-config field: it lives in `_session_settings.metrics`, not in `_EXPECTED_CONFIG_KEYS` or `expand_configs`.
 
 ## 🖥️ Dashboard Interface
 

@@ -15,6 +15,7 @@ import server
 from aiohttp import web
 import hashlib
 from .civitai import civitai_fetch_by_hash
+from . import image_metrics
 
 
 def safe_print(*args, **kwargs):
@@ -905,6 +906,18 @@ class UltimateConfigBuilder:
         cooldown_data = state.get("cooldown", {})
         if cooldown_data and cooldown_data.get("enabled", False):
             session_settings["cooldown"] = cooldown_data
+        # Optional per-image metrics (session-level, like cooldown: NOT a per-config key, so it is
+        # not in _EXPECTED_CONFIG_KEYS / expand_configs). Emitted only when enabled and non-empty.
+        metrics_data = state.get("metrics")
+        if isinstance(metrics_data, dict) and metrics_data.get("enabled", False):
+            _b = metrics_data.get("builtins") or {}
+            _a = metrics_data.get("adapters") or {}
+            _b_on = set(_b) if isinstance(_b, (list, tuple)) else {k for k, v in _b.items() if v}
+            _a_on = set(_a) if isinstance(_a, (list, tuple)) else {k for k, v in _a.items() if v}
+            _builtins = [k for k in image_metrics.BUILTIN_METRICS if k in _b_on]
+            _adapters = sorted(k for k in _a_on if k in image_metrics.ADAPTERS)
+            if _builtins or _adapters:
+                session_settings["metrics"] = {"enabled": True, "builtins": _builtins, "adapters": _adapters}
         # Start At Job # (skip to a specific job number) — always emit.
         try:
             session_settings["start_at_job"] = int(state.get("start_at_job", 0))
@@ -1304,6 +1317,18 @@ async def get_model_counts_endpoint(request):
             except (KeyError, Exception):
                 counts[cat] = 0
         return web.json_response(counts)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+# Which image metrics exist and which optional scorer packs are installed (Run Settings hint).
+# Separate from /configbuilder/model_lists so the cached model-list shape is unchanged.
+@server.PromptServer.instance.routes.get("/configbuilder/metrics_info")
+async def get_metrics_info(request):
+    try:
+        return web.json_response({
+            "builtins": list(image_metrics.BUILTIN_METRICS),
+            "adapters": image_metrics.adapter_status(),
+        })
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 

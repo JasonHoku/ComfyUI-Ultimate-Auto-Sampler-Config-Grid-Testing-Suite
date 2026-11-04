@@ -132,6 +132,13 @@ def _analysis_np(arr):
     return a
 
 
+def _var64(x):
+    """Population variance with float64 accumulation, float32 inputs (no float64 copy)."""
+    m = x.mean(dtype=np.float64)
+    d = x - np.float32(m)
+    return float((d * d).mean(dtype=np.float64))
+
+
 def compute_metrics_numpy(arr, keys=BUILTIN_METRICS):
     """Reference implementation. arr: H,W,C float 0-1 or uint8. Returns {key: float}."""
     a = _analysis_np(arr)
@@ -141,29 +148,29 @@ def compute_metrics_numpy(arr, keys=BUILTIN_METRICS):
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
     y = _LUMA_W[0] * r + _LUMA_W[1] * g + _LUMA_W[2] * b
     out = {}
-    y64 = y.astype(np.float64)
     if "sharpness" in keys and y.shape[0] >= 3 and y.shape[1] >= 3:
-        y255 = y64 * 255.0
-        lap = (y255[:-2, 1:-1] + y255[2:, 1:-1] + y255[1:-1, :-2] + y255[1:-1, 2:] - 4.0 * y255[1:-1, 1:-1])
-        out["sharpness"] = float(lap.var())
+        y255 = y * np.float32(255.0)
+        lap = (y255[:-2, 1:-1] + y255[2:, 1:-1] + y255[1:-1, :-2] + y255[1:-1, 2:] - np.float32(4.0) * y255[1:-1, 1:-1])
+        out["sharpness"] = float(_var64(lap))
     if "entropy" in keys:
         q = np.clip(np.round(y * 255.0), 0, 255).astype(np.int64)
         p = np.bincount(q.ravel(), minlength=256).astype(np.float64) / q.size
         p = p[p > 0]
         out["entropy"] = float(-(p * np.log2(p)).sum())
     if "colorfulness" in keys:
-        rg = (r.astype(np.float64) - g) * 255.0
-        yb = (0.5 * (r.astype(np.float64) + g) - b) * 255.0
-        out["colorfulness"] = float(math.sqrt(rg.std() ** 2 + yb.std() ** 2) + 0.3 * math.sqrt(rg.mean() ** 2 + yb.mean() ** 2))
+        rg = (r - g) * np.float32(255.0)
+        yb = (np.float32(0.5) * (r + g) - b) * np.float32(255.0)
+        out["colorfulness"] = float(math.sqrt(_var64(rg) + _var64(yb)) +
+                                    0.3 * math.sqrt(float(rg.mean(dtype=np.float64)) ** 2 + float(yb.mean(dtype=np.float64)) ** 2))
     if "contrast" in keys:
-        out["contrast"] = float(y64.std())
+        out["contrast"] = math.sqrt(_var64(y))
     if "luma" in keys:
-        out["luma"] = float(y64.mean())
+        out["luma"] = float(y.mean(dtype=np.float64))
     if "saturation" in keys:
-        mx = a.max(axis=-1).astype(np.float64)
-        mn = a.min(axis=-1).astype(np.float64)
-        s = np.where(mx >= 1e-6, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
-        out["saturation"] = float(s.mean())
+        mx = a.max(axis=-1)
+        mn = a.min(axis=-1)
+        s = np.where(mx >= 1e-6, (mx - mn) / np.maximum(mx, np.float32(1e-6)), np.float32(0.0))
+        out["saturation"] = float(s.mean(dtype=np.float64))
     return {k: _round4(v) for k, v in out.items() if math.isfinite(v)}
 
 

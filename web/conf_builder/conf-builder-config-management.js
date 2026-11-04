@@ -6958,6 +6958,12 @@ export function renderRunSettingsSection(node, container) {
     if (node.state.enable_model_cache === undefined) node.state.enable_model_cache = false;
     if (node.state.vae_batch_size === undefined) node.state.vae_batch_size = 1;
     if (node.state.add_random_seeds_to_gens === undefined) node.state.add_random_seeds_to_gens = 0;
+    if (!node.state.metrics || typeof node.state.metrics !== "object") node.state.metrics = { enabled: false, builtins: {}, adapters: {} };
+    if (!node.state.metrics.builtins) node.state.metrics.builtins = {};
+    if (!node.state.metrics.adapters) node.state.metrics.adapters = {};
+    ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation"].forEach(k => {
+        if (node.state.metrics.builtins[k] === undefined) node.state.metrics.builtins[k] = true;
+    });
 
     const section = document.createElement("div");
     section.className = "cb-section full-width";
@@ -7117,6 +7123,93 @@ export function renderRunSettingsSection(node, container) {
         tooltip: "How many images to encode/decode per VAE pass. Lower = less VRAM. -1 = process all at once. Default: 4." });
     _addRunSetting(content, { stateKey: "add_random_seeds_to_gens", label: "Additional Random Seeds", kind: "int", min: 0, max: 100, defaultValue: 0,
         tooltip: "Generate this many extra images per config using additional random seeds. 0 = disabled." });
+
+    // Image metrics (session-level): per-image sharpness/entropy/... stored in the manifest, sortable + filterable in the Dashboard.
+    (function _addMetricsSetting() {
+        const m = node.state.metrics;
+        const MET = [
+            ["sharpness", "Sharpness", "Variance of the Laplacian of luma (0-255 scale). Higher = more fine detail/edges. Noise also raises it."],
+            ["entropy", "Entropy", "Shannon entropy of the luma histogram, 0-8 bits. Higher = more tonal variety."],
+            ["colorfulness", "Colorfulness", "Hasler and Suesstrunk colorfulness. About 0 = grey, over 100 = very colorful."],
+            ["contrast", "Contrast", "RMS contrast: standard deviation of luma (0-0.5)."],
+            ["luma", "Luma", "Mean brightness (0-1)."],
+            ["saturation", "Saturation", "Mean HSV saturation (0-1)."],
+        ];
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "margin-top: 10px;";
+        const row = document.createElement("div");
+        row.style.cssText = "display: flex; align-items: center; gap: 8px;";
+        const label = document.createElement("label");
+        label.textContent = "Compute Image Metrics:";
+        label.style.cssText = "font-size: 12px; color: #ccc; white-space: nowrap;";
+        const help = document.createElement("span");
+        help.textContent = "?";
+        help.title = "Stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image (base images and upscales; not videos) in manifest.json, computed on the decoded image in about 1-5 ms each. Sort and filter by them in the Dashboard. They measure image signal, not taste: noise raises sharpness and entropy.";
+        help.style.cssText = "display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #2a2a2a; color: #8af; font-size: 10px; font-weight: bold; cursor: help; user-select: none;";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!m.enabled;
+        cb.style.cssText = "transform: scale(1.2); cursor: pointer;";
+        row.appendChild(label); row.appendChild(help); row.appendChild(cb);
+        wrap.appendChild(row);
+
+        const detail = document.createElement("div");
+        detail.style.cssText = "margin: 6px 0 0 16px; display: " + (m.enabled ? "block" : "none") + ";";
+        const bRow = document.createElement("div");
+        bRow.style.cssText = "display: flex; flex-wrap: wrap; gap: 4px 14px;";
+        MET.forEach(([key, name, tip]) => {
+            const l = document.createElement("label");
+            l.title = tip;
+            l.style.cssText = "font-size: 11px; color: #bbb; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;";
+            const c = document.createElement("input");
+            c.type = "checkbox";
+            c.checked = m.builtins[key] !== false;
+            c.onchange = () => { m.builtins[key] = c.checked; node.saveState(); };
+            l.appendChild(c);
+            l.appendChild(document.createTextNode(name));
+            bRow.appendChild(l);
+        });
+        detail.appendChild(bRow);
+
+        const adHead = document.createElement("div");
+        adHead.style.cssText = "font-size: 11px; color: #888; margin-top: 8px;";
+        adHead.textContent = "Optional scorer packs (outside the 5 ms budget; they need a model forward pass):";
+        const adList = document.createElement("div");
+        adList.style.cssText = "display: flex; flex-direction: column; gap: 3px; margin-top: 3px;";
+        adList.textContent = "Checking installed packs...";
+        detail.appendChild(adHead);
+        detail.appendChild(adList);
+        wrap.appendChild(detail);
+
+        fetch("/configbuilder/metrics_info").then(r => r.json()).then(info => {
+            adList.replaceChildren();
+            const ads = (info && info.adapters) || [];
+            if (!ads.length) { adList.textContent = "None available."; return; }
+            ads.forEach(a => {
+                const usable = a.installed && a.enabled;
+                const l = document.createElement("label");
+                l.style.cssText = "font-size: 11px; color: " + (usable ? "#bbb" : "#777") + "; display: inline-flex; align-items: center; gap: 6px;";
+                const c = document.createElement("input");
+                c.type = "checkbox";
+                c.checked = !!m.adapters[a.name] && usable;
+                c.disabled = !usable;
+                c.onchange = () => { m.adapters[a.name] = c.checked; node.saveState(); };
+                const badge = a.installed
+                    ? (a.enabled ? "installed" : "installed (support not enabled yet)")
+                    : "not installed (install " + (a.pack_hint || "the scorer pack") + ")";
+                l.appendChild(c);
+                l.appendChild(document.createTextNode((a.label || a.name) + " - " + badge));
+                adList.appendChild(l);
+            });
+        }).catch(() => { adList.textContent = "Could not query installed packs."; });
+
+        cb.onchange = () => {
+            m.enabled = cb.checked;
+            detail.style.display = cb.checked ? "block" : "none";
+            node.saveState();
+        };
+        content.appendChild(wrap);
+    })();
 
     section.appendChild(header);
     section.appendChild(content);
