@@ -695,7 +695,8 @@ def encode_prompt_with_combinators(clip_model, prompt, clip_skip=0):
     return final
 
 
-def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positive", batch_size=64, clip_skip=0):
+def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positive", batch_size=64, clip_skip=0,
+                            te_batch_size=DEFAULT_TE_BATCH_SIZE, te_batch_verify=False):
     """
     Batch encode prompts while checking persistent cache first.
     Only encodes prompts that aren't already cached.
@@ -707,6 +708,9 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
         prompt_type: "positive" or "negative"
         batch_size: Number of prompts to encode at once
         clip_skip: Number of CLIP layers to skip from the end (0 = use last layer, -1 = skip 1 layer, -2 = skip 2 layers)
+        te_batch_size: Encode up to this many eligible prompts per text-encoder forward
+            (MOSS-Image / Krea 2 / Qwen-Image only; 1 = off, the per-prompt path)
+        te_batch_verify: Dev only. Re-encode every batched prompt singly and print the worst difference
         
     Returns:
         dict: Mapping of prompt text to conditioning tensors
@@ -738,10 +742,28 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
         # the whole loop; without it ComfyUI re-prepares it on every single encode.
         _t_enc_start = time.time()
         
-        prompts_list = list(prompts_to_encode)
-        total_batches = (len(prompts_list) + batch_size - 1) // batch_size
+        prompts_all = list(prompts_to_encode)
+        prompts_list = prompts_all
+        te_stats = None
         
-        with torch.no_grad(), pinned_clip(clip_model, prompts_list):
+        with torch.no_grad(), pinned_clip(clip_model, prompts_all):
+            if te_batch_size and te_batch_size > 1:
+                # Several prompts per text-encoder forward; whatever can't be batched comes
+                # back as leftovers and takes the unchanged per-prompt loop below.
+                try:
+                    batched, prompts_list, te_stats = encode_prompts_batched(
+                        clip_model, prompts_all, te_batch_size, clip_skip, te_batch_verify)
+                except comfy.model_management.InterruptProcessingException:
+                    raise
+                except Exception as e:
+                    print(f"[GridTester] ⚠️ TE batching failed ({e}) - encoding per prompt")
+                    batched, prompts_list, te_stats = {}, prompts_all, None
+                for prompt, conditioning in batched.items():
+                    results[prompt] = conditioning
+                    cond_cache.set(prompt, conditioning, prompt_type)
+                if te_stats and te_stats.get("reason"):
+                    print(f"[GridTester] ℹ️ TE batching off for this encoder ({te_stats['reason']})")
+            total_batches = (len(prompts_list) + batch_size - 1) // batch_size
             for batch_idx in range(0, len(prompts_list), batch_size):
                 batch_prompts = prompts_list[batch_idx:batch_idx + batch_size]
                 current_batch = (batch_idx // batch_size) + 1
@@ -777,14 +799,22 @@ def batch_encode_with_cache(clip_model, prompts, cond_cache, prompt_type="positi
                     print(f"[GridTester]   Batch {current_batch}/{total_batches} | Encoded {encoded_count}/{len(prompts_list)}")
         
         _enc_elapsed = time.time() - _t_enc_start
-        _per_prompt_ms = (_enc_elapsed / len(prompts_list) * 1000.0) if prompts_list else 0.0
-        print(f"[GridTester] ✅ Batch encoding complete! {len(prompts_list)} prompts in {_enc_elapsed:.1f}s "
-              f"({_per_prompt_ms:.0f} ms/prompt, encoder prepared once)")
+        _per_prompt_ms = (_enc_elapsed / len(prompts_all) * 1000.0) if prompts_all else 0.0
+        _te_note = ""
+        if te_stats and te_stats.get("batched"):
+            _te_note = (f"; {te_stats['batched']} batched in {te_stats['forwards']} forwards of <={te_stats['max_rows']}, "
+                        f"{len(prompts_list)} per-prompt")
+            if te_stats.get("verify"):
+                v = te_stats["verify"]
+                _te_note += f", verify worst relL2={v['worst_rel']:.1e}"
+        print(f"[GridTester] ✅ Batch encoding complete! {len(prompts_all)} prompts in {_enc_elapsed:.1f}s "
+              f"({_per_prompt_ms:.0f} ms/prompt, encoder prepared once{_te_note})")
     
     return results
 
 
-def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_cache, clip_skip=0, enable_disk_cache=True):
+def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_cache, clip_skip=0, enable_disk_cache=True,
+                         te_batch_size=DEFAULT_TE_BATCH_SIZE, te_batch_verify=False):
     """
     Batch encode both positive and negative prompts.
     
@@ -795,6 +825,8 @@ def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_
         cond_cache: ConditioningCache instance
         clip_skip: Number of CLIP layers to skip from the end
         enable_disk_cache: Whether to save cache to disk (passed through to cache)
+        te_batch_size: Prompts per text-encoder forward (1 = off), see batch_encode_with_cache
+        te_batch_verify: Dev only, see batch_encode_with_cache
         
     Returns:
         dict: conditioning_cache with "positive" and "negative" keys
@@ -815,7 +847,9 @@ def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_
             cond_cache, 
             prompt_type="positive",
             batch_size=16,
-            clip_skip=clip_skip
+            clip_skip=clip_skip,
+            te_batch_size=te_batch_size,
+            te_batch_verify=te_batch_verify
         )
 
         conditioning_cache["negative"] = batch_encode_with_cache(
@@ -824,7 +858,9 @@ def batch_encode_prompts(patched_clip, unique_positives, unique_negatives, cond_
             cond_cache, 
             prompt_type="negative",
             batch_size=16,
-            clip_skip=clip_skip
+            clip_skip=clip_skip,
+            te_batch_size=te_batch_size,
+            te_batch_verify=te_batch_verify
         )
     
     # Save and print cache stats (only saves if disk cache is enabled)

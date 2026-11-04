@@ -169,6 +169,7 @@ If you'd rather build the graph yourself:
 * **LoRA Compatibility Detection:** Automatically detects and skips incompatible LoRAs with detailed error reporting, preventing log spam.
 * **Graceful Interruption:** Cancel button now stops ALL remaining jobs (not just current generation) and saves all completed work including pending remote VAE decodes.
 * **VAE Batching:** Includes a `vae_batch_size` input to batch decode images, significantly speeding up large grid runs.
+* **Text-Encoder Batching:** The `te_batch_size` Run Setting encodes several prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image), cutting pre-encode time on prompt-heavy grids. Off by default.
 * **Live Dashboard Updates:** Configure `flush_batch_every` to update the dashboard incrementally (e.g., every 4 images) instead of waiting for the entire batch to complete.
 * **Remote VAE Support:** Offload VAE decoding to remote servers (HuggingFace endpoints or local) for 20-30% faster generation and lower VRAM usage.
 * **VAE Selection & Iteration:** Test multiple VAEs per config — add individual VAEs from a searchable dropdown or expand entire VAE folders. Each VAE becomes a dimension in the Cartesian grid.
@@ -368,6 +369,11 @@ This suite consists of three nodes found under the `sampling/testing` category:
   - `12-24`: For 24GB+ VRAM  
   - `-1`: Decode all images at once (fastest, but risky)
   
+* **`te_batch_size`** (Run Setting "Text Encoder Batch Size"): How many prompts to encode per text-encoder forward. `1` (default) = off.
+  - Only MOSS-Image, Krea 2 and Qwen-Image encoders batch; every other encoder ignores it.
+  - Weighted prompts and `AND` / `CAT` / `AVG()` / `BREAK` prompts are still encoded one at a time.
+  - The first batch is self-checked against a single-prompt encode; on any mismatch the run falls back to one-by-one automatically. A CUDA OOM halves the batch and retries.
+
 * **`flush_batch_every`**: Update dashboard every X images (0 = use VAE batch size).
   - `0`: Wait until VAE batch is full
   - `4`: Update dashboard every 4 images (recommended for live monitoring)
@@ -749,6 +755,7 @@ Set **Model Type = Diffusion Model**, pick the diffusion file (e.g. `moss_image_
 * The CLIP Type list is read from your installed ComfyUI's `CLIPLoader`, so new model families appear without a plugin update. If you leave it at `stable_diffusion` for a diffusion model, the generator picks the CLIP type that matches the detected model family and logs it (MOSS-Image needs `moss_image` to get its chat template; with `stable_diffusion` ComfyUI builds a generic Qwen3.5 encoder).
 * The empty latent follows the model's latent format: 16 px per latent cell for the Flux.2 family, 8 for SD / SDXL / Flux.1. Use sizes that are multiples of 16; a 832x1216 job renders at 832x1216. Earlier releases always used 8, which made 16x models render at double size and run ~10x slower than the stock workflows.
 * Pre-encoding loads the text encoder once per pass instead of once per prompt (ComfyUI's dynamic VRAM loader re-prepares a model on every encode, which is the repeated `Model ... prepared for dynamic VRAM loading` log line). What remains is the encoder itself: the Qwen3.5-9B encoder costs roughly 0.8 s per prompt on a 16 GB card, the same as the stock workflow, so a 60-prompt grid spends about a minute encoding before the first image. SDXL's CLIPs take about 0.15 s per prompt, Krea 2 and Qwen-Image about 0.3 s. The pre-encode summary line reports the measured ms/prompt.
+* Text-encoder batching (`te_batch_size`, default 1 = off) puts several prompts through one encoder forward, which amortises the encoder's fixed per-forward cost. Prompts that can't be batched (weighted, `AND`/`CAT`/`AVG()`/`BREAK`) and encoders other than MOSS-Image / Krea 2 / Qwen-Image keep the per-prompt path. The summary line shows how many prompts were batched.
 
 ### Model-Specific Prompts
 
@@ -1083,6 +1090,9 @@ Create a consistent quality stack using the Config Builder: add 3 LoRAs manually
 ### For Multi-Model Testing
 1. Use identical LoRA/prompt settings across models for fair comparison.
 2. Use `add_random_seeds_to_gens: 2-3` to evaluate model consistency.
+
+### For MOSS-Image / Krea 2 / Qwen-Image grids with many prompts
+1. Try `te_batch_size: 8` (Run Settings > Text Encoder Batch Size) to cut pre-encode time; lower it if you see an OOM retry message.
 
 ### For Memory-Constrained Systems
 1. Lower `vae_batch_size` to 1-2.

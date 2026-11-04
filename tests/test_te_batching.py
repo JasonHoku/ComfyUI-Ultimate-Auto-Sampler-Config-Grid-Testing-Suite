@@ -416,3 +416,59 @@ def test_verify_mode_reports_every_prompt(capsys):
     results, _, stats = be.encode_prompts_batched(clip, PROMPTS5[:4], 4, verify=True)
     assert stats["verify"]["prompts"] == 4 and stats["verify"]["shapes_equal"] and stats["verify"]["failed"] == 0
     assert "TE batch verify: 4 prompts" in capsys.readouterr().out
+
+
+# ---- 12: integration through batch_encode_with_cache ----------------------------------
+
+class MemoryCache:
+    def __init__(self):
+        self.store = {}
+        self.sets = 0
+
+    def get(self, prompt, prompt_type):
+        return self.store.get((prompt_type, prompt))
+
+    def set(self, prompt, cond, prompt_type):
+        self.sets += 1
+        self.store[(prompt_type, prompt)] = cond
+
+    def save(self):
+        pass
+
+
+def test_batch_encode_with_cache_batches_caches_and_reports(capsys):
+    clip, inner, _ = make()
+    cache = MemoryCache()
+    res = be.batch_encode_with_cache(clip, PROMPTS5 + ["a AND b cc"], cache, te_batch_size=4)
+    assert set(res) == set(PROMPTS5 + ["a AND b cc"]) and cache.sets == 6
+    assert all(v is not None for v in res.values())
+    out = capsys.readouterr().out
+    assert "Batch encoding complete! 6 prompts" in out
+    assert "4 batched in 1 forwards of <=4, 2 per-prompt" in out
+    for p in PROMPTS5[:4]:
+        assert_same(res[p], single(clip, p))
+
+
+def test_batch_encode_with_cache_default_is_the_legacy_path(capsys):
+    clip, inner, _ = make()
+    cache = MemoryCache()
+    res = be.batch_encode_with_cache(clip, PROMPTS5, cache)
+    assert len(res) == 5 and cache.sets == 5
+    assert [len(c) for c in inner.calls] == [1] * 5     # one forward per prompt, no shadow
+    assert "batched in" not in capsys.readouterr().out
+
+
+def test_ineligible_encoder_prints_off_note_and_still_encodes(capsys):
+    inner = FakeInner()
+    clip = FakeCLIP(FakeCSM(inner, clip_name="t5xxl"), clip_name="t5xxl")
+    res = be.batch_encode_with_cache(clip, PROMPTS5, MemoryCache(), te_batch_size=8)
+    assert len(res) == 5
+    assert "TE batching off for this encoder" in capsys.readouterr().out
+
+
+def test_batch_encode_prompts_passes_te_kwargs_through(capsys):
+    clip, inner, _ = make()
+    cache = MemoryCache()
+    out = be.batch_encode_prompts(clip, set(PROMPTS5), {"abcdefg", "abcde"}, cache, te_batch_size=4)
+    assert len(out["positive"]) == 5 and len(out["negative"]) == 2
+    assert multi_row_calls(inner)

@@ -294,6 +294,7 @@ All routes registered via `PromptServer.instance.routes`.
 * **`batch_encoding.py`** (378 lines)
   * `encode_prompt_with_combinators(clip, text, clip_skip)` — supports AND, CAT, AVG, BREAK combinators
   * `batch_encode_prompts()` — bulk prompt encoding with cache integration
+  * `encode_prompts_batched()` — `te_batch_size` > 1: several eligible prompts per text-encoder forward (right-padded, per-prompt replay of the unmodified `_encode_single`; allowlist `TE_BATCH_FAMILIES`, self-check, OOM halving, `DEFAULT_TE_BATCH_SIZE`)
   * **Combinators:** `AND` (multi-cond with optional weights like `:1.5`), `CAT` (tensor concatenation), `AVG(weight)` (weighted average), `BREAK` (77-token segment break)
 
 * **`model_loader.py`** (805 lines)
