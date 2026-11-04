@@ -1388,244 +1388,16 @@ def run_generation_loop(
         conf, conf_idx, job_idx, job = pj["conf"], pj["conf_idx"], pj["job_idx"], pj["job"]
         w, h, batch_idx = pj["w"], pj["h"], pj["batch_idx"]
 
-        if True:  # body below keeps its original indentation (it used to sit inside the nested loops)
-            # ==== CHECK FOR INTERRUPT ====
-            # ==== UPDATE CURRENT STEP ====
-            if model_cache:
-                model_cache.set_current_step(plan_idx)
+        # ==== CHECK FOR INTERRUPT ====
+        # ==== UPDATE CURRENT STEP ====
+        if model_cache:
+            model_cache.set_current_step(plan_idx)
 
-            try:
-                import comfy.model_management as mm
-                if mm.processing_interrupted():
-                    print(f"\n[GridTester] 🛑 INTERRUPTED - Stopping all jobs")
+        try:
+            import comfy.model_management as mm
+            if mm.processing_interrupted():
+                print(f"\n[GridTester] 🛑 INTERRUPTED - Stopping all jobs")
 
-                    if pending_batch:
-                        _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
-                                             per_config_remote_workers, use_remote_vae, remote_vae_worker,
-                                             loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
-                                             config_overrides_vae=config_overrides_vae, image_format=image_format)
-                        pending_batch = []
-
-                    _cleanup_per_config_remote_workers(per_config_remote_workers)
-                    if remote_vae_worker:
-                        remote_vae_worker.wait_completion()
-                        remote_vae_worker.stop()
-
-                    existing_data["meta"] = {
-                        "positive": positive_text,
-                        "negative": negative_text,
-                        "model": ckpt_name,
-                        "seed": seed,
-                        "vae_batch_size": vae_batch_size,
-                        "configs_json": configs_json,
-                        "resolutions_json": resolutions_json,
-                        "image_format": image_format,
-                        "job_order": job_order,
-                        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
-                    }
-                    save_manifest(paths["manifest"], existing_data)
-
-                    loaded_model, loaded_clip, loaded_vae = None, None, None
-                    patched_model, patched_clip = None, None
-                    conditioning_cache.clear()
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-
-                    # Re-raise so ComfyUI knows execution was interrupted (not completed)
-                    raise InterruptProcessingException()
-            except InterruptProcessingException:
-                raise
-            except:
-                pass
-            
-            current_seed = conf["seed"]
-            if conf.get("seed_behavior") == "randomize":
-                import random
-                current_seed = random.randint(0, 2**63 - 1)
-            # Fingerprint of this cell (configured seed, FULL resolution); LTX items are not fingerprinted.
-            job_fp = None
-            if conf.get("model_type") != "ltx_video":
-                job_fp = config_fingerprint(conf, w, h, conf["seed"])
-                if not preview_on and not has_optional_inputs and conf.get("seed_behavior") == "randomize":
-                    _refresh_pstate()
-                    _pe = _pstate["pindex"].get(job_fp)
-                    if _pe and _pe.get("seed") is not None:
-                        current_seed = _pe["seed"]  # re-render the survivor with the seed the user approved
-            current_job += 1
-            
-            if pbar:
-                try:
-                    pbar.update_absolute(current_job, total_jobs)
-                except:
-                    pass
-
-            # LTX Video dispatch — must run BEFORE any image-gen-specific code that
-            # accesses conf['sampler']/conf['steps'] (LTX configs use sampler_stage1/2).
-            if conf.get("model_type") == "ltx_video":
-                from .ltx_video_generation import preflight_ltx, load_ltx_models, ltx_video_generate
-
-                # Pre-flight on first LTX config of this run (idempotent — cached check internally)
-                if not _ltx_preflight_done[0]:
-                    try:
-                        preflight_ltx(conf)
-                        _ltx_preflight_done[0] = True
-                        # Free image-gen caches to make room for LTX VRAM
-                        try:
-                            from . import model_cache as mc
-                            if hasattr(mc, "clear_image_caches"):
-                                mc.clear_image_caches()
-                        except Exception:
-                            pass
-                    except RuntimeError as e:
-                        print(f"[GridTester] LTX preflight FAILED: {e}")
-                        raise
-
-                # Override conf width/height with the current loop's resolution.
-                # The loop's `w, h` comes from the sampler node's resolutions widget
-                # (or a per-config override). LTX configs don't have width/height in
-                # their builder UI yet, so the cartesian-expansion defaults (446x576)
-                # would otherwise stick.
-                conf["width"] = w
-                conf["height"] = h
-
-                # Filename uses gen index + timestamp suffix to guarantee uniqueness
-                # per run. Skip-on-exists is intentionally NOT enabled for LTX (v1) —
-                # the resume/match logic image-gen uses doesn't yet understand LTX
-                # config fields (sigmas, strengths, audio_mode, etc.) so it produced
-                # false-positive skips on real config changes (e.g., LoRA strength,
-                # seed). Until we have a proper LTX-aware manifest match, every LTX
-                # gen runs fresh. Users can manually delete unwanted mp4s.
-                _ts_suffix = str(int(time.time() * 1000) % 10_000_000)
-                ltx_output_filename = f"{conf_idx:06d}_seed{conf.get('seed', 0)}_{w}x{h}_dur{conf.get('duration_seconds', 5)}s_{conf.get('frame_rate', 25)}fps_{_ts_suffix}"
-                ltx_output_path = os.path.join(paths["images"], ltx_output_filename + ".mp4")
-
-                progress_pct = int((current_job / total_jobs) * 100)
-                print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
-                      f"LTX {conf.get('duration_seconds', 5)}s @ {conf.get('frame_rate', 25)}fps | {conf.get('width')}x{conf.get('height')}")
-
-                try:
-                    ltx_models = load_ltx_models(conf)
-                    gen_result = ltx_video_generate(conf, ltx_models, ltx_output_path)
-                except Exception as e:
-                    print(f"[GridTester] LTX gen FAILED for config {conf_idx}: {e}")
-                    raise
-
-                # Build manifest entry and persist
-                item = _build_ltx_manifest_entry(conf, gen_result, ltx_output_filename, gen_index=conf_idx, session_name=session_name)
-                existing_data["items"].insert(0, item)
-                save_manifest(paths["manifest"], existing_data)
-
-                # Skip the standard image-gen path
-                continue
-
-            progress_pct = int((current_job / total_jobs) * 100)
-            _is_pv = preview_on  # LTX configs never reach this point (dispatched above)
-            eff_conf = _effective_conf(conf) if _is_pv else conf
-            if _is_pv:
-                print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
-                      f"{conf['sampler']} @ PREVIEW {pv_steps} steps | {w}x{h} x{pv_scale}")
-            else:
-                print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
-                      f"{conf['sampler']} @ {conf['steps']} steps | {w}x{h}")
-            
-            actual_positive_prompt, lora_triggers = build_prompt_with_triggers(
-                conf, lora_triggerwords_mode
-            )
-            actual_negative_prompt = conf["negative"]
-            
-            # ==== START AT JOB # (skip earlier jobs) ====
-            if start_at_job > 0 and current_job < start_at_job:
-                skipped_count += 1
-                continue
-
-            # ==== PREVIEW PROMOTION SKIP ====
-            # Full run: skip cells whose preview was rejected (or not favorited). Preview run: skip cells
-            # that already have a full image. A rejection is an explicit user signal, so overwrite_existing
-            # does not override it; it still overrides the "full image exists" skip.
-            _promo_why = _promotion_status(conf, job_fp)
-            if _promo_why and not (_promo_why == "full_exists" and overwrite_existing):
-                skipped_count += 1
-                if _promo_why != "full_exists":
-                    _promo_skips += 1
-                    if _promo_skips % 50 == 0:
-                        print(f"[GridTester] ⏭️ skipped {_promo_skips} jobs whose preview was rejected")
-                continue
-
-            # ==== CHECK EXISTING MATCH ====
-            match_index = check_if_job_completed(
-                existing_data["items"],
-                eff_conf,
-                current_seed,
-                w, h,
-                batch_idx,
-                actual_positive_prompt,
-                actual_negative_prompt,
-                has_optional_inputs=has_optional_inputs,
-                preview=_is_pv
-            )
-
-            if match_index != -1:
-                if not overwrite_existing:
-                    skipped_count += 1
-                    continue
-                else:
-                    old_item = existing_data["items"][match_index]
-                    try:
-                        old_fname_match = re.search(r'filename=([^&]+)', old_item["file"])
-                        if old_fname_match:
-                            old_file_path = os.path.join(paths["images"], old_fname_match.group(1))
-                            if os.path.exists(old_file_path):
-                                os.remove(old_file_path)
-                    except Exception as e:
-                        print(f"[GridTester] ⚠️ Warning: Could not delete old file: {e}")
-                    
-                    existing_data["items"].pop(match_index)
-            
-            # ==== MODEL SWITCHING ====
-            target_model_name = conf["model"]
-            target_model_key = get_model_cache_key(conf)
-            if target_model_key != cached_model_key:
-                if cached_model_key is not None:
-                    patched_model, patched_clip = cleanup_model_references(
-                        patched_model, patched_clip, conditioning_cache
-                    )
-                    # CRITICAL FIX: Restore dict structure after clear
-                    conditioning_cache["positive"] = {}
-                    conditioning_cache["negative"] = {}
-
-                loaded_model, loaded_clip, loaded_vae = load_model_by_type(
-                    conf, ckpt_name, use_remote_vae,
-                    optional_model, optional_clip, optional_vae,
-                    optional_positive, optional_negative, loaded_clip, loaded_vae, model_cache=model_cache
-                )
-                # VAE fallback for non-checkpoint models
-                if loaded_vae is None and optional_vae is not None:
-                    loaded_vae = optional_vae
-                # Remember this model's default VAE for reverting later
-                default_model_vae = loaded_vae
-                cached_vae_key = "Default"
-                current_vae_is_remote = False
-                current_remote_vae_url = None
-                config_overrides_vae = False
-
-                cached_model_key = target_model_key
-                cached_lora_key = None
-                cached_lora_cache_key = None
-                latent_channels = get_latent_channels(loaded_model, optional_latent)
-                latent_ratio = get_latent_downscale_ratio(loaded_model)
-                model_switched = True
-            else:
-                model_switched = False
-
-            # ==== PER-CONFIG VAE SWITCHING ====
-            # Config Builder VAE settings take priority over sampler node's remote_vae_endpoint
-            target_vae = conf.get("vae", "Default")
-            if not target_vae or str(target_vae) in ("None", "none"):
-                target_vae = "Default"
-            if target_vae != cached_vae_key:
-                # Flush pending batch before switching VAE (they need current VAE for decoding)
                 if pending_batch:
                     _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
                                          per_config_remote_workers, use_remote_vae, remote_vae_worker,
@@ -1633,1004 +1405,1231 @@ def run_generation_loop(
                                          config_overrides_vae=config_overrides_vae, image_format=image_format)
                     pending_batch = []
 
-                if target_vae == "Default":
-                    # Revert to model's bundled/default VAE
-                    loaded_vae = default_model_vae
-                    current_vae_is_remote = False
-                    current_remote_vae_url = None
-                    config_overrides_vae = False
-                    print(f"[GridTester] 🎨 Reverting to Default VAE")
-                elif is_remote_vae(target_vae):
-                    url = extract_remote_vae_url(target_vae)
-                    current_vae_is_remote = True
-                    current_remote_vae_url = url
-                    config_overrides_vae = True
-                    loaded_vae = None  # No local VAE needed
-                    print(f"[GridTester] 🌐 Using per-config remote VAE: {url}")
-                    if url not in per_config_remote_workers:
-                        per_config_remote_workers[url] = RemoteVAEDecodeWorker(
-                            endpoint=url, img_dir=paths["images"],
-                            manifest_path=paths["manifest"],
-                            existing_data=existing_data,
-                            session_name=session_name, unique_id=unique_id,
-                            image_format=image_format
-                        )
-                else:
-                    current_vae_is_remote = False
-                    current_remote_vae_url = None
-                    config_overrides_vae = True
-                    print(f"[GridTester] 🎨 Loading per-config VAE: {target_vae}")
-                    loaded_vae = load_vae_by_name(target_vae)
-                cached_vae_key = target_vae
-
-            # ==== LORA SWITCHING ====
-            current_lora_string = conf["lora_expanded"]
-            
-            if model_cache:
-                current_cache_key = model_cache._get_lora_cache_key(target_model_key, current_lora_string)
-                need_to_load = (current_cache_key != cached_lora_cache_key) or patched_model is None
-            else:
-                need_to_load = (current_lora_string != cached_lora_key) or patched_model is None
-            
-            if need_to_load:
-                patched_model, patched_clip, should_skip = load_loras(
-                    loaded_model, loaded_clip, current_lora_string,
-                    target_model_key, incompatible_loras, model_cache=model_cache
-                )
-                
-                if should_skip:
-                    skipped_count += 1
-                    continue
-                
-                cached_lora_key = current_lora_string
-                if model_cache:
-                    cached_lora_cache_key = current_cache_key
-                
-                # Batch encode logic for multi-model switching
-                # Because of short-circuit, if model_switched is True, conditioning_cache['positive'] isn't checked initially
-                # But inside the loop, we access it.
-                if model_switched or not conditioning_cache["positive"]:
-                    model_unique_positives = []
-                    model_unique_negatives = []
-                    _seen_positives = set()
-                    _seen_negatives = set()
-
-                    for future_idx in range(plan_idx, len(job_plan)):
-                        future_conf = job_plan[future_idx]["conf"]
-                        if get_model_cache_key(future_conf) != target_model_key:
-                            break  # the contiguous run of this model in the plan
-                        if get_model_cache_key(future_conf) == target_model_key:
-                            future_positive, _ = build_prompt_with_triggers(
-                                future_conf, lora_triggerwords_mode
-                            )
-                            # Skip encoding prompts for configs that are already completed
-                            # (avoids wasting time on prompts only used by skipped jobs)
-                            if not overwrite_existing and _have_history():
-                                # this plan entry (conf @ resolution) is already done or skipped
-                                all_done = _job_status(job_plan[future_idx]) != "todo"
-                                if all_done:
-                                    continue
-                            if future_positive not in _seen_positives:
-                                _seen_positives.add(future_positive)
-                                model_unique_positives.append(future_positive)
-                            future_neg = future_conf["negative"]
-                            if future_neg not in _seen_negatives:
-                                _seen_negatives.add(future_neg)
-                                model_unique_negatives.append(future_neg)
-
-                    if model_unique_positives:
-                        print(f"[GridTester] 🧠 Batch encoding {len(model_unique_positives)} prompts for {target_model_name}")
-
-                        clip_skip = conf.get("clip_skip", 0)
-
-                        try:
-                            with pinned_clip(patched_clip, model_unique_positives + model_unique_negatives):
-                                for prompt in model_unique_positives:
-                                    # Check for interrupt before each prompt encoding
-                                    if mm.processing_interrupted():
-                                        print(f"\n[GridTester] 🛑 INTERRUPTED during positive encoding - Stopping all encoding")
-                                        raise InterruptProcessingException()
-
-                                    if prompt not in conditioning_cache["positive"]:
-                                        conditioning_cache["positive"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
-
-                                for prompt in model_unique_negatives:
-                                    # Check for interrupt before each prompt encoding
-                                    if mm.processing_interrupted():
-                                        print(f"\n[GridTester] 🛑 INTERRUPTED during negative encoding - Stopping all encoding")
-                                        raise InterruptProcessingException()
-
-                                    if prompt not in conditioning_cache["negative"]:
-                                        conditioning_cache["negative"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
-
-                        except InterruptProcessingException:
-                            print(f"\n[GridTester] 🛑 INTERRUPTED during encoding - Stopping all jobs")
-
-                            if pending_batch:
-                                _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
-                                                     per_config_remote_workers, use_remote_vae, remote_vae_worker,
-                                                     loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
-                                                     config_overrides_vae=config_overrides_vae, image_format=image_format)
-                                pending_batch = []
-
-                            _cleanup_per_config_remote_workers(per_config_remote_workers)
-                            if remote_vae_worker:
-                                remote_vae_worker.wait_completion()
-                                remote_vae_worker.stop()
-
-                            existing_data["meta"] = {
-                                "positive": positive_text,
-                                "negative": negative_text,
-                                "model": ckpt_name,
-                                "seed": seed,
-                                "vae_batch_size": vae_batch_size,
-                                "configs_json": configs_json,
-                                "resolutions_json": resolutions_json,
-                                "image_format": image_format,
-                                "job_order": job_order,
-                                "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                                "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
-                            }
-                            save_manifest(paths["manifest"], existing_data)
-
-                            loaded_model, loaded_clip, loaded_vae = None, None, None
-                            patched_model, patched_clip = None, None
-                            conditioning_cache.clear()
-                            gc.collect()
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-
-                            # Re-raise so ComfyUI knows execution was interrupted (not completed)
-                            raise
-
-                        print(f"[GridTester] ✅ Encoded {len(conditioning_cache['positive'])} positive, {len(conditioning_cache['negative'])} negative")
-
-                    model_switched = False
-                if cond_cache:
-                    cond_cache.set_lora_config(conf['lora_expanded'])
-            
-            # Get conditioning
-            if optional_positive:
-                final_positive = optional_positive
-            else:
-                full_positive = actual_positive_prompt
-                final_positive = conditioning_cache["positive"].get(full_positive)
-                if final_positive is None:
-                    cached_keys = list(conditioning_cache["positive"].keys())
-                    cached_preview = [k[:40] for k in cached_keys[:5]]
-                    raise RuntimeError(
-                        f"[GridTester] ❌ BUG: Encoding not found for positive prompt: {full_positive[:80]}...\n"
-                        f"  model_key={target_model_key}, lora={current_lora_string}\n"
-                        f"  Cache has {len(cached_keys)} entries: {cached_preview}\n"
-                        f"  model_switched={model_switched}, need_to_load={need_to_load}"
-                    )
-
-            if optional_negative:
-                final_negative = optional_negative
-            else:
-                final_negative = conditioning_cache["negative"].get(conf["negative"])
-                if final_negative is None:
-                    cached_keys = list(conditioning_cache["negative"].keys())
-                    cached_preview = [k[:40] for k in cached_keys[:5]]
-                    raise RuntimeError(
-                        f"[GridTester] ❌ BUG: Encoding not found for negative prompt: {conf['negative'][:80]}...\n"
-                        f"  model_key={target_model_key}, lora={current_lora_string}\n"
-                        f"  Cache has {len(cached_keys)} entries: {cached_preview}\n"
-                        f"  model_switched={model_switched}, need_to_load={need_to_load}"
-                    )
-            
-            # =========================================================
-            # ==== 🚀 ASYNC LOOK-AHEAD PRE-FETCHING (CORRECTED) ====
-            # =========================================================
-            if model_cache is not None and model_cache.async_preload:
-                # Check if next job exists (the plan carries it directly, no index arithmetic)
-                if plan_idx + 1 < len(job_plan):
-                    next_idx = plan_idx + 1
-
-                    if next_idx < len(job_plan):
-                        next_conf = job_plan[next_idx]["conf"]
-                        
-                        # RESOLVE cache keys for next conf
-                        next_model_key = get_model_cache_key(next_conf)
-                        next_lora = next_conf["lora_expanded"]
-
-                        # CASE 1: Same Base, Different LoRA
-                        if next_model_key == target_model_key and next_lora != current_lora_string:
-                            def _preload_lora_worker():
-                                return load_loras(
-                                    loaded_model, loaded_clip, next_lora,
-                                    target_model_name, {}, model_cache=None
-                                )
-                            model_cache.preload_lora_model(target_model_key, next_lora, _preload_lora_worker)
-
-                        # CASE 2: Different Base Model
-                        elif next_model_key != target_model_key:
-                            next_model_type = next_conf.get("model_type", "checkpoint")
-                            next_model_name = next_conf["model"]
-                            print(f"[GridTester] 🔮 Pre-loading Base Model: {next_model_name} ({next_model_type})")
-
-                            if next_model_type == "checkpoint":
-                                next_model_resolved = ckpt_name if next_model_name == "Default" else next_model_name
-                                def _preload_base_worker(path_to_load=next_model_resolved):
-                                    try:
-                                        import comfy.sd
-                                        ckpt_path = folder_paths.get_full_path("checkpoints", path_to_load)
-                                        if use_remote_vae:
-                                            out = comfy.sd.load_checkpoint_guess_config(
-                                                ckpt_path, output_vae=False, output_clip=True,
-                                                embedding_directory=folder_paths.get_folder_paths("embeddings")
-                                            )
-                                            return out[0], out[1], None
-                                        else:
-                                            out = comfy.sd.load_checkpoint_guess_config(
-                                                ckpt_path, output_vae=True, output_clip=True,
-                                                embedding_directory=folder_paths.get_folder_paths("embeddings")
-                                            )
-                                            return out[0], out[1], out[2]
-                                    except Exception as e:
-                                        print(f"[GridTester] ❌ Async Worker Error: {e}")
-                                        return None, None, None
-                                model_cache.preload_base_model(next_model_key, _preload_base_worker)
-                            else:
-                                # GGUF/diffusion model preload
-                                def _preload_diff_worker(conf_to_load=next_conf):
-                                    try:
-                                        return load_diffusion_model_and_clip(
-                                            model_name=conf_to_load["model"],
-                                            model_type=conf_to_load.get("model_type"),
-                                            text_encoder_paths=conf_to_load.get("text_encoders", []),
-                                            clip_type_str=conf_to_load.get("clip_type", "stable_diffusion"),
-                                            gguf_options=conf_to_load.get("gguf_options"),
-                                            use_remote_vae=use_remote_vae,
-                                        )
-                                    except Exception as e:
-                                        print(f"[GridTester] ❌ Async Worker Error: {e}")
-                                        return None, None, None
-                                model_cache.preload_base_model(next_model_key, _preload_diff_worker)
-            # =========================================================
-
-            # Preview pass renders a snapped, scaled-down latent; full jobs use w x h unchanged.
-            gen_w, gen_h = preview_dims(w, h, pv_scale, latent_ratio) if _is_pv else (w, h)
-
-            # Generate image
-            if job["latent"] is not None:
-                latent_in = {"samples": job["latent"]["samples"].clone()}
-            else:
-                # Pixels-per-cell comes from the model's latent format (8 for SD/SDXL/Flux.1,
-                # 16 for the Flux.2 family incl. MOSS-Image). Hardcoding 8 here made 16x
-                # models render at 2x size and ~10x slower.
-                latent_in = make_empty_latent(latent_channels, gen_w, gen_h, latent_ratio)
-            
-            result_latent = None
-            try:
-                attention_mode = conf.get("attention_mode", "default")
-                if attention_mode != "default":
-                    print(f"[GridTester] 🧠 Using attention mode: {attention_mode}")
-
-                # Log active extra options
-                extra_opts = []
-                if conf.get("model_sampling_override", "none") != "none":
-                    extra_opts.append(f"model_sampling={conf['model_sampling_override']}")
-                if conf.get("use_advanced_sampling", False):
-                    extra_opts.append(f"advanced({conf.get('advanced_guider','cfg_guider')}/{conf.get('advanced_scheduler','basic')})")
-                if conf.get("flux_guidance_value", 0) and float(conf.get("flux_guidance_value", 0)) > 0:
-                    extra_opts.append(f"flux_guidance={conf['flux_guidance_value']}")
-                if extra_opts:
-                    print(f"[GridTester] ⚙️ Extra options: {', '.join(extra_opts)}")
-
-                result_latent, duration = generate_image(
-                    patched_model, current_seed, eff_conf["steps"], eff_conf["cfg"],
-                    conf["sampler"], conf["scheduler"], final_positive, final_negative,
-                    latent_in, conf["denoise"], attention_mode=attention_mode,
-                    model_sampling_override=conf.get("model_sampling_override", "none"),
-                    model_sampling_shift=conf.get("model_sampling_shift", 1.73),
-                    model_sampling_flux_max_shift=conf.get("model_sampling_flux_max_shift", 1.15),
-                    model_sampling_flux_base_shift=conf.get("model_sampling_flux_base_shift", 0.5),
-                    use_advanced_sampling=conf.get("use_advanced_sampling", False),
-                    advanced_guider=conf.get("advanced_guider", "cfg_guider"),
-                    advanced_scheduler=conf.get("advanced_scheduler", "basic"),
-                    flux_guidance_value=conf.get("flux_guidance_value", 0.0),
-                    use_deep_shrink=conf.get("use_deep_shrink", False),
-                    deep_shrink_block_number=conf.get("deep_shrink_block_number", 3),
-                    deep_shrink_downscale_factor=conf.get("deep_shrink_downscale_factor", 2.0),
-                    deep_shrink_start_percent=conf.get("deep_shrink_start_percent", 0.0),
-                    deep_shrink_end_percent=conf.get("deep_shrink_end_percent", 0.35),
-                    deep_shrink_downscale_after_skip=conf.get("deep_shrink_downscale_after_skip", True),
-                    deep_shrink_downscale_method=conf.get("deep_shrink_downscale_method", "bicubic"),
-                    deep_shrink_upscale_method=conf.get("deep_shrink_upscale_method", "bicubic"),
-                    use_slg=conf.get("use_slg", False),
-                    slg_double_layers=conf.get("slg_double_layers", ""),
-                    slg_single_layers=conf.get("slg_single_layers", "22"),
-                    slg_start_percent=conf.get("slg_start_percent", 0.0),
-                    slg_end_percent=conf.get("slg_end_percent", 0.5),
-                    width=gen_w,
-                    height=gen_h
-                )
-
-                # ==== UPSCALING (pipeline-based with sequential steps) ====
-                upscale_produced = False
-                save_pre_upscale = False
-                total_upscale_duration = 0  # Track cumulative upscale time for duration metric
-                if session_settings and session_settings.get("upscaling", {}).get("enabled", False) and result_latent is not None:
-                    from .image_generation import upscale_image
-                    import itertools as upscale_itertools
-                    import random as upscale_random
-                    from PIL import Image as PILImage
-
-                    upscale_settings_rt = session_settings["upscaling"]
-                    upscale_pipelines = upscale_settings_rt.get("pipelines", [])
-                    upscale_combo_idx = 0
-                    save_pre_upscale = upscale_settings_rt.get("save_pre_upscale", False)
-
-                    # If deferring upscales to end, skip inline processing and queue the job
-                    run_upscales_at_end = upscale_settings_rt.get("run_upscales_at_end", False)
-                    if run_upscales_at_end:
-                        deferred_upscale_queue.append({
-                            "config": conf.copy(),
-                            "width": w, "height": h,
-                            "seed": current_seed,
-                            "batch_idx": batch_idx,
-                            "actual_positive_prompt": actual_positive_prompt,
-                            "actual_negative_prompt": actual_negative_prompt,
-                            "gen_index": gen_index_offset + total_generated,
-                            "config_fp": job_fp,
-                        })
-                        # Clear pipelines so the inline loop below becomes a no-op
-                        upscale_pipelines = []
-
-                    # Compute HiRes-adjusted conditioning if enabled
-                    hires_positive_cond = final_positive  # Default: same as base
-                    hires_prompt_active = False
-                    hires_prompt_behavior_rt = ""
-                    hires_prompt_text_rt = ""
-                    if upscale_settings_rt.get("hires_prompt_adjust") and upscale_settings_rt.get("hires_prompt_text", "").strip():
-                        hires_prompt_behavior_rt = upscale_settings_rt.get("hires_prompt_behavior", "append_end")
-                        hires_prompt_text_rt = upscale_settings_rt["hires_prompt_text"].strip()
-                        if hires_prompt_behavior_rt == "prepend":
-                            adjusted_prompt = hires_prompt_text_rt + " " + actual_positive_prompt
-                        elif hires_prompt_behavior_rt == "append_end":
-                            adjusted_prompt = actual_positive_prompt + " " + hires_prompt_text_rt
-                        elif hires_prompt_behavior_rt == "replace":
-                            adjusted_prompt = hires_prompt_text_rt
-                        else:
-                            adjusted_prompt = actual_positive_prompt
-                        # Look up pre-encoded conditioning from cache
-                        hires_cond = conditioning_cache["positive"].get(adjusted_prompt)
-                        if hires_cond is not None:
-                            hires_positive_cond = hires_cond
-                            hires_prompt_active = True
-                            print(f"[GridTester] 🔍 Using HiRes-adjusted prompt ({hires_prompt_behavior_rt}): {adjusted_prompt[:80]}...")
-                        else:
-                            print(f"[GridTester] ⚠️ HiRes-adjusted prompt not found in cache, using original prompt")
-
-                    for pipeline_idx, pipeline in enumerate(upscale_pipelines):
-                        # Skip inactive pipelines (safety check — should already be filtered)
-                        if pipeline.get("active", True) is False:
-                            continue
-
-                        pipeline_name = pipeline.get("name", f"Pipeline {pipeline_idx + 1}")
-                        pipeline_steps = pipeline.get("steps", [])
-                        if not pipeline_steps:
-                            continue
-
-                        # Each pipeline starts from the original base image
-                        pipe_latent = result_latent
-                        pipe_w = w
-                        pipe_h = h
-                        pipeline_history = []  # Accumulate per-step metadata for compound manifest entries
-
-                        # Flatten steps with repeat: a step with repeat=3 runs 3 times sequentially
-                        expanded_steps = []
-                        for step in pipeline_steps:
-                            if step.get("active", True) is False:
-                                continue
-                            repeat = max(1, int(step.get("repeat", 1)))
-                            for _ in range(repeat):
-                                expanded_steps.append(step)
-
-                        for step_idx, ucfg in enumerate(expanded_steps):
-                            mode = ucfg.get("mode", "hires_only")
-                            show_hires = mode in ("hires_only", "model_then_hires")
-                            show_model = mode in ("model_only", "model_then_hires")
-
-                            # --- Florence2 Hi-Res Fix mode (inline path) ---
-                            if mode == "florence2_hires":
-                                from .florence2_hires import (
-                                    run_florence2_step, preflight_florence2,
-                                    build_florence2_manifest_entry, build_florence2_no_detection_entry,
-                                )
-                                from PIL import Image as PILImage
-                                import numpy as _np
-                                import torch as _torch
-
-                                # Preflight once per job (cached on the job object via closure proxy —
-                                # use a module-global guard since `job` doesn't exist in this scope)
-                                global _FLORENCE2_INLINE_PREFLIGHTED
-                                if not globals().get("_FLORENCE2_INLINE_PREFLIGHTED", False):
-                                    preflight_florence2()
-                                    _FLORENCE2_INLINE_PREFLIGHTED = True
-
-                                # Decode current latent to PIL for Florence2 input
-                                src_pil = decode_latent_with_vae(loaded_vae, pipe_latent["samples"])
-                                src_arr = _np.array(src_pil.convert("RGB")).astype(_np.float32) / 255.0
-                                src_tensor = _torch.from_numpy(src_arr).unsqueeze(0)
-
-                                # Build the unified step config — merge step.florence2 sub-object
-                                # with top-level sampling fields from the step.
-                                _hd = str(ucfg.get("hires_denoise", "0.45")).split(",")[0].strip() or "0.45"
-                                f2_config = {
-                                    **(ucfg.get("florence2", {}) or {}),
-                                    "hires_denoise": float(_hd),
-                                    "hires_steps": int(ucfg.get("hires_steps", 15) or 15),
-                                    "cfg": float(ucfg.get("cfg", 1.5) or 1.5),
-                                    "sampler": ucfg.get("sampler", "euler"),
-                                    "scheduler": ucfg.get("scheduler", "simple"),
-                                    # In inline mode the model+lora are already loaded for this
-                                    # job — forcing from_builder avoids a redundant reload that
-                                    # from_manifest would trigger.
-                                    "model_source": "from_builder",
-                                }
-
-                                # Minimal item dict for run_florence2_step's manifest-extras path
-                                item_for_florence2 = {
-                                    "model": conf.get("model", ""),
-                                    "lora_expanded": conf.get("loras_expanded", ""),
-                                    "seed": current_seed,
-                                }
-
-                                step_result = run_florence2_step(
-                                    source_image=src_tensor,
-                                    item=item_for_florence2,
-                                    step_config=f2_config,
-                                    fallback_handles=(patched_model, patched_clip, loaded_vae),
-                                    ckpt_cache={},  # no caching needed; from_builder uses fallback
-                                    conditioning_cache=conditioning_cache,
-                                    positive_prompt=actual_positive_prompt,
-                                    negative_prompt=actual_negative_prompt,
-                                    clip_skip=conf.get("clip_skip", 0),
-                                    # Inline path forces model_source=from_builder above, so
-                                    # this is informational; passing it for consistency.
-                                    session_model_name=conf.get("model", ""),
-                                )
-
-                                is_last_step = step_idx == len(expanded_steps) - 1
-                                is_final_output = is_last_step
-
-                                if step_result.get("status") == "no_detection":
-                                    if is_final_output:
-                                        # Append sentinel entry pointing back at the base image.
-                                        # `meta` is not yet assigned at this point in the function —
-                                        # it lives at ~L2324, AFTER the upscale loop. Use
-                                        # create_image_metadata directly (matches the normal
-                                        # hires/model upscale path at L2184).
-                                        sentinel_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
-                                        sentinel_meta = create_image_metadata(
-                                            conf, pipe_w, pipe_h,
-                                            float(step_result.get("duration", 0)),
-                                            current_seed, batch_idx,
-                                            actual_positive_prompt, actual_negative_prompt,
-                                            gen_index=gen_index_offset + total_generated,
-                                        )
-                                        sentinel_meta.update({
-                                            "id": sentinel_id,
-                                            "base_fp": job_fp,
-                                            "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
-                                            "upscaled": False,
-                                            "florence2_no_detection": True,
-                                            "florence2_text_input": step_result.get("florence2_text_input", ""),
-                                            "florence2_model": step_result.get("florence2_model", ""),
-                                            "note": f"Florence2 found no '{step_result.get('florence2_text_input', '')}' in image",
-                                        })
-                                        # Insert at beginning + set upscale_produced (matches L2255-2256
-                                        # canonical pattern). Without upscale_produced=True, the base
-                                        # image at L2337 would ALSO get saved as a duplicate.
-                                        existing_data["items"].insert(0, sentinel_meta)
-                                        upscale_produced = True
-                                        save_manifest(paths["manifest"], existing_data)
-                                        upscale_combo_idx += 1
-                                    continue  # skip the normal combo loop
-
-                                total_upscale_duration += float(step_result.get("duration", 0))
-
-                                if is_final_output:
-                                    # Save the Florence2-fixed image and update manifest.
-                                    # `meta` is not yet assigned at this point in the function;
-                                    # build the entry via create_image_metadata directly (matches
-                                    # the normal hires/model upscale path at L2184).
-                                    upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
-                                    upscaled_filename = f"img_{upscale_id}.webp"
-                                    filepath = os.path.join(paths["images"], upscaled_filename)
-                                    step_result["image_pil"].save(filepath, format="WEBP", quality=95)
-
-                                    upscaled_meta = create_image_metadata(
-                                        conf, step_result["image_width"], step_result["image_height"],
-                                        float(step_result.get("duration", 0)) + total_upscale_duration,
-                                        current_seed, batch_idx,
-                                        actual_positive_prompt, actual_negative_prompt,
-                                        gen_index=gen_index_offset + total_generated,
-                                    )
-                                    upscaled_meta.update({
-                                        "id": upscale_id,
-                                        "base_fp": job_fp,
-                                        "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
-                                        "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
-                                        "filename": upscaled_filename,
-                                        "rejected": False,
-                                        "upscaled": True,
-                                        "upscale_source": "inline",
-                                        "upscale_pipeline": pipeline_name,
-                                        "upscale_mode": "florence2_hires",
-                                        "florence2_model": step_result.get("florence2_model"),
-                                        "florence2_text_input": step_result.get("florence2_text_input"),
-                                        "florence2_target_megapixels": step_result.get("florence2_target_megapixels"),
-                                        "florence2_crop_padding": step_result.get("florence2_crop_padding"),
-                                        "florence2_grow_expand": step_result.get("florence2_grow_expand"),
-                                        "florence2_feather": step_result.get("florence2_feather"),
-                                        "florence2_output_mask_select": step_result.get("florence2_output_mask_select"),
-                                        "florence2_detection_count": step_result.get("florence2_detection_count"),
-                                        "florence2_bbox": step_result.get("florence2_bbox"),
-                                        "hires_denoise": f2_config["hires_denoise"],
-                                    })
-                                    image_metrics.finalize(upscaled_meta, step_result["image_pil"])
-                                    # Insert at beginning + set upscale_produced (matches L2255-2256
-                                    # canonical pattern). Without upscale_produced=True, the base
-                                    # image at L2337 would ALSO get saved as a duplicate.
-                                    existing_data["items"].insert(0, upscaled_meta)
-                                    upscale_produced = True
-                                    save_manifest(paths["manifest"], existing_data)
-                                    if PromptServer is not None:
-                                        try:
-                                            PromptServer.instance.send_sync("ultimate_grid.update_data", {
-                                                "session_name": session_name,
-                                                "new_items": [upscaled_meta]
-                                            })
-                                        except Exception:
-                                            pass
-                                    upscale_combo_idx += 1
-                                else:
-                                    # Chained — re-encode result_pil for next step's pipe_latent
-                                    _next_arr = _np.array(step_result["image_pil"].convert("RGB")).astype(_np.float32) / 255.0
-                                    _next_tensor = _torch.from_numpy(_next_arr).unsqueeze(0)
-                                    pipe_latent = {"samples": loaded_vae.encode(_next_tensor[:, :, :, :3])}
-                                    pipe_w = step_result["image_width"]
-                                    pipe_h = step_result["image_height"]
-                                continue  # Skip the normal combo loop for this step
-
-                            # --- SeedVR2 upscale mode ---
-                            if mode == "seedvr2":
-                                from .image_generation import seedvr2_upscale
-                                from PIL import Image as PILImage
-                                sv_config = ucfg.get("seedvr2", {})
-                                # Decode current latent to PIL for SeedVR2 input
-                                decoded = decode_latent_with_vae(pipe_latent, loaded_vae)
-                                pil_img = PILImage.fromarray((decoded[0].cpu().numpy() * 255).clip(0, 255).astype("uint8"))
-                                result_pil, up_w, up_h, sv_duration = seedvr2_upscale(pil_img, sv_config)
-                                total_upscale_duration += sv_duration
-                                is_last_step = step_idx == len(expanded_steps) - 1
-                                is_final_output = is_last_step
-                                if is_final_output:
-                                    # Save the upscaled image and update manifest
-                                    upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
-                                    upscaled_filename = f"img_{upscale_id}.webp"
-                                    filepath = os.path.join(paths["images"], upscaled_filename)
-                                    result_pil.save(filepath, quality=80)
-                                    upscaled_meta = dict(meta)
-                                    upscaled_meta.update({
-                                        "id": upscale_id,
-                                        "base_fp": job_fp,
-                                        "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
-                                        "gen_index": len(existing_data["items"]),
-                                        "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
-                                        "filename": upscaled_filename,
-                                        "width": up_w, "height": up_h,
-                                        "duration": sv_duration,
-                                        "upscaled": True,
-                                        "upscale_source": "inline",
-                                        "upscale_pipeline": pipeline_name,
-                                        "upscale_mode": "seedvr2",
-                                        "upscale_model": sv_config.get("dit_model", ""),
-                                    })
-                                    image_metrics.finalize(upscaled_meta, result_pil)
-                                    existing_data["items"].append(upscaled_meta)
-                                    save_manifest(paths["manifest"], existing_data)
-                                    if PromptServer is not None:
-                                        try:
-                                            PromptServer.instance.send_sync("ultimate_grid.update_data", {
-                                                "session_name": session_name,
-                                                "new_items": [upscaled_meta]
-                                            })
-                                        except Exception:
-                                            pass
-                                    upscale_combo_idx += 1
-                                else:
-                                    # Re-encode for next step in chain
-                                    import torch as seedvr_torch
-                                    import numpy as seedvr_np
-                                    result_np = seedvr_np.array(result_pil.convert("RGB")).astype(seedvr_np.float32) / 255.0
-                                    result_tensor = seedvr_torch.from_numpy(result_np).unsqueeze(0)
-                                    pipe_latent = loaded_vae.encode(result_tensor[:, :, :, :3].movedim(-1, 1))
-                                    pipe_latent = {"samples": pipe_latent}
-                                    pipe_w_current = up_w
-                                    pipe_h_current = up_h
-                                continue  # Skip the normal combo loop for this step
-
-                            # Parse multi-value fields
-                            raw_ratios = str(ucfg.get("upscale_ratios", "1.5"))
-                            ratios = [float(r.strip()) for r in raw_ratios.split(",") if r.strip()] or [1.5]
-                            raw_denoise = str(ucfg.get("hires_denoise", "0.3"))
-                            denoises = [float(d.strip()) for d in raw_denoise.split(",") if d.strip()] or [0.3]
-                            models = ucfg.get("upscale_models", []) or [""]
-
-                            # Build Cartesian product of multi-value fields
-                            if show_hires and show_model:
-                                combos = list(upscale_itertools.product(models, ratios, denoises))
-                            elif show_hires:
-                                combos = list(upscale_itertools.product([""], ratios, denoises))
-                            elif show_model:
-                                combos = list(upscale_itertools.product(models, [1.0], [0.0]))
-                            else:
-                                combos = []
-
-                            for combo in combos:
-                                up_model_name, up_ratio, up_denoise = combo
-
-                                # Skip combos requiring a model when none is selected
-                                if show_model and not up_model_name:
-                                    upscale_combo_idx += 1
-                                    continue
-
-                                # Build single-value upscaling config for upscale_image()
-                                # For model_only mode, use upscale_ratio for upscale_size so the
-                                # model's native output is preserved (not resized back to 1x)
-                                effective_size = up_ratio if up_ratio > 1.0 else 2.0
-                                single_config = {
-                                    "mode": mode,
-                                    "upscale_ratio": up_ratio,
-                                    "hires_denoise": up_denoise,
-                                    "hires_steps": ucfg.get("hires_steps", 0),
-                                    "tiled_vae": ucfg.get("tiled_vae", False),
-                                    "tile_size": ucfg.get("tile_size", 512),
-                                    "tile_overlap": ucfg.get("tile_overlap", 64),
-                                    "temporal_size": ucfg.get("temporal_size", 512),
-                                    "temporal_overlap": ucfg.get("temporal_overlap", 64),
-                                    "upscale_model": up_model_name,
-                                    "upscale_size": effective_size,
-                                    "resize_method": ucfg.get("resize_method", "bilinear"),
-                                    "hires_tiled_sampling": ucfg.get("hires_tiled_sampling", False),
-                                    "hires_tile_width": ucfg.get("hires_tile_width", 512),
-                                    "hires_tile_height": ucfg.get("hires_tile_height", 512),
-                                    "hires_mask_blur": ucfg.get("hires_mask_blur", 8),
-                                    "hires_tile_padding": ucfg.get("hires_tile_padding", 32),
-                                    "hires_force_uniform_tiles": ucfg.get("hires_force_uniform_tiles", False)
-                                }
-
-                                # Steps within a pipeline chain sequentially (each feeds into the next)
-                                # Use HiRes-adjusted conditioning for modes that involve hires fix
-                                up_positive = hires_positive_cond if (show_hires and hires_prompt_active) else final_positive
-                                upscale_result, upscale_duration = upscale_image(
-                                    pipe_latent, loaded_vae, patched_model, single_config,
-                                    conf, up_positive, final_negative, pipe_w, pipe_h
-                                )
-                                total_upscale_duration += upscale_duration
-
-                                # Determine if this is the final output (only the last step's last combo in the pipeline)
-                                is_last_step = step_idx == len(expanded_steps) - 1
-                                is_last_combo = combo == combos[-1]
-                                is_final_output = is_last_step and is_last_combo
-
-                                # Generate timestamp-based ID (same convention as normal images)
-                                upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
-                                upscaled_filename = f"img_{upscale_id}_upscaled.webp"
-                                up_metrics_sink = {}
-                                up_metrics_img = None
-
-                                if isinstance(upscale_result, dict) and "samples" in upscale_result:
-                                    # HiRes modes return latent — decode to get dimensions
-                                    upscaled_pil = decode_latent_with_vae(
-                                        loaded_vae, upscale_result["samples"],
-                                        metrics_sink=up_metrics_sink if is_final_output else None)
-                                    up_metrics_img = upscaled_pil
-                                    up_w, up_h = upscaled_pil.size
-                                    # Only save to disk if this is a final output
-                                    if is_final_output:
-                                        upscaled_pil.save(
-                                            os.path.join(paths["images"], upscaled_filename),
-                                            "WEBP", quality=80
-                                        )
-                                    # Feed this latent to the next step in the pipeline
-                                    pipe_latent = upscale_result
-                                    pipe_w = up_w
-                                    pipe_h = up_h
-                                elif isinstance(upscale_result, PILImage.Image):
-                                    # Model-only returns PIL directly
-                                    up_metrics_img = upscale_result
-                                    up_w, up_h = upscale_result.size
-                                    # Only save to disk if this is a final output
-                                    if is_final_output:
-                                        upscale_result.save(
-                                            os.path.join(paths["images"], upscaled_filename),
-                                            "WEBP", quality=80
-                                        )
-                                    # Encode PIL back to latent for next step in pipeline
-                                    import numpy as np_stack
-                                    import torch as torch_stack
-                                    pil_np = np_stack.array(upscale_result).astype(np_stack.float32) / 255.0
-                                    pil_tensor = torch_stack.from_numpy(pil_np).unsqueeze(0)
-                                    pipe_latent = {"samples": loaded_vae.encode(pil_tensor[:, :, :, :3])}
-                                    pipe_w = up_w
-                                    pipe_h = up_h
-                                else:
-                                    upscale_combo_idx += 1
-                                    continue
-
-                                # Collect this step's upscale info for pipeline history
-                                step_info = {
-                                    "mode": mode,
-                                    "ratio": up_ratio,
-                                    "denoise": up_denoise,
-                                    "model": up_model_name or "",
-                                    "resize_method": ucfg.get("resize_method", "bilinear"),
-                                    "hires_steps": ucfg.get("hires_steps", 0),
-                                    "tiled_vae": ucfg.get("tiled_vae", False),
-                                    "tile_size": ucfg.get("tile_size", 512),
-                                    "tiled_sampling": ucfg.get("hires_tiled_sampling", False),
-                                    "tile_w": ucfg.get("hires_tile_width", 512),
-                                    "tile_h": ucfg.get("hires_tile_height", 512),
-                                }
-                                if mode == "model_only":
-                                    step_info["upscale_size"] = ucfg.get("upscale_size", "2.0")
-                                pipeline_history.append(step_info)
-
-                                if is_final_output:
-                                    upscaled_meta = create_image_metadata(
-                                        conf, up_w, up_h, duration + total_upscale_duration, current_seed, batch_idx,
-                                        actual_positive_prompt, actual_negative_prompt,
-                                        gen_index=gen_index_offset + total_generated
-                                    )
-                                    upscaled_meta["id"] = upscale_id
-                                    upscaled_meta["upscaled"] = True
-                                    upscaled_meta["upscale_pipeline"] = pipeline_name
-                                    upscaled_meta["base_fp"] = job_fp
-                                    upscaled_meta["config_fp"] = config_fingerprint(conf, w, h, conf["seed"], pipeline_name)
-
-                                    # Include HiRes prompt adjustment info in manifest
-                                    if hires_prompt_active:
-                                        upscaled_meta["hires_prompt_behavior"] = hires_prompt_behavior_rt
-                                        upscaled_meta["hires_prompt_text"] = hires_prompt_text_rt
-
-                                    # Multiple steps in pipeline: save arrays of all steps
-                                    if len(pipeline_history) > 1:
-                                        upscaled_meta["upscale_stacked"] = True
-                                        upscaled_meta["upscale_mode"] = [s["mode"] for s in pipeline_history]
-                                        upscaled_meta["upscale_ratio"] = [s["ratio"] for s in pipeline_history]
-                                        upscaled_meta["upscale_denoise"] = [s["denoise"] for s in pipeline_history]
-                                        models = [s["model"] for s in pipeline_history if s["model"]]
-                                        if models:
-                                            upscaled_meta["upscale_model"] = models
-                                        upscaled_meta["upscale_resize_method"] = [s["resize_method"] for s in pipeline_history]
-                                        upscaled_meta["upscale_hires_steps"] = [s["hires_steps"] for s in pipeline_history]
-                                        # Tiling info: only include steps that have it enabled
-                                        tiled_vae_steps = [s["tile_size"] for s in pipeline_history if s["tiled_vae"]]
-                                        if tiled_vae_steps:
-                                            upscaled_meta["upscale_tiled_vae"] = True
-                                            upscaled_meta["upscale_tile_size"] = tiled_vae_steps
-                                        tiled_sampling_steps = [f'{s["tile_w"]}x{s["tile_h"]}' for s in pipeline_history if s["tiled_sampling"]]
-                                        if tiled_sampling_steps:
-                                            upscaled_meta["upscale_tiled_sampling"] = True
-                                            upscaled_meta["upscale_tile_w"] = [s["tile_w"] for s in pipeline_history if s["tiled_sampling"]]
-                                            upscaled_meta["upscale_tile_h"] = [s["tile_h"] for s in pipeline_history if s["tiled_sampling"]]
-                                    else:
-                                        # Single step pipeline
-                                        upscaled_meta["upscale_mode"] = mode
-                                        upscaled_meta["upscale_ratio"] = up_ratio
-                                        upscaled_meta["upscale_denoise"] = up_denoise
-                                        if up_model_name:
-                                            upscaled_meta["upscale_model"] = up_model_name
-                                        upscaled_meta["upscale_resize_method"] = ucfg.get("resize_method", "bilinear")
-                                        upscaled_meta["upscale_hires_steps"] = ucfg.get("hires_steps", 0)
-                                        if ucfg.get("tiled_vae", False):
-                                            upscaled_meta["upscale_tiled_vae"] = True
-                                            upscaled_meta["upscale_tile_size"] = ucfg.get("tile_size", 512)
-                                        if ucfg.get("hires_tiled_sampling", False):
-                                            upscaled_meta["upscale_tiled_sampling"] = True
-                                            upscaled_meta["upscale_tile_w"] = ucfg.get("hires_tile_width", 512)
-                                            upscaled_meta["upscale_tile_h"] = ucfg.get("hires_tile_height", 512)
-                                        if mode == "model_only":
-                                            upscaled_meta["upscale_size"] = ucfg.get("upscale_size", "2.0")
-
-                                    upscaled_meta["file"] = f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images"
-                                    upscaled_meta["rejected"] = False
-                                    image_metrics.finalize(upscaled_meta, up_metrics_img, up_metrics_sink)
-                                    # Insert at beginning (same order as flush_batch_with_vae)
-                                    existing_data["items"].insert(0, upscaled_meta)
-                                    upscale_produced = True
-
-                                    # Save manifest immediately so dashboard can pick it up
-                                    save_manifest(paths["manifest"], existing_data)
-
-                                    # Send live update to dashboard (same as flush_batch_with_vae)
-                                    if PromptServer is not None:
-                                        try:
-                                            manifest_meta = existing_data.get("meta", {})
-                                            PromptServer.instance.send_sync("ultimate_grid.update", {
-                                                "node": unique_id,
-                                                "session_name": session_name,
-                                                "new_items": [upscaled_meta],
-                                                "meta": manifest_meta
-                                            })
-                                        except Exception:
-                                            pass
-
-                                    print(f"[GridTester] 🔍 Saved upscaled image: {upscaled_filename} "
-                                          f"(pipeline={pipeline_name}, mode={mode}, ratio={up_ratio}, denoise={up_denoise}"
-                                          f"{', model=' + up_model_name if up_model_name else ''})")
-                                else:
-                                    print(f"[GridTester] 🔍 Pipeline '{pipeline_name}' intermediate step {step_idx + 1}/{len(expanded_steps)} "
-                                          f"(mode={mode}, ratio={up_ratio}, denoise={up_denoise}"
-                                          f"{', model=' + up_model_name if up_model_name else ''})")
-
-                                upscale_combo_idx += 1
-
-                    # Save manifest after all pipeline combos
-                    if upscale_combo_idx > 0:
-                        save_manifest(paths["manifest"], existing_data)
-
-                # Include upscale time in total duration for ETA accuracy
-                total_duration = duration + total_upscale_duration
-                new_completed += 1
-                job_durations.append(total_duration)
-                # With the pre-flight scan, jobs that will be skipped later must not count as remaining work
-                eta_info = calculate_eta(job_durations, (existing_count + new_completed) if _pf_ran else current_job, total_jobs)
-                if eta_info:
-                    print_generation_progress(current_job, total_jobs, conf, w, h, total_duration, eta_info)
-                    # Compact single-line ETA summary — uses effective progress (existing + newly completed)
-                    _effective_job = existing_count + new_completed
-                    _eta_pct = int((_effective_job / total_jobs) * 100)
-                    if eta_info['hours'] > 0:
-                        _eta_str = f"{eta_info['hours']}h {eta_info['minutes']}m"
-                    elif eta_info['minutes'] > 0:
-                        _eta_str = f"{eta_info['minutes']}m {eta_info['seconds']}s"
-                    else:
-                        _eta_str = f"{eta_info['seconds']}s"
-                    _eta_line = (f"[GridTester] 📊 job {_effective_job}/{total_jobs} ({_eta_pct}%) | "
-                                 f"ETA: {_eta_str} | ~{eta_info['finish_formatted']} | "
-                                 f"{eta_info['avg_duration']:.1f}s/job")
-                    if existing_count > 0:
-                        _eta_line += f" | {existing_count} existing"
-                    print(_eta_line)
-                    # Send progress to dashboard frontend
-                    if PromptServer is not None:
-                        try:
-                            progress_pct = int((_effective_job / total_jobs) * 100)
-                            if eta_info['hours'] > 0:
-                                eta_str = f"{eta_info['hours']}h {eta_info['minutes']}m"
-                            elif eta_info['minutes'] > 0:
-                                eta_str = f"{eta_info['minutes']}m {eta_info['seconds']}s"
-                            else:
-                                eta_str = f"{eta_info['seconds']}s"
-                            PromptServer.instance.send_sync("ultimate_grid.progress", {
-                                "node": unique_id,
-                                "session_name": session_name,
-                                "current_job": _effective_job,
-                                "total_jobs": total_jobs,
-                                "progress_pct": progress_pct,
-                                "eta_str": eta_str,
-                                "finish_time": eta_info['finish_formatted'],
-                                "avg_duration": round(eta_info['avg_duration'], 1),
-                                "last_duration": round(total_duration, 1)
-                            })
-                        except Exception:
-                            pass
-
-                # Skip saving the base (non-upscaled) image when upscaling produced results
-                # — only the upscaled final version(s) should appear in the output
-                # Unless save_pre_upscale is enabled, in which case save both
-                if not upscale_produced or save_pre_upscale:
-                    meta = create_image_metadata(
-                        eff_conf, gen_w, gen_h, total_duration, current_seed, batch_idx,
-                        actual_positive_prompt, actual_negative_prompt,
-                        gen_index=gen_index_offset + total_generated
-                    )
-                    meta["config_fp"] = job_fp
-                    if _is_pv:
-                        meta.update({
-                            "preview": True, "preview_of": job_fp,
-                            "full_steps": conf["steps"], "full_cfg": conf["cfg"],
-                            "full_width": w, "full_height": h, "preview_scale": pv_scale,
-                        })
-                    if pos_hash or neg_hash:
-                        meta["conditioning_pos_hash"] = pos_hash
-                        meta["conditioning_neg_hash"] = neg_hash
-
-                    pending_batch.append((result_latent["samples"].clone(), meta))
-                total_generated += 1
-
-                # ==== GPU COOLDOWN (if enabled in session settings) ====
-                if session_settings and session_settings.get("cooldown", {}).get("enabled", False):
-                    cooldown_config = session_settings["cooldown"]
-                    cooldown_every_n = int(cooldown_config.get("every_n", 1))
-                    if total_generated > 0 and total_generated % cooldown_every_n == 0:
-                        cooldown_seconds = int(cooldown_config.get("seconds", 5))
-                        clear_vram = cooldown_config.get("clear_vram", False)
-                        print(f"[GridTester] ❄️ GPU Cooldown: pausing {cooldown_seconds}s after {total_generated} generations")
-                        if clear_vram:
-                            import comfy.model_management as mm_cooldown
-                            mm_cooldown.soft_empty_cache()
-                            mm_cooldown.unload_all_models()
-                            print(f"[GridTester] ❄️ VRAM cleared")
-                            cached_model_key = None  # Force model reload on next iteration
-                        import time as time_cooldown
-                        time_cooldown.sleep(cooldown_seconds)
-                        print(f"[GridTester] ❄️ Cooldown complete, resuming generation")
-
-            except Exception as e:
-                import comfy.model_management
-                if isinstance(e, InterruptProcessingException):
-                    print(f"\n[GridTester] 🛑 INTERRUPTED during generation - Stopping all jobs")
-                    if result_latent is not None:
-                        del result_latent
-                    result_latent = None
-
-                    if pending_batch:
-                        _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
-                                             per_config_remote_workers, use_remote_vae, remote_vae_worker,
-                                             loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
-                                             config_overrides_vae=config_overrides_vae, image_format=image_format)
-                        pending_batch = []
-
-                    _cleanup_per_config_remote_workers(per_config_remote_workers)
-                    if remote_vae_worker:
-                        remote_vae_worker.wait_completion()
-                        remote_vae_worker.stop()
-
-                    existing_data["meta"] = {
-                        "positive": positive_text,
-                        "negative": negative_text,
-                        "model": ckpt_name,
-                        "seed": seed,
-                        "vae_batch_size": vae_batch_size,
-                        "configs_json": configs_json,
-                        "resolutions_json": resolutions_json,
-                        "image_format": image_format,
-                        "job_order": job_order,
-                        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
-                    }
-                    save_manifest(paths["manifest"], existing_data)
-
-                    loaded_model, loaded_clip, loaded_vae = None, None, None
-                    patched_model, patched_clip = None, None
-                    conditioning_cache.clear()
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-
-                    # Re-raise so ComfyUI knows execution was interrupted (not completed)
-                    raise
-                else:
-                    print(f"[GridTester] ❌ Generation failed: {e}")
-                    if result_latent is not None:
-                        del result_latent
-                    continue
-            
-            if result_latent is not None:
-                del result_latent
-            result_latent = None
-            del latent_in
-            latent_in = None
-            
-            if current_job % 10 == 0:
+                _cleanup_per_config_remote_workers(per_config_remote_workers)
+                if remote_vae_worker:
+                    remote_vae_worker.wait_completion()
+                    remote_vae_worker.stop()
+
+                existing_data["meta"] = {
+                    "positive": positive_text,
+                    "negative": negative_text,
+                    "model": ckpt_name,
+                    "seed": seed,
+                    "vae_batch_size": vae_batch_size,
+                    "configs_json": configs_json,
+                    "resolutions_json": resolutions_json,
+                    "image_format": image_format,
+                    "job_order": job_order,
+                    "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+                }
+                save_manifest(paths["manifest"], existing_data)
+
+                loaded_model, loaded_clip, loaded_vae = None, None, None
+                patched_model, patched_clip = None, None
+                conditioning_cache.clear()
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+
+                # Re-raise so ComfyUI knows execution was interrupted (not completed)
+                raise InterruptProcessingException()
+        except InterruptProcessingException:
+            raise
+        except:
+            pass
             
-            threshold = vae_batch_size if flush_batch_every <= 0 else flush_batch_every
-            if len(pending_batch) >= threshold:
+        current_seed = conf["seed"]
+        if conf.get("seed_behavior") == "randomize":
+            import random
+            current_seed = random.randint(0, 2**63 - 1)
+        # Fingerprint of this cell (configured seed, FULL resolution); LTX items are not fingerprinted.
+        job_fp = None
+        if conf.get("model_type") != "ltx_video":
+            job_fp = config_fingerprint(conf, w, h, conf["seed"])
+            if not preview_on and not has_optional_inputs and conf.get("seed_behavior") == "randomize":
+                _refresh_pstate()
+                _pe = _pstate["pindex"].get(job_fp)
+                if _pe and _pe.get("seed") is not None:
+                    current_seed = _pe["seed"]  # re-render the survivor with the seed the user approved
+        current_job += 1
+            
+        if pbar:
+            try:
+                pbar.update_absolute(current_job, total_jobs)
+            except:
+                pass
+
+        # LTX Video dispatch — must run BEFORE any image-gen-specific code that
+        # accesses conf['sampler']/conf['steps'] (LTX configs use sampler_stage1/2).
+        if conf.get("model_type") == "ltx_video":
+            from .ltx_video_generation import preflight_ltx, load_ltx_models, ltx_video_generate
+
+            # Pre-flight on first LTX config of this run (idempotent — cached check internally)
+            if not _ltx_preflight_done[0]:
+                try:
+                    preflight_ltx(conf)
+                    _ltx_preflight_done[0] = True
+                    # Free image-gen caches to make room for LTX VRAM
+                    try:
+                        from . import model_cache as mc
+                        if hasattr(mc, "clear_image_caches"):
+                            mc.clear_image_caches()
+                    except Exception:
+                        pass
+                except RuntimeError as e:
+                    print(f"[GridTester] LTX preflight FAILED: {e}")
+                    raise
+
+            # Override conf width/height with the current loop's resolution.
+            # The loop's `w, h` comes from the sampler node's resolutions widget
+            # (or a per-config override). LTX configs don't have width/height in
+            # their builder UI yet, so the cartesian-expansion defaults (446x576)
+            # would otherwise stick.
+            conf["width"] = w
+            conf["height"] = h
+
+            # Filename uses gen index + timestamp suffix to guarantee uniqueness
+            # per run. Skip-on-exists is intentionally NOT enabled for LTX (v1) —
+            # the resume/match logic image-gen uses doesn't yet understand LTX
+            # config fields (sigmas, strengths, audio_mode, etc.) so it produced
+            # false-positive skips on real config changes (e.g., LoRA strength,
+            # seed). Until we have a proper LTX-aware manifest match, every LTX
+            # gen runs fresh. Users can manually delete unwanted mp4s.
+            _ts_suffix = str(int(time.time() * 1000) % 10_000_000)
+            ltx_output_filename = f"{conf_idx:06d}_seed{conf.get('seed', 0)}_{w}x{h}_dur{conf.get('duration_seconds', 5)}s_{conf.get('frame_rate', 25)}fps_{_ts_suffix}"
+            ltx_output_path = os.path.join(paths["images"], ltx_output_filename + ".mp4")
+
+            progress_pct = int((current_job / total_jobs) * 100)
+            print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
+                  f"LTX {conf.get('duration_seconds', 5)}s @ {conf.get('frame_rate', 25)}fps | {conf.get('width')}x{conf.get('height')}")
+
+            try:
+                ltx_models = load_ltx_models(conf)
+                gen_result = ltx_video_generate(conf, ltx_models, ltx_output_path)
+            except Exception as e:
+                print(f"[GridTester] LTX gen FAILED for config {conf_idx}: {e}")
+                raise
+
+            # Build manifest entry and persist
+            item = _build_ltx_manifest_entry(conf, gen_result, ltx_output_filename, gen_index=conf_idx, session_name=session_name)
+            existing_data["items"].insert(0, item)
+            save_manifest(paths["manifest"], existing_data)
+
+            # Skip the standard image-gen path
+            continue
+
+        progress_pct = int((current_job / total_jobs) * 100)
+        _is_pv = preview_on  # LTX configs never reach this point (dispatched above)
+        eff_conf = _effective_conf(conf) if _is_pv else conf
+        if _is_pv:
+            print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
+                  f"{conf['sampler']} @ PREVIEW {pv_steps} steps | {w}x{h} x{pv_scale}")
+        else:
+            print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
+                  f"{conf['sampler']} @ {conf['steps']} steps | {w}x{h}")
+            
+        actual_positive_prompt, lora_triggers = build_prompt_with_triggers(
+            conf, lora_triggerwords_mode
+        )
+        actual_negative_prompt = conf["negative"]
+            
+        # ==== START AT JOB # (skip earlier jobs) ====
+        if start_at_job > 0 and current_job < start_at_job:
+            skipped_count += 1
+            continue
+
+        # ==== PREVIEW PROMOTION SKIP ====
+        # Full run: skip cells whose preview was rejected (or not favorited). Preview run: skip cells
+        # that already have a full image. A rejection is an explicit user signal, so overwrite_existing
+        # does not override it; it still overrides the "full image exists" skip.
+        _promo_why = _promotion_status(conf, job_fp)
+        if _promo_why and not (_promo_why == "full_exists" and overwrite_existing):
+            skipped_count += 1
+            if _promo_why != "full_exists":
+                _promo_skips += 1
+                if _promo_skips % 50 == 0:
+                    print(f"[GridTester] ⏭️ skipped {_promo_skips} jobs whose preview was rejected")
+            continue
+
+        # ==== CHECK EXISTING MATCH ====
+        match_index = check_if_job_completed(
+            existing_data["items"],
+            eff_conf,
+            current_seed,
+            w, h,
+            batch_idx,
+            actual_positive_prompt,
+            actual_negative_prompt,
+            has_optional_inputs=has_optional_inputs,
+            preview=_is_pv
+        )
+
+        if match_index != -1:
+            if not overwrite_existing:
+                skipped_count += 1
+                continue
+            else:
+                old_item = existing_data["items"][match_index]
+                try:
+                    old_fname_match = re.search(r'filename=([^&]+)', old_item["file"])
+                    if old_fname_match:
+                        old_file_path = os.path.join(paths["images"], old_fname_match.group(1))
+                        if os.path.exists(old_file_path):
+                            os.remove(old_file_path)
+                except Exception as e:
+                    print(f"[GridTester] ⚠️ Warning: Could not delete old file: {e}")
+                    
+                existing_data["items"].pop(match_index)
+            
+        # ==== MODEL SWITCHING ====
+        target_model_name = conf["model"]
+        target_model_key = get_model_cache_key(conf)
+        if target_model_key != cached_model_key:
+            if cached_model_key is not None:
+                patched_model, patched_clip = cleanup_model_references(
+                    patched_model, patched_clip, conditioning_cache
+                )
+                # CRITICAL FIX: Restore dict structure after clear
+                conditioning_cache["positive"] = {}
+                conditioning_cache["negative"] = {}
+
+            loaded_model, loaded_clip, loaded_vae = load_model_by_type(
+                conf, ckpt_name, use_remote_vae,
+                optional_model, optional_clip, optional_vae,
+                optional_positive, optional_negative, loaded_clip, loaded_vae, model_cache=model_cache
+            )
+            # VAE fallback for non-checkpoint models
+            if loaded_vae is None and optional_vae is not None:
+                loaded_vae = optional_vae
+            # Remember this model's default VAE for reverting later
+            default_model_vae = loaded_vae
+            cached_vae_key = "Default"
+            current_vae_is_remote = False
+            current_remote_vae_url = None
+            config_overrides_vae = False
+
+            cached_model_key = target_model_key
+            cached_lora_key = None
+            cached_lora_cache_key = None
+            latent_channels = get_latent_channels(loaded_model, optional_latent)
+            latent_ratio = get_latent_downscale_ratio(loaded_model)
+            model_switched = True
+        else:
+            model_switched = False
+
+        # ==== PER-CONFIG VAE SWITCHING ====
+        # Config Builder VAE settings take priority over sampler node's remote_vae_endpoint
+        target_vae = conf.get("vae", "Default")
+        if not target_vae or str(target_vae) in ("None", "none"):
+            target_vae = "Default"
+        if target_vae != cached_vae_key:
+            # Flush pending batch before switching VAE (they need current VAE for decoding)
+            if pending_batch:
                 _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
                                      per_config_remote_workers, use_remote_vae, remote_vae_worker,
                                      loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
                                      config_overrides_vae=config_overrides_vae, image_format=image_format)
                 pending_batch = []
+
+            if target_vae == "Default":
+                # Revert to model's bundled/default VAE
+                loaded_vae = default_model_vae
+                current_vae_is_remote = False
+                current_remote_vae_url = None
+                config_overrides_vae = False
+                print(f"[GridTester] 🎨 Reverting to Default VAE")
+            elif is_remote_vae(target_vae):
+                url = extract_remote_vae_url(target_vae)
+                current_vae_is_remote = True
+                current_remote_vae_url = url
+                config_overrides_vae = True
+                loaded_vae = None  # No local VAE needed
+                print(f"[GridTester] 🌐 Using per-config remote VAE: {url}")
+                if url not in per_config_remote_workers:
+                    per_config_remote_workers[url] = RemoteVAEDecodeWorker(
+                        endpoint=url, img_dir=paths["images"],
+                        manifest_path=paths["manifest"],
+                        existing_data=existing_data,
+                        session_name=session_name, unique_id=unique_id,
+                        image_format=image_format
+                    )
+            else:
+                current_vae_is_remote = False
+                current_remote_vae_url = None
+                config_overrides_vae = True
+                print(f"[GridTester] 🎨 Loading per-config VAE: {target_vae}")
+                loaded_vae = load_vae_by_name(target_vae)
+            cached_vae_key = target_vae
+
+        # ==== LORA SWITCHING ====
+        current_lora_string = conf["lora_expanded"]
+            
+        if model_cache:
+            current_cache_key = model_cache._get_lora_cache_key(target_model_key, current_lora_string)
+            need_to_load = (current_cache_key != cached_lora_cache_key) or patched_model is None
+        else:
+            need_to_load = (current_lora_string != cached_lora_key) or patched_model is None
+            
+        if need_to_load:
+            patched_model, patched_clip, should_skip = load_loras(
+                loaded_model, loaded_clip, current_lora_string,
+                target_model_key, incompatible_loras, model_cache=model_cache
+            )
+                
+            if should_skip:
+                skipped_count += 1
+                continue
+                
+            cached_lora_key = current_lora_string
+            if model_cache:
+                cached_lora_cache_key = current_cache_key
+                
+            # Batch encode logic for multi-model switching
+            # Because of short-circuit, if model_switched is True, conditioning_cache['positive'] isn't checked initially
+            # But inside the loop, we access it.
+            if model_switched or not conditioning_cache["positive"]:
+                model_unique_positives = []
+                model_unique_negatives = []
+                _seen_positives = set()
+                _seen_negatives = set()
+
+                for future_idx in range(plan_idx, len(job_plan)):
+                    future_conf = job_plan[future_idx]["conf"]
+                    if get_model_cache_key(future_conf) != target_model_key:
+                        break  # the contiguous run of this model in the plan
+                    if get_model_cache_key(future_conf) == target_model_key:
+                        future_positive, _ = build_prompt_with_triggers(
+                            future_conf, lora_triggerwords_mode
+                        )
+                        # Skip encoding prompts for configs that are already completed
+                        # (avoids wasting time on prompts only used by skipped jobs)
+                        if not overwrite_existing and _have_history():
+                            # this plan entry (conf @ resolution) is already done or skipped
+                            all_done = _job_status(job_plan[future_idx]) != "todo"
+                            if all_done:
+                                continue
+                        if future_positive not in _seen_positives:
+                            _seen_positives.add(future_positive)
+                            model_unique_positives.append(future_positive)
+                        future_neg = future_conf["negative"]
+                        if future_neg not in _seen_negatives:
+                            _seen_negatives.add(future_neg)
+                            model_unique_negatives.append(future_neg)
+
+                if model_unique_positives:
+                    print(f"[GridTester] 🧠 Batch encoding {len(model_unique_positives)} prompts for {target_model_name}")
+
+                    clip_skip = conf.get("clip_skip", 0)
+
+                    try:
+                        with pinned_clip(patched_clip, model_unique_positives + model_unique_negatives):
+                            for prompt in model_unique_positives:
+                                # Check for interrupt before each prompt encoding
+                                if mm.processing_interrupted():
+                                    print(f"\n[GridTester] 🛑 INTERRUPTED during positive encoding - Stopping all encoding")
+                                    raise InterruptProcessingException()
+
+                                if prompt not in conditioning_cache["positive"]:
+                                    conditioning_cache["positive"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
+
+                            for prompt in model_unique_negatives:
+                                # Check for interrupt before each prompt encoding
+                                if mm.processing_interrupted():
+                                    print(f"\n[GridTester] 🛑 INTERRUPTED during negative encoding - Stopping all encoding")
+                                    raise InterruptProcessingException()
+
+                                if prompt not in conditioning_cache["negative"]:
+                                    conditioning_cache["negative"][prompt] = encode_prompt_with_combinators(patched_clip, prompt, clip_skip)
+
+                    except InterruptProcessingException:
+                        print(f"\n[GridTester] 🛑 INTERRUPTED during encoding - Stopping all jobs")
+
+                        if pending_batch:
+                            _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
+                                                 per_config_remote_workers, use_remote_vae, remote_vae_worker,
+                                                 loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
+                                                 config_overrides_vae=config_overrides_vae, image_format=image_format)
+                            pending_batch = []
+
+                        _cleanup_per_config_remote_workers(per_config_remote_workers)
+                        if remote_vae_worker:
+                            remote_vae_worker.wait_completion()
+                            remote_vae_worker.stop()
+
+                        existing_data["meta"] = {
+                            "positive": positive_text,
+                            "negative": negative_text,
+                            "model": ckpt_name,
+                            "seed": seed,
+                            "vae_batch_size": vae_batch_size,
+                            "configs_json": configs_json,
+                            "resolutions_json": resolutions_json,
+                            "image_format": image_format,
+                            "job_order": job_order,
+                            "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+                            "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+                        }
+                        save_manifest(paths["manifest"], existing_data)
+
+                        loaded_model, loaded_clip, loaded_vae = None, None, None
+                        patched_model, patched_clip = None, None
+                        conditioning_cache.clear()
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                        # Re-raise so ComfyUI knows execution was interrupted (not completed)
+                        raise
+
+                    print(f"[GridTester] ✅ Encoded {len(conditioning_cache['positive'])} positive, {len(conditioning_cache['negative'])} negative")
+
+                model_switched = False
+            if cond_cache:
+                cond_cache.set_lora_config(conf['lora_expanded'])
+            
+        # Get conditioning
+        if optional_positive:
+            final_positive = optional_positive
+        else:
+            full_positive = actual_positive_prompt
+            final_positive = conditioning_cache["positive"].get(full_positive)
+            if final_positive is None:
+                cached_keys = list(conditioning_cache["positive"].keys())
+                cached_preview = [k[:40] for k in cached_keys[:5]]
+                raise RuntimeError(
+                    f"[GridTester] ❌ BUG: Encoding not found for positive prompt: {full_positive[:80]}...\n"
+                    f"  model_key={target_model_key}, lora={current_lora_string}\n"
+                    f"  Cache has {len(cached_keys)} entries: {cached_preview}\n"
+                    f"  model_switched={model_switched}, need_to_load={need_to_load}"
+                )
+
+        if optional_negative:
+            final_negative = optional_negative
+        else:
+            final_negative = conditioning_cache["negative"].get(conf["negative"])
+            if final_negative is None:
+                cached_keys = list(conditioning_cache["negative"].keys())
+                cached_preview = [k[:40] for k in cached_keys[:5]]
+                raise RuntimeError(
+                    f"[GridTester] ❌ BUG: Encoding not found for negative prompt: {conf['negative'][:80]}...\n"
+                    f"  model_key={target_model_key}, lora={current_lora_string}\n"
+                    f"  Cache has {len(cached_keys)} entries: {cached_preview}\n"
+                    f"  model_switched={model_switched}, need_to_load={need_to_load}"
+                )
+            
+        # =========================================================
+        # ==== 🚀 ASYNC LOOK-AHEAD PRE-FETCHING (CORRECTED) ====
+        # =========================================================
+        if model_cache is not None and model_cache.async_preload:
+            # Check if next job exists (the plan carries it directly, no index arithmetic)
+            if plan_idx + 1 < len(job_plan):
+                next_idx = plan_idx + 1
+
+                if next_idx < len(job_plan):
+                    next_conf = job_plan[next_idx]["conf"]
+                        
+                    # RESOLVE cache keys for next conf
+                    next_model_key = get_model_cache_key(next_conf)
+                    next_lora = next_conf["lora_expanded"]
+
+                    # CASE 1: Same Base, Different LoRA
+                    if next_model_key == target_model_key and next_lora != current_lora_string:
+                        def _preload_lora_worker():
+                            return load_loras(
+                                loaded_model, loaded_clip, next_lora,
+                                target_model_name, {}, model_cache=None
+                            )
+                        model_cache.preload_lora_model(target_model_key, next_lora, _preload_lora_worker)
+
+                    # CASE 2: Different Base Model
+                    elif next_model_key != target_model_key:
+                        next_model_type = next_conf.get("model_type", "checkpoint")
+                        next_model_name = next_conf["model"]
+                        print(f"[GridTester] 🔮 Pre-loading Base Model: {next_model_name} ({next_model_type})")
+
+                        if next_model_type == "checkpoint":
+                            next_model_resolved = ckpt_name if next_model_name == "Default" else next_model_name
+                            def _preload_base_worker(path_to_load=next_model_resolved):
+                                try:
+                                    import comfy.sd
+                                    ckpt_path = folder_paths.get_full_path("checkpoints", path_to_load)
+                                    if use_remote_vae:
+                                        out = comfy.sd.load_checkpoint_guess_config(
+                                            ckpt_path, output_vae=False, output_clip=True,
+                                            embedding_directory=folder_paths.get_folder_paths("embeddings")
+                                        )
+                                        return out[0], out[1], None
+                                    else:
+                                        out = comfy.sd.load_checkpoint_guess_config(
+                                            ckpt_path, output_vae=True, output_clip=True,
+                                            embedding_directory=folder_paths.get_folder_paths("embeddings")
+                                        )
+                                        return out[0], out[1], out[2]
+                                except Exception as e:
+                                    print(f"[GridTester] ❌ Async Worker Error: {e}")
+                                    return None, None, None
+                            model_cache.preload_base_model(next_model_key, _preload_base_worker)
+                        else:
+                            # GGUF/diffusion model preload
+                            def _preload_diff_worker(conf_to_load=next_conf):
+                                try:
+                                    return load_diffusion_model_and_clip(
+                                        model_name=conf_to_load["model"],
+                                        model_type=conf_to_load.get("model_type"),
+                                        text_encoder_paths=conf_to_load.get("text_encoders", []),
+                                        clip_type_str=conf_to_load.get("clip_type", "stable_diffusion"),
+                                        gguf_options=conf_to_load.get("gguf_options"),
+                                        use_remote_vae=use_remote_vae,
+                                    )
+                                except Exception as e:
+                                    print(f"[GridTester] ❌ Async Worker Error: {e}")
+                                    return None, None, None
+                            model_cache.preload_base_model(next_model_key, _preload_diff_worker)
+        # =========================================================
+
+        # Preview pass renders a snapped, scaled-down latent; full jobs use w x h unchanged.
+        gen_w, gen_h = preview_dims(w, h, pv_scale, latent_ratio) if _is_pv else (w, h)
+
+        # Generate image
+        if job["latent"] is not None:
+            latent_in = {"samples": job["latent"]["samples"].clone()}
+        else:
+            # Pixels-per-cell comes from the model's latent format (8 for SD/SDXL/Flux.1,
+            # 16 for the Flux.2 family incl. MOSS-Image). Hardcoding 8 here made 16x
+            # models render at 2x size and ~10x slower.
+            latent_in = make_empty_latent(latent_channels, gen_w, gen_h, latent_ratio)
+            
+        result_latent = None
+        try:
+            attention_mode = conf.get("attention_mode", "default")
+            if attention_mode != "default":
+                print(f"[GridTester] 🧠 Using attention mode: {attention_mode}")
+
+            # Log active extra options
+            extra_opts = []
+            if conf.get("model_sampling_override", "none") != "none":
+                extra_opts.append(f"model_sampling={conf['model_sampling_override']}")
+            if conf.get("use_advanced_sampling", False):
+                extra_opts.append(f"advanced({conf.get('advanced_guider','cfg_guider')}/{conf.get('advanced_scheduler','basic')})")
+            if conf.get("flux_guidance_value", 0) and float(conf.get("flux_guidance_value", 0)) > 0:
+                extra_opts.append(f"flux_guidance={conf['flux_guidance_value']}")
+            if extra_opts:
+                print(f"[GridTester] ⚙️ Extra options: {', '.join(extra_opts)}")
+
+            result_latent, duration = generate_image(
+                patched_model, current_seed, eff_conf["steps"], eff_conf["cfg"],
+                conf["sampler"], conf["scheduler"], final_positive, final_negative,
+                latent_in, conf["denoise"], attention_mode=attention_mode,
+                model_sampling_override=conf.get("model_sampling_override", "none"),
+                model_sampling_shift=conf.get("model_sampling_shift", 1.73),
+                model_sampling_flux_max_shift=conf.get("model_sampling_flux_max_shift", 1.15),
+                model_sampling_flux_base_shift=conf.get("model_sampling_flux_base_shift", 0.5),
+                use_advanced_sampling=conf.get("use_advanced_sampling", False),
+                advanced_guider=conf.get("advanced_guider", "cfg_guider"),
+                advanced_scheduler=conf.get("advanced_scheduler", "basic"),
+                flux_guidance_value=conf.get("flux_guidance_value", 0.0),
+                use_deep_shrink=conf.get("use_deep_shrink", False),
+                deep_shrink_block_number=conf.get("deep_shrink_block_number", 3),
+                deep_shrink_downscale_factor=conf.get("deep_shrink_downscale_factor", 2.0),
+                deep_shrink_start_percent=conf.get("deep_shrink_start_percent", 0.0),
+                deep_shrink_end_percent=conf.get("deep_shrink_end_percent", 0.35),
+                deep_shrink_downscale_after_skip=conf.get("deep_shrink_downscale_after_skip", True),
+                deep_shrink_downscale_method=conf.get("deep_shrink_downscale_method", "bicubic"),
+                deep_shrink_upscale_method=conf.get("deep_shrink_upscale_method", "bicubic"),
+                use_slg=conf.get("use_slg", False),
+                slg_double_layers=conf.get("slg_double_layers", ""),
+                slg_single_layers=conf.get("slg_single_layers", "22"),
+                slg_start_percent=conf.get("slg_start_percent", 0.0),
+                slg_end_percent=conf.get("slg_end_percent", 0.5),
+                width=gen_w,
+                height=gen_h
+            )
+
+            # ==== UPSCALING (pipeline-based with sequential steps) ====
+            upscale_produced = False
+            save_pre_upscale = False
+            total_upscale_duration = 0  # Track cumulative upscale time for duration metric
+            if session_settings and session_settings.get("upscaling", {}).get("enabled", False) and result_latent is not None:
+                from .image_generation import upscale_image
+                import itertools as upscale_itertools
+                import random as upscale_random
+                from PIL import Image as PILImage
+
+                upscale_settings_rt = session_settings["upscaling"]
+                upscale_pipelines = upscale_settings_rt.get("pipelines", [])
+                upscale_combo_idx = 0
+                save_pre_upscale = upscale_settings_rt.get("save_pre_upscale", False)
+
+                # If deferring upscales to end, skip inline processing and queue the job
+                run_upscales_at_end = upscale_settings_rt.get("run_upscales_at_end", False)
+                if run_upscales_at_end:
+                    deferred_upscale_queue.append({
+                        "config": conf.copy(),
+                        "width": w, "height": h,
+                        "seed": current_seed,
+                        "batch_idx": batch_idx,
+                        "actual_positive_prompt": actual_positive_prompt,
+                        "actual_negative_prompt": actual_negative_prompt,
+                        "gen_index": gen_index_offset + total_generated,
+                        "config_fp": job_fp,
+                    })
+                    # Clear pipelines so the inline loop below becomes a no-op
+                    upscale_pipelines = []
+
+                # Compute HiRes-adjusted conditioning if enabled
+                hires_positive_cond = final_positive  # Default: same as base
+                hires_prompt_active = False
+                hires_prompt_behavior_rt = ""
+                hires_prompt_text_rt = ""
+                if upscale_settings_rt.get("hires_prompt_adjust") and upscale_settings_rt.get("hires_prompt_text", "").strip():
+                    hires_prompt_behavior_rt = upscale_settings_rt.get("hires_prompt_behavior", "append_end")
+                    hires_prompt_text_rt = upscale_settings_rt["hires_prompt_text"].strip()
+                    if hires_prompt_behavior_rt == "prepend":
+                        adjusted_prompt = hires_prompt_text_rt + " " + actual_positive_prompt
+                    elif hires_prompt_behavior_rt == "append_end":
+                        adjusted_prompt = actual_positive_prompt + " " + hires_prompt_text_rt
+                    elif hires_prompt_behavior_rt == "replace":
+                        adjusted_prompt = hires_prompt_text_rt
+                    else:
+                        adjusted_prompt = actual_positive_prompt
+                    # Look up pre-encoded conditioning from cache
+                    hires_cond = conditioning_cache["positive"].get(adjusted_prompt)
+                    if hires_cond is not None:
+                        hires_positive_cond = hires_cond
+                        hires_prompt_active = True
+                        print(f"[GridTester] 🔍 Using HiRes-adjusted prompt ({hires_prompt_behavior_rt}): {adjusted_prompt[:80]}...")
+                    else:
+                        print(f"[GridTester] ⚠️ HiRes-adjusted prompt not found in cache, using original prompt")
+
+                for pipeline_idx, pipeline in enumerate(upscale_pipelines):
+                    # Skip inactive pipelines (safety check — should already be filtered)
+                    if pipeline.get("active", True) is False:
+                        continue
+
+                    pipeline_name = pipeline.get("name", f"Pipeline {pipeline_idx + 1}")
+                    pipeline_steps = pipeline.get("steps", [])
+                    if not pipeline_steps:
+                        continue
+
+                    # Each pipeline starts from the original base image
+                    pipe_latent = result_latent
+                    pipe_w = w
+                    pipe_h = h
+                    pipeline_history = []  # Accumulate per-step metadata for compound manifest entries
+
+                    # Flatten steps with repeat: a step with repeat=3 runs 3 times sequentially
+                    expanded_steps = []
+                    for step in pipeline_steps:
+                        if step.get("active", True) is False:
+                            continue
+                        repeat = max(1, int(step.get("repeat", 1)))
+                        for _ in range(repeat):
+                            expanded_steps.append(step)
+
+                    for step_idx, ucfg in enumerate(expanded_steps):
+                        mode = ucfg.get("mode", "hires_only")
+                        show_hires = mode in ("hires_only", "model_then_hires")
+                        show_model = mode in ("model_only", "model_then_hires")
+
+                        # --- Florence2 Hi-Res Fix mode (inline path) ---
+                        if mode == "florence2_hires":
+                            from .florence2_hires import (
+                                run_florence2_step, preflight_florence2,
+                                build_florence2_manifest_entry, build_florence2_no_detection_entry,
+                            )
+                            from PIL import Image as PILImage
+                            import numpy as _np
+                            import torch as _torch
+
+                            # Preflight once per job (cached on the job object via closure proxy —
+                            # use a module-global guard since `job` doesn't exist in this scope)
+                            global _FLORENCE2_INLINE_PREFLIGHTED
+                            if not globals().get("_FLORENCE2_INLINE_PREFLIGHTED", False):
+                                preflight_florence2()
+                                _FLORENCE2_INLINE_PREFLIGHTED = True
+
+                            # Decode current latent to PIL for Florence2 input
+                            src_pil = decode_latent_with_vae(loaded_vae, pipe_latent["samples"])
+                            src_arr = _np.array(src_pil.convert("RGB")).astype(_np.float32) / 255.0
+                            src_tensor = _torch.from_numpy(src_arr).unsqueeze(0)
+
+                            # Build the unified step config — merge step.florence2 sub-object
+                            # with top-level sampling fields from the step.
+                            _hd = str(ucfg.get("hires_denoise", "0.45")).split(",")[0].strip() or "0.45"
+                            f2_config = {
+                                **(ucfg.get("florence2", {}) or {}),
+                                "hires_denoise": float(_hd),
+                                "hires_steps": int(ucfg.get("hires_steps", 15) or 15),
+                                "cfg": float(ucfg.get("cfg", 1.5) or 1.5),
+                                "sampler": ucfg.get("sampler", "euler"),
+                                "scheduler": ucfg.get("scheduler", "simple"),
+                                # In inline mode the model+lora are already loaded for this
+                                # job — forcing from_builder avoids a redundant reload that
+                                # from_manifest would trigger.
+                                "model_source": "from_builder",
+                            }
+
+                            # Minimal item dict for run_florence2_step's manifest-extras path
+                            item_for_florence2 = {
+                                "model": conf.get("model", ""),
+                                "lora_expanded": conf.get("loras_expanded", ""),
+                                "seed": current_seed,
+                            }
+
+                            step_result = run_florence2_step(
+                                source_image=src_tensor,
+                                item=item_for_florence2,
+                                step_config=f2_config,
+                                fallback_handles=(patched_model, patched_clip, loaded_vae),
+                                ckpt_cache={},  # no caching needed; from_builder uses fallback
+                                conditioning_cache=conditioning_cache,
+                                positive_prompt=actual_positive_prompt,
+                                negative_prompt=actual_negative_prompt,
+                                clip_skip=conf.get("clip_skip", 0),
+                                # Inline path forces model_source=from_builder above, so
+                                # this is informational; passing it for consistency.
+                                session_model_name=conf.get("model", ""),
+                            )
+
+                            is_last_step = step_idx == len(expanded_steps) - 1
+                            is_final_output = is_last_step
+
+                            if step_result.get("status") == "no_detection":
+                                if is_final_output:
+                                    # Append sentinel entry pointing back at the base image.
+                                    # `meta` is not yet assigned at this point in the function —
+                                    # it lives at ~L2324, AFTER the upscale loop. Use
+                                    # create_image_metadata directly (matches the normal
+                                    # hires/model upscale path at L2184).
+                                    sentinel_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
+                                    sentinel_meta = create_image_metadata(
+                                        conf, pipe_w, pipe_h,
+                                        float(step_result.get("duration", 0)),
+                                        current_seed, batch_idx,
+                                        actual_positive_prompt, actual_negative_prompt,
+                                        gen_index=gen_index_offset + total_generated,
+                                    )
+                                    sentinel_meta.update({
+                                        "id": sentinel_id,
+                                        "base_fp": job_fp,
+                                        "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
+                                        "upscaled": False,
+                                        "florence2_no_detection": True,
+                                        "florence2_text_input": step_result.get("florence2_text_input", ""),
+                                        "florence2_model": step_result.get("florence2_model", ""),
+                                        "note": f"Florence2 found no '{step_result.get('florence2_text_input', '')}' in image",
+                                    })
+                                    # Insert at beginning + set upscale_produced (matches L2255-2256
+                                    # canonical pattern). Without upscale_produced=True, the base
+                                    # image at L2337 would ALSO get saved as a duplicate.
+                                    existing_data["items"].insert(0, sentinel_meta)
+                                    upscale_produced = True
+                                    save_manifest(paths["manifest"], existing_data)
+                                    upscale_combo_idx += 1
+                                continue  # skip the normal combo loop
+
+                            total_upscale_duration += float(step_result.get("duration", 0))
+
+                            if is_final_output:
+                                # Save the Florence2-fixed image and update manifest.
+                                # `meta` is not yet assigned at this point in the function;
+                                # build the entry via create_image_metadata directly (matches
+                                # the normal hires/model upscale path at L2184).
+                                upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
+                                upscaled_filename = f"img_{upscale_id}.webp"
+                                filepath = os.path.join(paths["images"], upscaled_filename)
+                                step_result["image_pil"].save(filepath, format="WEBP", quality=95)
+
+                                upscaled_meta = create_image_metadata(
+                                    conf, step_result["image_width"], step_result["image_height"],
+                                    float(step_result.get("duration", 0)) + total_upscale_duration,
+                                    current_seed, batch_idx,
+                                    actual_positive_prompt, actual_negative_prompt,
+                                    gen_index=gen_index_offset + total_generated,
+                                )
+                                upscaled_meta.update({
+                                    "id": upscale_id,
+                                    "base_fp": job_fp,
+                                    "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
+                                    "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
+                                    "filename": upscaled_filename,
+                                    "rejected": False,
+                                    "upscaled": True,
+                                    "upscale_source": "inline",
+                                    "upscale_pipeline": pipeline_name,
+                                    "upscale_mode": "florence2_hires",
+                                    "florence2_model": step_result.get("florence2_model"),
+                                    "florence2_text_input": step_result.get("florence2_text_input"),
+                                    "florence2_target_megapixels": step_result.get("florence2_target_megapixels"),
+                                    "florence2_crop_padding": step_result.get("florence2_crop_padding"),
+                                    "florence2_grow_expand": step_result.get("florence2_grow_expand"),
+                                    "florence2_feather": step_result.get("florence2_feather"),
+                                    "florence2_output_mask_select": step_result.get("florence2_output_mask_select"),
+                                    "florence2_detection_count": step_result.get("florence2_detection_count"),
+                                    "florence2_bbox": step_result.get("florence2_bbox"),
+                                    "hires_denoise": f2_config["hires_denoise"],
+                                })
+                                image_metrics.finalize(upscaled_meta, step_result["image_pil"])
+                                # Insert at beginning + set upscale_produced (matches L2255-2256
+                                # canonical pattern). Without upscale_produced=True, the base
+                                # image at L2337 would ALSO get saved as a duplicate.
+                                existing_data["items"].insert(0, upscaled_meta)
+                                upscale_produced = True
+                                save_manifest(paths["manifest"], existing_data)
+                                if PromptServer is not None:
+                                    try:
+                                        PromptServer.instance.send_sync("ultimate_grid.update_data", {
+                                            "session_name": session_name,
+                                            "new_items": [upscaled_meta]
+                                        })
+                                    except Exception:
+                                        pass
+                                upscale_combo_idx += 1
+                            else:
+                                # Chained — re-encode result_pil for next step's pipe_latent
+                                _next_arr = _np.array(step_result["image_pil"].convert("RGB")).astype(_np.float32) / 255.0
+                                _next_tensor = _torch.from_numpy(_next_arr).unsqueeze(0)
+                                pipe_latent = {"samples": loaded_vae.encode(_next_tensor[:, :, :, :3])}
+                                pipe_w = step_result["image_width"]
+                                pipe_h = step_result["image_height"]
+                            continue  # Skip the normal combo loop for this step
+
+                        # --- SeedVR2 upscale mode ---
+                        if mode == "seedvr2":
+                            from .image_generation import seedvr2_upscale
+                            from PIL import Image as PILImage
+                            sv_config = ucfg.get("seedvr2", {})
+                            # Decode current latent to PIL for SeedVR2 input
+                            decoded = decode_latent_with_vae(pipe_latent, loaded_vae)
+                            pil_img = PILImage.fromarray((decoded[0].cpu().numpy() * 255).clip(0, 255).astype("uint8"))
+                            result_pil, up_w, up_h, sv_duration = seedvr2_upscale(pil_img, sv_config)
+                            total_upscale_duration += sv_duration
+                            is_last_step = step_idx == len(expanded_steps) - 1
+                            is_final_output = is_last_step
+                            if is_final_output:
+                                # Save the upscaled image and update manifest
+                                upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
+                                upscaled_filename = f"img_{upscale_id}.webp"
+                                filepath = os.path.join(paths["images"], upscaled_filename)
+                                result_pil.save(filepath, quality=80)
+                                upscaled_meta = dict(meta)
+                                upscaled_meta.update({
+                                    "id": upscale_id,
+                                    "base_fp": job_fp,
+                                    "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
+                                    "gen_index": len(existing_data["items"]),
+                                    "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
+                                    "filename": upscaled_filename,
+                                    "width": up_w, "height": up_h,
+                                    "duration": sv_duration,
+                                    "upscaled": True,
+                                    "upscale_source": "inline",
+                                    "upscale_pipeline": pipeline_name,
+                                    "upscale_mode": "seedvr2",
+                                    "upscale_model": sv_config.get("dit_model", ""),
+                                })
+                                image_metrics.finalize(upscaled_meta, result_pil)
+                                existing_data["items"].append(upscaled_meta)
+                                save_manifest(paths["manifest"], existing_data)
+                                if PromptServer is not None:
+                                    try:
+                                        PromptServer.instance.send_sync("ultimate_grid.update_data", {
+                                            "session_name": session_name,
+                                            "new_items": [upscaled_meta]
+                                        })
+                                    except Exception:
+                                        pass
+                                upscale_combo_idx += 1
+                            else:
+                                # Re-encode for next step in chain
+                                import torch as seedvr_torch
+                                import numpy as seedvr_np
+                                result_np = seedvr_np.array(result_pil.convert("RGB")).astype(seedvr_np.float32) / 255.0
+                                result_tensor = seedvr_torch.from_numpy(result_np).unsqueeze(0)
+                                pipe_latent = loaded_vae.encode(result_tensor[:, :, :, :3].movedim(-1, 1))
+                                pipe_latent = {"samples": pipe_latent}
+                                pipe_w_current = up_w
+                                pipe_h_current = up_h
+                            continue  # Skip the normal combo loop for this step
+
+                        # Parse multi-value fields
+                        raw_ratios = str(ucfg.get("upscale_ratios", "1.5"))
+                        ratios = [float(r.strip()) for r in raw_ratios.split(",") if r.strip()] or [1.5]
+                        raw_denoise = str(ucfg.get("hires_denoise", "0.3"))
+                        denoises = [float(d.strip()) for d in raw_denoise.split(",") if d.strip()] or [0.3]
+                        models = ucfg.get("upscale_models", []) or [""]
+
+                        # Build Cartesian product of multi-value fields
+                        if show_hires and show_model:
+                            combos = list(upscale_itertools.product(models, ratios, denoises))
+                        elif show_hires:
+                            combos = list(upscale_itertools.product([""], ratios, denoises))
+                        elif show_model:
+                            combos = list(upscale_itertools.product(models, [1.0], [0.0]))
+                        else:
+                            combos = []
+
+                        for combo in combos:
+                            up_model_name, up_ratio, up_denoise = combo
+
+                            # Skip combos requiring a model when none is selected
+                            if show_model and not up_model_name:
+                                upscale_combo_idx += 1
+                                continue
+
+                            # Build single-value upscaling config for upscale_image()
+                            # For model_only mode, use upscale_ratio for upscale_size so the
+                            # model's native output is preserved (not resized back to 1x)
+                            effective_size = up_ratio if up_ratio > 1.0 else 2.0
+                            single_config = {
+                                "mode": mode,
+                                "upscale_ratio": up_ratio,
+                                "hires_denoise": up_denoise,
+                                "hires_steps": ucfg.get("hires_steps", 0),
+                                "tiled_vae": ucfg.get("tiled_vae", False),
+                                "tile_size": ucfg.get("tile_size", 512),
+                                "tile_overlap": ucfg.get("tile_overlap", 64),
+                                "temporal_size": ucfg.get("temporal_size", 512),
+                                "temporal_overlap": ucfg.get("temporal_overlap", 64),
+                                "upscale_model": up_model_name,
+                                "upscale_size": effective_size,
+                                "resize_method": ucfg.get("resize_method", "bilinear"),
+                                "hires_tiled_sampling": ucfg.get("hires_tiled_sampling", False),
+                                "hires_tile_width": ucfg.get("hires_tile_width", 512),
+                                "hires_tile_height": ucfg.get("hires_tile_height", 512),
+                                "hires_mask_blur": ucfg.get("hires_mask_blur", 8),
+                                "hires_tile_padding": ucfg.get("hires_tile_padding", 32),
+                                "hires_force_uniform_tiles": ucfg.get("hires_force_uniform_tiles", False)
+                            }
+
+                            # Steps within a pipeline chain sequentially (each feeds into the next)
+                            # Use HiRes-adjusted conditioning for modes that involve hires fix
+                            up_positive = hires_positive_cond if (show_hires and hires_prompt_active) else final_positive
+                            upscale_result, upscale_duration = upscale_image(
+                                pipe_latent, loaded_vae, patched_model, single_config,
+                                conf, up_positive, final_negative, pipe_w, pipe_h
+                            )
+                            total_upscale_duration += upscale_duration
+
+                            # Determine if this is the final output (only the last step's last combo in the pipeline)
+                            is_last_step = step_idx == len(expanded_steps) - 1
+                            is_last_combo = combo == combos[-1]
+                            is_final_output = is_last_step and is_last_combo
+
+                            # Generate timestamp-based ID (same convention as normal images)
+                            upscale_id = int(time.time() * 100000) + upscale_random.randint(0, 1000)
+                            upscaled_filename = f"img_{upscale_id}_upscaled.webp"
+                            up_metrics_sink = {}
+                            up_metrics_img = None
+
+                            if isinstance(upscale_result, dict) and "samples" in upscale_result:
+                                # HiRes modes return latent — decode to get dimensions
+                                upscaled_pil = decode_latent_with_vae(
+                                    loaded_vae, upscale_result["samples"],
+                                    metrics_sink=up_metrics_sink if is_final_output else None)
+                                up_metrics_img = upscaled_pil
+                                up_w, up_h = upscaled_pil.size
+                                # Only save to disk if this is a final output
+                                if is_final_output:
+                                    upscaled_pil.save(
+                                        os.path.join(paths["images"], upscaled_filename),
+                                        "WEBP", quality=80
+                                    )
+                                # Feed this latent to the next step in the pipeline
+                                pipe_latent = upscale_result
+                                pipe_w = up_w
+                                pipe_h = up_h
+                            elif isinstance(upscale_result, PILImage.Image):
+                                # Model-only returns PIL directly
+                                up_metrics_img = upscale_result
+                                up_w, up_h = upscale_result.size
+                                # Only save to disk if this is a final output
+                                if is_final_output:
+                                    upscale_result.save(
+                                        os.path.join(paths["images"], upscaled_filename),
+                                        "WEBP", quality=80
+                                    )
+                                # Encode PIL back to latent for next step in pipeline
+                                import numpy as np_stack
+                                import torch as torch_stack
+                                pil_np = np_stack.array(upscale_result).astype(np_stack.float32) / 255.0
+                                pil_tensor = torch_stack.from_numpy(pil_np).unsqueeze(0)
+                                pipe_latent = {"samples": loaded_vae.encode(pil_tensor[:, :, :, :3])}
+                                pipe_w = up_w
+                                pipe_h = up_h
+                            else:
+                                upscale_combo_idx += 1
+                                continue
+
+                            # Collect this step's upscale info for pipeline history
+                            step_info = {
+                                "mode": mode,
+                                "ratio": up_ratio,
+                                "denoise": up_denoise,
+                                "model": up_model_name or "",
+                                "resize_method": ucfg.get("resize_method", "bilinear"),
+                                "hires_steps": ucfg.get("hires_steps", 0),
+                                "tiled_vae": ucfg.get("tiled_vae", False),
+                                "tile_size": ucfg.get("tile_size", 512),
+                                "tiled_sampling": ucfg.get("hires_tiled_sampling", False),
+                                "tile_w": ucfg.get("hires_tile_width", 512),
+                                "tile_h": ucfg.get("hires_tile_height", 512),
+                            }
+                            if mode == "model_only":
+                                step_info["upscale_size"] = ucfg.get("upscale_size", "2.0")
+                            pipeline_history.append(step_info)
+
+                            if is_final_output:
+                                upscaled_meta = create_image_metadata(
+                                    conf, up_w, up_h, duration + total_upscale_duration, current_seed, batch_idx,
+                                    actual_positive_prompt, actual_negative_prompt,
+                                    gen_index=gen_index_offset + total_generated
+                                )
+                                upscaled_meta["id"] = upscale_id
+                                upscaled_meta["upscaled"] = True
+                                upscaled_meta["upscale_pipeline"] = pipeline_name
+                                upscaled_meta["base_fp"] = job_fp
+                                upscaled_meta["config_fp"] = config_fingerprint(conf, w, h, conf["seed"], pipeline_name)
+
+                                # Include HiRes prompt adjustment info in manifest
+                                if hires_prompt_active:
+                                    upscaled_meta["hires_prompt_behavior"] = hires_prompt_behavior_rt
+                                    upscaled_meta["hires_prompt_text"] = hires_prompt_text_rt
+
+                                # Multiple steps in pipeline: save arrays of all steps
+                                if len(pipeline_history) > 1:
+                                    upscaled_meta["upscale_stacked"] = True
+                                    upscaled_meta["upscale_mode"] = [s["mode"] for s in pipeline_history]
+                                    upscaled_meta["upscale_ratio"] = [s["ratio"] for s in pipeline_history]
+                                    upscaled_meta["upscale_denoise"] = [s["denoise"] for s in pipeline_history]
+                                    models = [s["model"] for s in pipeline_history if s["model"]]
+                                    if models:
+                                        upscaled_meta["upscale_model"] = models
+                                    upscaled_meta["upscale_resize_method"] = [s["resize_method"] for s in pipeline_history]
+                                    upscaled_meta["upscale_hires_steps"] = [s["hires_steps"] for s in pipeline_history]
+                                    # Tiling info: only include steps that have it enabled
+                                    tiled_vae_steps = [s["tile_size"] for s in pipeline_history if s["tiled_vae"]]
+                                    if tiled_vae_steps:
+                                        upscaled_meta["upscale_tiled_vae"] = True
+                                        upscaled_meta["upscale_tile_size"] = tiled_vae_steps
+                                    tiled_sampling_steps = [f'{s["tile_w"]}x{s["tile_h"]}' for s in pipeline_history if s["tiled_sampling"]]
+                                    if tiled_sampling_steps:
+                                        upscaled_meta["upscale_tiled_sampling"] = True
+                                        upscaled_meta["upscale_tile_w"] = [s["tile_w"] for s in pipeline_history if s["tiled_sampling"]]
+                                        upscaled_meta["upscale_tile_h"] = [s["tile_h"] for s in pipeline_history if s["tiled_sampling"]]
+                                else:
+                                    # Single step pipeline
+                                    upscaled_meta["upscale_mode"] = mode
+                                    upscaled_meta["upscale_ratio"] = up_ratio
+                                    upscaled_meta["upscale_denoise"] = up_denoise
+                                    if up_model_name:
+                                        upscaled_meta["upscale_model"] = up_model_name
+                                    upscaled_meta["upscale_resize_method"] = ucfg.get("resize_method", "bilinear")
+                                    upscaled_meta["upscale_hires_steps"] = ucfg.get("hires_steps", 0)
+                                    if ucfg.get("tiled_vae", False):
+                                        upscaled_meta["upscale_tiled_vae"] = True
+                                        upscaled_meta["upscale_tile_size"] = ucfg.get("tile_size", 512)
+                                    if ucfg.get("hires_tiled_sampling", False):
+                                        upscaled_meta["upscale_tiled_sampling"] = True
+                                        upscaled_meta["upscale_tile_w"] = ucfg.get("hires_tile_width", 512)
+                                        upscaled_meta["upscale_tile_h"] = ucfg.get("hires_tile_height", 512)
+                                    if mode == "model_only":
+                                        upscaled_meta["upscale_size"] = ucfg.get("upscale_size", "2.0")
+
+                                upscaled_meta["file"] = f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images"
+                                upscaled_meta["rejected"] = False
+                                image_metrics.finalize(upscaled_meta, up_metrics_img, up_metrics_sink)
+                                # Insert at beginning (same order as flush_batch_with_vae)
+                                existing_data["items"].insert(0, upscaled_meta)
+                                upscale_produced = True
+
+                                # Save manifest immediately so dashboard can pick it up
+                                save_manifest(paths["manifest"], existing_data)
+
+                                # Send live update to dashboard (same as flush_batch_with_vae)
+                                if PromptServer is not None:
+                                    try:
+                                        manifest_meta = existing_data.get("meta", {})
+                                        PromptServer.instance.send_sync("ultimate_grid.update", {
+                                            "node": unique_id,
+                                            "session_name": session_name,
+                                            "new_items": [upscaled_meta],
+                                            "meta": manifest_meta
+                                        })
+                                    except Exception:
+                                        pass
+
+                                print(f"[GridTester] 🔍 Saved upscaled image: {upscaled_filename} "
+                                      f"(pipeline={pipeline_name}, mode={mode}, ratio={up_ratio}, denoise={up_denoise}"
+                                      f"{', model=' + up_model_name if up_model_name else ''})")
+                            else:
+                                print(f"[GridTester] 🔍 Pipeline '{pipeline_name}' intermediate step {step_idx + 1}/{len(expanded_steps)} "
+                                      f"(mode={mode}, ratio={up_ratio}, denoise={up_denoise}"
+                                      f"{', model=' + up_model_name if up_model_name else ''})")
+
+                            upscale_combo_idx += 1
+
+                # Save manifest after all pipeline combos
+                if upscale_combo_idx > 0:
+                    save_manifest(paths["manifest"], existing_data)
+
+            # Include upscale time in total duration for ETA accuracy
+            total_duration = duration + total_upscale_duration
+            new_completed += 1
+            job_durations.append(total_duration)
+            # With the pre-flight scan, jobs that will be skipped later must not count as remaining work
+            eta_info = calculate_eta(job_durations, (existing_count + new_completed) if _pf_ran else current_job, total_jobs)
+            if eta_info:
+                print_generation_progress(current_job, total_jobs, conf, w, h, total_duration, eta_info)
+                # Compact single-line ETA summary — uses effective progress (existing + newly completed)
+                _effective_job = existing_count + new_completed
+                _eta_pct = int((_effective_job / total_jobs) * 100)
+                if eta_info['hours'] > 0:
+                    _eta_str = f"{eta_info['hours']}h {eta_info['minutes']}m"
+                elif eta_info['minutes'] > 0:
+                    _eta_str = f"{eta_info['minutes']}m {eta_info['seconds']}s"
+                else:
+                    _eta_str = f"{eta_info['seconds']}s"
+                _eta_line = (f"[GridTester] 📊 job {_effective_job}/{total_jobs} ({_eta_pct}%) | "
+                             f"ETA: {_eta_str} | ~{eta_info['finish_formatted']} | "
+                             f"{eta_info['avg_duration']:.1f}s/job")
+                if existing_count > 0:
+                    _eta_line += f" | {existing_count} existing"
+                print(_eta_line)
+                # Send progress to dashboard frontend
+                if PromptServer is not None:
+                    try:
+                        progress_pct = int((_effective_job / total_jobs) * 100)
+                        if eta_info['hours'] > 0:
+                            eta_str = f"{eta_info['hours']}h {eta_info['minutes']}m"
+                        elif eta_info['minutes'] > 0:
+                            eta_str = f"{eta_info['minutes']}m {eta_info['seconds']}s"
+                        else:
+                            eta_str = f"{eta_info['seconds']}s"
+                        PromptServer.instance.send_sync("ultimate_grid.progress", {
+                            "node": unique_id,
+                            "session_name": session_name,
+                            "current_job": _effective_job,
+                            "total_jobs": total_jobs,
+                            "progress_pct": progress_pct,
+                            "eta_str": eta_str,
+                            "finish_time": eta_info['finish_formatted'],
+                            "avg_duration": round(eta_info['avg_duration'], 1),
+                            "last_duration": round(total_duration, 1)
+                        })
+                    except Exception:
+                        pass
+
+            # Skip saving the base (non-upscaled) image when upscaling produced results
+            # — only the upscaled final version(s) should appear in the output
+            # Unless save_pre_upscale is enabled, in which case save both
+            if not upscale_produced or save_pre_upscale:
+                meta = create_image_metadata(
+                    eff_conf, gen_w, gen_h, total_duration, current_seed, batch_idx,
+                    actual_positive_prompt, actual_negative_prompt,
+                    gen_index=gen_index_offset + total_generated
+                )
+                meta["config_fp"] = job_fp
+                if _is_pv:
+                    meta.update({
+                        "preview": True, "preview_of": job_fp,
+                        "full_steps": conf["steps"], "full_cfg": conf["cfg"],
+                        "full_width": w, "full_height": h, "preview_scale": pv_scale,
+                    })
+                if pos_hash or neg_hash:
+                    meta["conditioning_pos_hash"] = pos_hash
+                    meta["conditioning_neg_hash"] = neg_hash
+
+                pending_batch.append((result_latent["samples"].clone(), meta))
+            total_generated += 1
+
+            # ==== GPU COOLDOWN (if enabled in session settings) ====
+            if session_settings and session_settings.get("cooldown", {}).get("enabled", False):
+                cooldown_config = session_settings["cooldown"]
+                cooldown_every_n = int(cooldown_config.get("every_n", 1))
+                if total_generated > 0 and total_generated % cooldown_every_n == 0:
+                    cooldown_seconds = int(cooldown_config.get("seconds", 5))
+                    clear_vram = cooldown_config.get("clear_vram", False)
+                    print(f"[GridTester] ❄️ GPU Cooldown: pausing {cooldown_seconds}s after {total_generated} generations")
+                    if clear_vram:
+                        import comfy.model_management as mm_cooldown
+                        mm_cooldown.soft_empty_cache()
+                        mm_cooldown.unload_all_models()
+                        print(f"[GridTester] ❄️ VRAM cleared")
+                        cached_model_key = None  # Force model reload on next iteration
+                    import time as time_cooldown
+                    time_cooldown.sleep(cooldown_seconds)
+                    print(f"[GridTester] ❄️ Cooldown complete, resuming generation")
+
+        except Exception as e:
+            import comfy.model_management
+            if isinstance(e, InterruptProcessingException):
+                print(f"\n[GridTester] 🛑 INTERRUPTED during generation - Stopping all jobs")
+                if result_latent is not None:
+                    del result_latent
+                result_latent = None
+
+                if pending_batch:
+                    _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
+                                         per_config_remote_workers, use_remote_vae, remote_vae_worker,
+                                         loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
+                                         config_overrides_vae=config_overrides_vae, image_format=image_format)
+                    pending_batch = []
+
+                _cleanup_per_config_remote_workers(per_config_remote_workers)
+                if remote_vae_worker:
+                    remote_vae_worker.wait_completion()
+                    remote_vae_worker.stop()
+
+                existing_data["meta"] = {
+                    "positive": positive_text,
+                    "negative": negative_text,
+                    "model": ckpt_name,
+                    "seed": seed,
+                    "vae_batch_size": vae_batch_size,
+                    "configs_json": configs_json,
+                    "resolutions_json": resolutions_json,
+                    "image_format": image_format,
+                    "job_order": job_order,
+                    "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+                }
+                save_manifest(paths["manifest"], existing_data)
+
+                loaded_model, loaded_clip, loaded_vae = None, None, None
+                patched_model, patched_clip = None, None
+                conditioning_cache.clear()
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                # Re-raise so ComfyUI knows execution was interrupted (not completed)
+                raise
+            else:
+                print(f"[GridTester] ❌ Generation failed: {e}")
+                if result_latent is not None:
+                    del result_latent
+                continue
+            
+        if result_latent is not None:
+            del result_latent
+        result_latent = None
+        del latent_in
+        latent_in = None
+            
+        if current_job % 10 == 0:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+        threshold = vae_batch_size if flush_batch_every <= 0 else flush_batch_every
+        if len(pending_batch) >= threshold:
+            _flush_pending_batch(pending_batch, current_vae_is_remote, current_remote_vae_url,
+                                 per_config_remote_workers, use_remote_vae, remote_vae_worker,
+                                 loaded_vae, paths, existing_data, session_name, paths["manifest"], unique_id,
+                                 config_overrides_vae=config_overrides_vae, image_format=image_format)
+            pending_batch = []
 
     # ==== FINALIZATION ====
     if pending_batch:
