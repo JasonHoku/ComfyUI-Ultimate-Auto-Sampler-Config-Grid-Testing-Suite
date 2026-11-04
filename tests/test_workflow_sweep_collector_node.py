@@ -295,10 +295,12 @@ def test_video_collect_notifies_runner_and_replaces_old_item(env, monkeypatch):
     assert calls and calls[0][0] == "sw1" and calls[0][2][0]["id"] == first["id"]
     old_mp4 = env / "benchmarks" / "vrep" / "images" / f"vid_{first['id']}.mp4"
     assert old_mp4.exists()
+    assert old_mp4.with_suffix(".preview.png").exists()
     collect_mod.USCGSweepCollectVideo().collect(FakeVideo(), "vrep", job_json(replace_item_ids=[first["id"]]))
     items = json.loads((env / "benchmarks" / "vrep" / "manifest.json").read_text())["items"]
     assert len(items) == 1 and items[0]["id"] != first["id"]
     assert not old_mp4.exists()                          # the previous mp4 is deleted with its item
+    assert not old_mp4.with_suffix(".preview.png").exists()   # ...and so is its poster
 
 
 def test_video_collect_without_a_sweep_and_with_garbage_job_json(env):

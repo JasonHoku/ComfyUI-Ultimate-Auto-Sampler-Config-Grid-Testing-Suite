@@ -1612,7 +1612,7 @@ function openM(id) {
         if (x.rejected) return;
         if (x.seed === d.seed) {
             const i = document.createElement('img');
-            i.src = x.file;
+            i.src = (x.media_type === 'video' && x.poster) ? x.poster : x.file;
             i.onclick = () => openM(x.id);
             if (x.id === id) i.style.borderColor = "var(--accent)";
             r.appendChild(i);
