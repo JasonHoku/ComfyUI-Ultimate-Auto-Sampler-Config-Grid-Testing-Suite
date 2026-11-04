@@ -131,6 +131,7 @@ _GEN_ORCH_DEPS = {
         "flush_batch_with_remote_vae": lambda *a, **kw: None,
         "create_image_metadata": lambda *a, **kw: {},
         "decode_latent_with_vae": lambda *a, **kw: None,
+        "pil_to_image_array": lambda *a, **kw: None,
         "calculate_eta": lambda *a, **kw: 0.0,
         "print_generation_progress": lambda *a, **kw: None,
     },

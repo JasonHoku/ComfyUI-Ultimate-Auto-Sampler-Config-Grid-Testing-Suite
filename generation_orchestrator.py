@@ -27,7 +27,7 @@ from .model_loader import (
 from .lora_utils import expand_lora_folder
 from .image_generation import (
     generate_image, flush_batch_with_vae, flush_batch_with_remote_vae,
-    create_image_metadata, decode_latent_with_vae, calculate_eta, print_generation_progress
+    create_image_metadata, decode_latent_with_vae, pil_to_image_array, calculate_eta, print_generation_progress
 )
 from .config_utils import sanitize_session_name
 from .html_generator import get_html_template
@@ -2201,8 +2201,8 @@ def run_generation_loop(
                             from PIL import Image as PILImage
                             sv_config = ucfg.get("seedvr2", {})
                             # Decode current latent to PIL for SeedVR2 input
-                            decoded = decode_latent_with_vae(pipe_latent, loaded_vae)
-                            pil_img = PILImage.fromarray((decoded[0].cpu().numpy() * 255).clip(0, 255).astype("uint8"))
+                            # decode_latent_with_vae(vae, latent_samples) already returns a PIL image
+                            pil_img = decode_latent_with_vae(loaded_vae, pipe_latent["samples"])
                             result_pil, up_w, up_h, sv_duration = seedvr2_upscale(pil_img, sv_config)
                             total_upscale_duration += sv_duration
                             is_last_step = step_idx == len(expanded_steps) - 1
@@ -2213,12 +2213,18 @@ def run_generation_loop(
                                 upscaled_filename = f"img_{upscale_id}.webp"
                                 filepath = os.path.join(paths["images"], upscaled_filename)
                                 result_pil.save(filepath, quality=80)
-                                upscaled_meta = dict(meta)
+                                # `meta` is not yet assigned at this point in the function
+                                # (same as the Florence2 branch): build via create_image_metadata.
+                                upscaled_meta = create_image_metadata(
+                                    conf, up_w, up_h, sv_duration + total_upscale_duration,
+                                    current_seed, batch_idx,
+                                    actual_positive_prompt, actual_negative_prompt,
+                                    gen_index=gen_index_offset + total_generated,
+                                )
                                 upscaled_meta.update({
                                     "id": upscale_id,
                                     "base_fp": job_fp,
                                     "config_fp": config_fingerprint(conf, w, h, conf["seed"], pipeline_name),
-                                    "gen_index": len(existing_data["items"]),
                                     "file": f"/view?filename={upscaled_filename}&type=output&subfolder=benchmarks/{session_name}/images",
                                     "filename": upscaled_filename,
                                     "width": up_w, "height": up_h,
@@ -2230,7 +2236,10 @@ def run_generation_loop(
                                     "upscale_model": sv_config.get("dit_model", ""),
                                 })
                                 image_metrics.finalize(upscaled_meta, result_pil)
-                                existing_data["items"].append(upscaled_meta)
+                                # insert(0) + upscale_produced: newest-first manifest order, and
+                                # without the flag the base image would ALSO be saved (duplicate)
+                                existing_data["items"].insert(0, upscaled_meta)
+                                upscale_produced = True
                                 save_manifest(paths["manifest"], existing_data)
                                 if PromptServer is not None:
                                     try:
@@ -2242,12 +2251,10 @@ def run_generation_loop(
                                         pass
                                 upscale_combo_idx += 1
                             else:
-                                # Re-encode for next step in chain
+                                # Re-encode for next step in chain (VAE.encode takes BHWC, no movedim)
                                 import torch as seedvr_torch
-                                import numpy as seedvr_np
-                                result_np = seedvr_np.array(result_pil.convert("RGB")).astype(seedvr_np.float32) / 255.0
-                                result_tensor = seedvr_torch.from_numpy(result_np).unsqueeze(0)
-                                pipe_latent = loaded_vae.encode(result_tensor[:, :, :, :3].movedim(-1, 1))
+                                result_tensor = seedvr_torch.from_numpy(pil_to_image_array(result_pil))
+                                pipe_latent = loaded_vae.encode(result_tensor[:, :, :, :3])
                                 pipe_latent = {"samples": pipe_latent}
                                 pipe_w_current = up_w
                                 pipe_h_current = up_h
