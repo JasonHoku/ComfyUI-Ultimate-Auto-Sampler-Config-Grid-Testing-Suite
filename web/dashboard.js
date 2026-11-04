@@ -162,8 +162,8 @@ app.registerExtension({
                 // "Preview pass off" and queue the prompt. Feature-detected; the dashboard falls back to an
                 // instructions toast when this does not answer (or app.queuePrompt is unavailable).
                 if (event.data?.type === 'uscg_run_full_pass') {
-                    const reply = (ok, message) => {
-                        try { event.source?.postMessage({ type: 'uscg_run_full_pass_result', ok, message }, '*'); } catch (e) { /* ignore */ }
+                    const reply = (ok, message, reason) => {
+                        try { event.source?.postMessage({ type: 'uscg_run_full_pass_result', ok, message, reason }, '*'); } catch (e) { /* ignore */ }
                     };
                     try {
                         const san = (s) => String(s || '').replace(/[^\w\-]/g, '');
@@ -173,11 +173,12 @@ app.registerExtension({
                         if (builders.length !== 1) {
                             reply(false, builders.length === 0
                                 ? `No Config Builder in this workflow uses session "${wanted}".`
-                                : `${builders.length} Config Builders use session "${wanted}".`);
+                                : `${builders.length} Config Builders use session "${wanted}".`,
+                                builders.length === 0 ? 'no_builder' : undefined);
                             return;
                         }
                         if (typeof app.queuePrompt !== 'function') {
-                            reply(false, 'This ComfyUI frontend does not expose app.queuePrompt.');
+                            reply(false, 'This ComfyUI frontend does not expose app.queuePrompt.', 'no_queue');
                             return;
                         }
                         const b = builders[0];

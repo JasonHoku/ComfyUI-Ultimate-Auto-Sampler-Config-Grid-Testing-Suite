@@ -67,7 +67,8 @@ Times are approximate on an RTX 5060 Ti 16 GB, not counting the first model load
 
 * **What the grid tests:** euler at 4 and 6 steps, 1024x1024, each with the Advanced Sampling pipeline (CFG guider + Flux2 scheduler) and without it (plain KSampler, simple scheduler): the Builder always grids Advanced Sampling on vs off. **4 images**
 * **Time:** TBD
-* **Notes:** Klein is distilled, so cfg is 1; the official template uses the CFG guider plus the Flux2 scheduler, which is the Advanced Sampling half of the grid. CLIP type `flux2`.
+* **Notes:** Klein is distilled, so cfg is 1; the official (distilled) template uses the CFG guider plus the Flux2 scheduler, which is the Advanced Sampling half of the grid. CLIP type `flux2`.
+* **Base variant:** this example uses the distilled checkpoint. For the base model use `flux-2-klein-base-9b-fp8.safetensors` (same folder) with ~20 steps and cfg 5 (CFG guider + Flux2 scheduler), as in Comfy's `image_flux2_klein_image_edit_9b_base` template.
 
 ## MOSS-Image (`uscg-moss-image.json`)
 

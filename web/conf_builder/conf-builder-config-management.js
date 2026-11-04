@@ -4714,9 +4714,8 @@ function renderLTXSection(node, configArray, arrayIdx, modelLists) {
 
     section.appendChild(header);
 
-    // Sub-sections — defined in subsequent tasks (A13-A16). For now, stub them
-    // as no-op functions so this skeleton renders without errors. The real
-    // implementations will replace these stubs.
+    // LTX sub-sections (model files, video shape, stage). The typeof guards keep this section rendering
+    // if one of the render functions is ever missing.
     if (typeof renderLTXModelFiles === "function") section.appendChild(renderLTXModelFiles(node, configArray, modelLists));
     if (typeof renderLTXVideoShape === "function") section.appendChild(renderLTXVideoShape(node, configArray));
     if (typeof renderLTXStage === "function") {
@@ -7167,7 +7166,7 @@ export function renderRunSettingsSection(node, container) {
         return node.state.preview_pass;
     };
 
-    _addRunRow("Job Order", "As written = resolution passes run one after another (the order used before this option existed). Minimize reloads = group jobs so each model, LoRA stack and VAE loads as few times as possible (resolutions interleave, which is free). Note: Start At Job # numbers follow the chosen order. Ignored in distributed mode.", () => {
+    _addRunRow("Job Order", "As written = the order the configs expand in, already grouped by model, then text encoders, VAE, LoRA and prompt; Builder per-config resolutions stay inside their model group. Minimize reloads = re-group the job list by model, LoRA stack, VAE and resolution. It only changes anything when LoRA folders or random LoRA picks expand into different stacks, or when a batched latent is connected (one pass per latent). LoRA stacks are grouped before VAEs, so a model with several VAEs and LoRAs may switch VAE more often. The log prints the before/after counts and says when nothing changed. Start At Job # numbers follow the chosen order. Ignored in distributed mode.", () => {
         const sel = document.createElement("select");
         sel.style.cssText = _inputCss;
         [["as_written", "As written (default)"], ["minimize_reloads", "Minimize model/LoRA reloads"]].forEach(([v, t]) => {

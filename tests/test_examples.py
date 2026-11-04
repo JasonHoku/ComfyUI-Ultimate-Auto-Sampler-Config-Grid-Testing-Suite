@@ -127,10 +127,8 @@ def test_emits_and_counts(path, capsys):
     name = os.path.basename(path)
     state = _state(_load(path))
     out = json.loads(UltimateConfigBuilder.state_to_configs_json(state))
-    # state_to_configs_json lists "vae" in _EXPECTED_CONFIG_KEYS but omits it on purpose when no VAE is
-    # picked (the SDXL checkpoint has its own), so that one key may be reported; anything else is real drift.
     drift = [l for l in capsys.readouterr().out.splitlines() if "Config schema drift" in l]
-    assert all("missing keys {'vae'}" in l for l in drift), drift
+    assert not drift, drift
     assert out["_session_settings"]["add_random_seeds_to_gens"] == 0
     count = len(expand_configs(out["configs"], [""], [""], [1.0], 0, [], None))
     assert count == EXPECTED_IMAGES[name]

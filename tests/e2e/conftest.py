@@ -57,8 +57,9 @@ def make_item(i, model, sampler, scheduler, cfg, steps, lora):
     }
 
 
-def make_manifest():
-    """24 items, every config tuple unique. Newest first, like the real manifest."""
+def make_manifest(meta=None):
+    """24 items, every config tuple unique. Newest first, like the real manifest.
+    `meta` (optional) is merged over the default meta dict."""
     built = []
     i = 0
     for model in ("sdxl_base.safetensors", "juggernautXL_v9.safetensors"):
@@ -71,7 +72,7 @@ def make_manifest():
                     i += 1
     return {
         "session_name": SESSION,
-        "meta": {"model": "", "positive": "", "negative": ""},
+        "meta": {"model": "", "positive": "", "negative": "", **(meta or {})},
         "items": list(reversed(built)),
     }
 
@@ -140,9 +141,15 @@ class Dashboard:
 
 
 @pytest.fixture
-def dashboard(page):
+def manifest_meta(request):
+    """Extra manifest meta for the `dashboard` fixture; override via indirect parametrize."""
+    return getattr(request, "param", None) or {}
+
+
+@pytest.fixture
+def dashboard(page, manifest_meta):
     from playwright.sync_api import expect
-    d = Dashboard(page, make_manifest())
+    d = Dashboard(page, make_manifest(manifest_meta))
     page.set_viewport_size({"width": 1600, "height": 1200})
     page.on("pageerror", lambda e: d.pageerrors.append(str(e)))
     page.route("**/*", d.handle)
