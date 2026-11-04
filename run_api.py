@@ -17,6 +17,58 @@ def sanitize_session_name_strict(name):
     return re.sub(r'[^\w\-]', '', str(name or ''))
 
 
+def _etag_matches(if_none_match, etag):
+    """RFC 9110 weak comparison of an If-None-Match header against our ETag ('*' matches anything)."""
+    if not if_none_match:
+        return False
+    want = etag[2:] if etag.startswith("W/") else etag
+    for part in str(if_none_match).split(","):
+        part = part.strip()
+        if part == "*":
+            return True
+        if part.startswith("W/"):
+            part = part[2:]
+        if part == want:
+            return True
+    return False
+
+
+def load_manifest_for_fetch(benchmarks_base, raw_session, if_none_match=None):
+    """Backend of GET /config_tester/manifest?session=<name> (the dashboard SPA's data fetch).
+
+    Returns (status, body_bytes_or_None, headers). One attempt only: status 503 means a torn read
+    (the file changed while we read it) or invalid JSON (save_manifest is not atomic), which the
+    route retries a few times before answering. The body is the manifest re-serialised COMPACT
+    (the on-disk file is indent=4, ~1.9x bigger). ETag = weak validator from mtime_ns + size.
+    """
+    session = sanitize_session_name_strict(raw_session)
+    if not session:
+        return 400, json.dumps({"error": "missing or invalid session"}).encode(), {}
+    base = os.path.realpath(benchmarks_base)
+    path = os.path.join(base, session, "manifest.json")
+    real = os.path.realpath(path)
+    if not real.startswith(base + os.sep):
+        return 403, json.dumps({"error": "forbidden"}).encode(), {}
+    try:
+        st1 = os.stat(real)
+    except OSError:
+        return 404, json.dumps({"error": "not found"}).encode(), {}
+    etag = 'W/"%x-%x"' % (st1.st_mtime_ns, st1.st_size)
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if _etag_matches(if_none_match, etag):
+        return 304, None, headers
+    try:
+        with open(real, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        st2 = os.stat(real)
+    except (OSError, ValueError):
+        return 503, json.dumps({"error": "manifest is being written, retry"}).encode(), {"Retry-After": "1"}
+    if (st2.st_mtime_ns, st2.st_size) != (st1.st_mtime_ns, st1.st_size):
+        return 503, json.dumps({"error": "manifest changed while reading, retry"}).encode(), {"Retry-After": "1"}
+    body = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return 200, body, headers
+
+
 def normalize_configs_payload(configs_json):
     """Accept a dict with a `configs` list, a bare list, or a JSON string of either.
 

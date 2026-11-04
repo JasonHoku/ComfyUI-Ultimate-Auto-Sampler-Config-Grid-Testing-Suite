@@ -1,5 +1,6 @@
 import re
 import asyncio
+import hashlib
 import server
 from aiohttp import web
 import json
@@ -18,7 +19,7 @@ from .json_text_node import SmartJSONTextNode
 from .metadata_packer import pack_metadata_into_image
 from .directory_scanner import scan_directory_for_images
 from .run_api import (
-    RunTracker, sanitize_session_name_strict, normalize_configs_payload, apply_run_overrides,
+    RunTracker, sanitize_session_name_strict, load_manifest_for_fetch, normalize_configs_payload, apply_run_overrides,
     build_run_prompt, resolve_saved_config, saved_config_to_configs_obj, summarize_history, find_in_queue,
 )
 from .workflow_sweep_collect import USCGSweepCollect
@@ -631,20 +632,35 @@ async def get_session_html(request):
 # =============================================================================
 _run_tracker = RunTracker()
 
+def _dashboard_response(request, html):
+    """200 text/html with a content ETag (304 on a match) and gzip when the client accepts it.
+
+    ComfyUI only compresses application/json and text/plain, never text/html, so the ~500 KB shell
+    would go out raw. `enable_compression()` is aiohttp's own Accept-Encoding negotiation.
+    """
+    etag = '"%s"' % hashlib.sha1(html.encode("utf-8")).hexdigest()[:20]
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if etag in [p.strip() for p in request.headers.get("If-None-Match", "").split(",")]:
+        return web.Response(status=304, headers=headers)
+    resp = web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+    resp.enable_compression()
+    return resp
+
+
 @server.PromptServer.instance.routes.get("/config_tester/dashboard")
 async def standalone_dashboard(request):
     """
     Serve the dashboard SPA as a top-level page (phone / second-monitor friendly).
     Optional ?session=<name>; without it the SPA shows its session landing cards.
+    The page is a SHELL (no manifest inlined): the SPA fetches /config_tester/manifest itself.
     """
     try:
         session_name = sanitize_session_name_strict(request.query.get("session", ""))
-        headers = {"Cache-Control": "no-store"}
         empty_manifest = {"items": [], "meta": {"model": "", "positive": "", "negative": ""}, "session_name": ""}
 
         if not session_name:
             html = get_html_template("", empty_manifest, "standalone", standalone=True)
-            return web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+            return _dashboard_response(request, html)
 
         base_dir = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name)
         if not _is_path_within(base_dir, _get_benchmarks_base()):
@@ -655,14 +671,38 @@ async def standalone_dashboard(request):
             # Unknown session: landing page (picker); the title stays empty so the SPA does not
             # pretend a session is loaded.
             html = get_html_template("", empty_manifest, "standalone", standalone=True)
-            return web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+            return _dashboard_response(request, html)
 
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-        html = get_html_template(session_name, manifest, "standalone", standalone=True)
-        return web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+        html = get_html_template(session_name, empty_manifest, "standalone", standalone=True)
+        return _dashboard_response(request, html)
     except Exception as e:
         print(f"[GridTester] ❌ /dashboard failed: {e}")
+        return web.Response(status=500, text=str(e))
+
+
+@server.PromptServer.instance.routes.get("/config_tester/manifest")
+async def get_manifest(request):
+    """
+    A session's manifest.json as compact JSON for the dashboard SPA (lazy loading).
+    ?session=<name>. ETag + If-None-Match (304), gzip, retries a torn read (save_manifest is not
+    atomic). The route takes a session NAME, never a path.
+    """
+    try:
+        raw = request.query.get("session", "")
+        inm = request.headers.get("If-None-Match")
+        for attempt in range(4):
+            status, body, headers = load_manifest_for_fetch(_get_benchmarks_base(), raw, inm)
+            if status != 503 or attempt == 3:
+                break
+            await asyncio.sleep(0.05)
+        if body is None:
+            return web.Response(status=status, headers=headers)
+        resp = web.Response(status=status, body=body, content_type="application/json", charset="utf-8", headers=headers)
+        if status == 200:
+            resp.enable_compression()
+        return resp
+    except Exception as e:
+        print(f"[GridTester] ❌ /manifest failed: {e}")
         return web.Response(status=500, text=str(e))
 
 

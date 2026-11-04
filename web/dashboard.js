@@ -430,6 +430,15 @@ app.registerExtension({
                                 try {
                                     const newManifest = JSON.parse(match[1]);
 
+                                    // Lazy shell (no item data inlined): never post its empty manifest as
+                                    // data; tell the dashboard to re-fetch (it sends If-None-Match, so an
+                                    // unchanged manifest costs one 304).
+                                    if (newManifest.__uscg_lazy__ && node.iframe?.contentWindow) {
+                                        node.iframe.contentWindow.postMessage({ type: 'reload_manifest' }, '*');
+                                        console.log('[UltimateGrid] 🔄 Manifest re-fetch requested');
+                                        return;
+                                    }
+
                                     // Send incremental update instead of full reload
                                     if (node.iframe?.contentWindow) {
                                         node.iframe.contentWindow.postMessage({

@@ -822,18 +822,27 @@ function updateFiltersForNewData(newItems) {
 // --- 5. INITIALIZATION ---
 // Ensure init fires after DOM is ready
 // Note: init() in logic_init.js handles the full initialization including
-// showSessionLandingIfEmpty() for sessions with no data. Only call loadSession()
-// here when we have embedded data to reload from disk.
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        if (fullManifest && fullManifest.items && fullManifest.items.length > 0) {
-            console.log('[Init] DOMContentLoaded - calling loadSession');
-            loadSession();
+// showSessionLandingIfEmpty() for sessions with no data. The page is a lazy SHELL
+// (fullManifest.__uscg_lazy__, no item data inlined): when it names a session we fetch the
+// manifest here, once. _uscgBootPending is set synchronously so init()/the landing page know
+// data is on the way. A shell with an empty title is the landing page: no fetch.
+// Legacy pages that still inline items keep the old "reload from disk" call.
+function uscgBootLoad() {
+    const sessInput = document.getElementById('session-input');
+    const lazy = fullManifest && fullManifest.__uscg_lazy__;
+    if (lazy) {
+        if (sessInput && sessInput.value.trim()) {
+            console.log('[Init] lazy shell - fetching manifest');
+            window._uscgBootPending = true;
+            loadSession(null, { boot: true });
         }
-    });
-} else {
-    if (fullManifest && fullManifest.items && fullManifest.items.length > 0) {
-        console.log('[Init] DOM already loaded - calling loadSession');
+    } else if (fullManifest && fullManifest.items && fullManifest.items.length > 0) {
+        console.log('[Init] inlined manifest - calling loadSession');
         loadSession();
     }
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', uscgBootLoad);
+} else {
+    uscgBootLoad();
 }

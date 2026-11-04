@@ -4,6 +4,12 @@ import json
 import folder_paths
 from .html_generator import get_html_template
 
+# The template's <input id="session-input" class="session-name-input" type="text" value="__TITLE__">.
+# (The old pattern expected class="session-input" right after the id and never matched, so
+# update_session_name was always empty.)
+SESSION_INPUT_RE = re.compile(r'<input[^>]*\bid="session-input"[^>]*?\bvalue="([^"]*)"')
+
+
 class SamplerConfigDashboardViewer:
     @classmethod
     def INPUT_TYPES(s):
@@ -26,7 +32,7 @@ class SamplerConfigDashboardViewer:
         # 1. If connected to Sampler (Fresh Generation)
         if dashboard_html:
             # --- MAGIC: EXTRACT SESSION NAME FROM HTML ---
-            match = re.search(r'id="session-input" class="session-input" value="(.*?)"', dashboard_html)
+            match = SESSION_INPUT_RE.search(dashboard_html)
             found_session = match.group(1) if match else None
             
             # --- CRITICAL FIX: INJECT CORRECT DASHBOARD NODE ID ---
@@ -50,20 +56,8 @@ class SamplerConfigDashboardViewer:
         session_name = re.sub(r'[^\w\-]', '', session_name)
         if not session_name: session_name = "default_session"
 
-        base_dir = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name)
-        manifest_path = os.path.join(base_dir, "manifest.json")
-        
-        if os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r") as f:
-                    manifest = json.load(f)
-                # Pass unique_id here, which get_html_template uses correctly
-                html = get_html_template(session_name, manifest, unique_id) 
-                return {"ui": {"html": [html]}}
-            except Exception as e:
-                return {"ui": {"html": [f"Error loading session: {e}"]}}
-        
-        # No session found — show full template with empty manifest so landing page can display
+        # The page is a shell: the dashboard fetches the manifest itself (/config_tester/manifest),
+        # so nothing is read here. An unknown session just shows the landing page.
         empty_manifest = {"items": [], "meta": {"model": "", "positive": "", "negative": ""}, "session_name": session_name}
         html = get_html_template(session_name, empty_manifest, unique_id)
         return {"ui": {"html": [html]}}
