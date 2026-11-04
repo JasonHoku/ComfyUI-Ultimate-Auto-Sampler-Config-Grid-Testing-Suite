@@ -1371,6 +1371,19 @@ ComfyUI/output/benchmarks/model-data/
 
 ---
 
+## Pairwise Review (blind A/B compare + scoreboard)
+
+The star is an absolute signal that says little about which *setting* wins. Compare mode records fast two-up votes and rolls them up per setting.
+
+* **Start:** the two-rectangles button in the dashboard header, the `C` key, or the cog panel section **PAIRWISE REVIEW**. Votes go through the current filter and never include rejected items.
+* **Pairing modes:** *Matched* (same prompt and seed, different settings), *Same settings, different seed* (noise-floor check), *One axis at a time* (exactly one of model, LoRA, sampler, scheduler, CFG, steps, denoise, resolution, prompt, upscale differs; optional axis focus) and *Random* (same media type). Pairs prefer items with few votes and never mix images with videos. When every unvoted pair is used up the queue repeats voted pairs and shows a badge.
+* **Blind by default:** only "A" and "B" are shown, placement is randomised per pair. After a vote a short reveal (off / 1 s / 2 s) outlines the winner and shows only the settings that differ. Any key or tap during the reveal advances without voting. Tap or click an image to vote for it. Panes stack on portrait phones.
+* **Ratings:** votes feed a Bradley-Terry model (ghost-player prior, 1500 = average). Sort the grid by **Rating**, or enable the **Rating** field in Label Mode to see `★rating · votes` on voted cards.
+* **Scoreboard:** per axis, win % (ties count half) with 95% Wilson intervals and the mean rating of the items with that value. Only votes where exactly one axis differs are attributed (a hidden difference such as the VAE blocks attribution; the footer lists the most common extra differences). Rows with fewer than 3 pairs read "not enough data". Seed is a noise-floor block: if seeds alone "win" as much as settings do, the other numbers are noise. Copy JSON / Copy CSV export the board.
+* **Storage:** votes live in the session `manifest.json` as a top-level `comparisons` list `[{a, b, winner, ts, mode, blind?}]` (`a`/`b` are item ids, `a` is the left/top item, `winner` is `a`, `b` or `tie`). Old manifests without the field work unchanged. Votes for items that were deleted stay on disk and are ignored. Every manifest writer (generation saves, the remote VAE worker, the legacy `save_manifest` route) keeps the on-disk `comparisons` untouched. A directory re-scan (`scan_directory`) regenerates item ids, so votes of a scanned session are not carried over.
+* **Routes:** `POST /config_tester/save_comparisons` `{session_name, append: [...], remove: ["ts:a:b", ...]}` and `POST /config_tester/clear_comparisons` `{session_name}`. They only touch `comparisons`.
+* **Caveat:** win % across mixed opponents is not a controlled effect size; pair choice is biased by the filter and the low-vote preference. Use it to rank candidates, then confirm with a matched one-axis run.
+
 ## Keyboard Shortcuts
 
 ### Dashboard
@@ -1382,7 +1395,20 @@ ComfyUI/output/benchmarks/model-data/
 | `+/-` | Zoom in/out |
 | `0` | Reset zoom to 1:1 |
 | `F` | Auto-fit first row to viewport width |
-| `Escape` | Close active modal/popup (priority: Revision > Filters > Settings > Fullscreen) |
+| `Escape` | Close active modal/popup (priority: Revision > Scoreboard > Analytics > Settings > Filters) |
+| `C` | Open Compare mode (blind pairwise review, see below) |
+
+### Dashboard: Compare mode (blind pairwise review)
+| Shortcut | Action |
+|----------|--------|
+| `A` / `Left` | A wins |
+| `D` / `Right` | B wins |
+| `S` / `Down` | Tie |
+| `W` / `Up` | Skip (not saved, pair is excluded for this compare session) |
+| `Z` / `Backspace` / `Ctrl+Z` | Undo the last vote (multi-level, this compare session) |
+| `I` | Unblind: show what differs before voting (the vote is stored with `blind: false`) |
+| `B` | Open the scoreboard |
+| `Escape` | Close the scoreboard, then compare mode |
 
 ### Config Builder
 | Shortcut | Action |
