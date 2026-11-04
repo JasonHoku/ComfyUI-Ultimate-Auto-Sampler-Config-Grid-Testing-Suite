@@ -1465,6 +1465,26 @@ This is a **hybrid application** with three layers:
 2. **JS Frontend Bridge** (`web/` directory) — Runs in the ComfyUI browser tab. Registers custom nodes, manages widget state, and forwards server events.
 3. **Dashboard SPA** (`resources/` directory) — Runs **inside an iframe** in the dashboard node. A standalone app with its own state management, virtual scrolling, and event handling.
 
+### Development / Tests
+
+```bash
+# Python unit tests (ComfyUI + torch are stubbed): needs pytest, numpy, pillow
+pip install -r tests/requirements-ci.txt
+python -m pytest tests/ -q -ra --ignore=tests/e2e     # 137 passed, 15 skipped without torch
+
+# With real torch (e.g. ComfyUI's python), the 15 `requires_torch` tests run too.
+# USCG_REQUIRE_TORCH=1 makes them fail instead of skip if torch is missing:
+USCG_REQUIRE_TORCH=1 python -m pytest tests/ -q -ra --ignore=tests/e2e   # 152 passed
+
+# Dashboard SPA browser smoke test (Playwright, Chromium, no ComfyUI needed)
+pip install -r tests/e2e/requirements.txt
+python -m playwright install chromium
+python -m pytest tests/e2e -q -ra
+```
+
+GitHub Actions (`.github/workflows/tests.yml`) runs four jobs on every push and PR: `pytest-stubs`, `pytest-torch` (CPU torch), `js-syntax` (`node --check` on `web/` and `resources/`, the assembled Dashboard page, and `node --test tests/js/` when that folder exists) and `e2e-dashboard`.
+Tests live in `tests/` and must not contain network or process-spawning code (no `socket`, `http.server`, `subprocess`, `urllib`): `tests/` ships in the registry zip and is yara-scanned.
+
 ### Key Gotchas for AI Development
 
 1. **Config Builder output is ALWAYS wrapped** — `config_builder_node.py` outputs `{"configs": [...], "_distribution": {...}}`. The `sampler_node.py` MUST unwrap the `"configs"` key before passing to `expand_configs()`. If you add new top-level keys to the config output, update the extraction logic in `sampler_node.py` lines 269-286.

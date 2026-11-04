@@ -1,0 +1,135 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest-stubs:
+    name: pytest (ComfyUI + torch stubbed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/requirements-ci.txt
+      - run: pip install -r tests/requirements-ci.txt
+      - name: Assert torch is NOT installed (this leg tests the stub path)
+        run: python -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('torch') is not None)"
+      # expect: 137 passed, 15 skipped (the requires_torch tests)
+      - run: python -m pytest tests/ -q -ra --ignore=tests/e2e
+
+  pytest-torch:
+    name: pytest (real CPU torch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      USCG_REQUIRE_TORCH: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/requirements-ci.txt
+      - name: Install CPU torch (same minor as the GPU box)
+        run: pip install "torch==2.13.*" --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r tests/requirements-ci.txt
+      - run: python -c "import torch; print(torch.__version__); assert hasattr(torch, 'inference_mode')"
+      # expect: 152 passed, 0 skipped
+      - run: python -m pytest tests/ -q -ra --ignore=tests/e2e
+
+  js-syntax:
+    name: JS syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: web/**/*.js (ES modules)
+        run: |
+          for f in $(find web -name '*.js'); do
+            node --input-type=module --check < "$f" || { echo "FAIL $f"; exit 1; }
+          done
+      - name: resources/*.js (plain scripts)
+        run: |
+          for f in resources/*.js; do
+            node --check "$f" || { echo "FAIL $f"; exit 1; }
+          done
+      - name: Assembled Dashboard page (all logic_*.js share ONE script scope)
+        run: |
+          python - <<'PY'
+          import os, re, sys
+          sys.path.insert(0, os.getcwd())
+          import html_generator
+          page = html_generator.get_html_template("ci", {"items": []}, "1")
+          bodies = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", page, re.S)
+          assert bodies, "no inline <script> found in the generated page"
+          out = os.environ.get("RUNNER_TEMP", ".")
+          for n, body in enumerate(bodies):
+              with open(os.path.join(out, f"bundle_{n}.js"), "w", encoding="utf-8") as fh:
+                  fh.write(body)
+          print(f"wrote {len(bodies)} script bodies to {out}")
+          PY
+          for f in "${RUNNER_TEMP:-.}"/bundle_*.js; do
+            node --check "$f" || { echo "FAIL $f"; exit 1; }
+          done
+      - name: node:test unit tests (tests/js, if present)
+        run: |
+          if [ -d tests/js ]; then
+            node --test tests/js/
+          else
+            echo "tests/js not present, skipping"
+          fi
+
+  e2e-dashboard:
+    name: Dashboard SPA (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      USCG_REQUIRE_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-ci.txt
+            tests/e2e/requirements.txt
+      - run: pip install -r tests/requirements-ci.txt -r tests/e2e/requirements.txt
+      - name: Cache Playwright browsers
+        id: pw
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('tests/e2e/requirements.txt') }}
+      - name: Install Chromium (cache miss)
+        if: steps.pw.outputs.cache-hit != 'true'
+        run: python -m playwright install --with-deps --only-shell chromium
+      - name: Install Chromium system deps (cache hit)
+        if: steps.pw.outputs.cache-hit == 'true'
+        run: python -m playwright install-deps chromium
+      - run: python -m pytest tests/e2e -q -ra --browser chromium --tracing retain-on-failure --output test-results
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7

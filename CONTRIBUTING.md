@@ -44,14 +44,22 @@ pip install -r requirements.txt
 ## Running tests
 
 ```bash
-python -m pytest tests/ -v
+# Python unit tests (ComfyUI + torch are stubbed): needs pytest, numpy, pillow
+pip install -r tests/requirements-ci.txt
+python -m pytest tests/ -q -ra --ignore=tests/e2e     # 137 passed, 15 skipped without torch
+
+# With real torch (e.g. ComfyUI's python), the 15 `requires_torch` tests run too.
+# USCG_REQUIRE_TORCH=1 makes them fail instead of skip if torch is missing:
+USCG_REQUIRE_TORCH=1 python -m pytest tests/ -q -ra --ignore=tests/e2e   # 152 passed
+
+# Dashboard SPA browser smoke test (Playwright, Chromium, no ComfyUI needed)
+pip install -r tests/e2e/requirements.txt
+python -m playwright install chromium
+python -m pytest tests/e2e -q -ra
 ```
 
-There are currently 46 tests covering:
-- LTX video config expansion and cache key logic
-- Sigma parser
-- Config expansion (Cartesian products)
-- `state_to_configs_json` transformer
+GitHub Actions (`.github/workflows/tests.yml`) runs four jobs on every push and PR: `pytest-stubs`, `pytest-torch` (CPU torch), `js-syntax` (`node --check` on `web/` and `resources/`, the assembled Dashboard page, and `node --test tests/js/` when that folder exists) and `e2e-dashboard`.
+Tests live in `tests/` and must not contain network or process-spawning code (no `socket`, `http.server`, `subprocess`, `urllib`): `tests/` ships in the registry zip and is yara-scanned.
 
 PRs that change Python logic should add tests where it's reasonable to do so.
 
