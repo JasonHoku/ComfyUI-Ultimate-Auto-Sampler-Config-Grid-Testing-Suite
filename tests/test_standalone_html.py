@@ -77,3 +77,12 @@ def test_concatenated_script_parses_as_one_script(standalone):
             f.write(js)
         out = subprocess.run([NODE, "--check", path], capture_output=True, timeout=60)
     assert out.returncode == 0, out.stderr.decode()
+
+
+def test_dragdrop_helpers_inlined_before_logic_ui():
+    html = _page()
+    assert "function uscgImageRef(" in html
+    assert 'id="modal-send-loadimage-btn"' in html
+    assert 'draggable="true"' in html
+    # node-only export guard stays harmless inline, helpers come before logic_ui's consumers
+    assert html.index("function uscgImageRef(") < html.index("function sendModalToLoadImage(")

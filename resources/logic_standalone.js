@@ -71,6 +71,12 @@ if (USCG_STANDALONE) {
         var openBtn = document.getElementById('open-standalone-btn');
         if (openBtn) openBtn.style.display = 'none';
 
+        var sendBtn = document.getElementById('modal-send-loadimage-btn');
+        if (sendBtn) {
+            sendBtn.textContent = '\u2B07 Download image';
+            sendBtn.title = 'Save this image (dragging it to the desktop also works)';
+        }
+
         var pack = document.getElementById('pack-workflow-checkbox');
         if (pack) {
             pack.checked = false;

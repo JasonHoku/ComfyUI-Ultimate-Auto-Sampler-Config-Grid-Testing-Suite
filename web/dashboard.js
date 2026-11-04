@@ -161,6 +161,61 @@ app.registerExtension({
                 // Full pass for survivors (preview-pass workflow): flip the matching Config Builder to
                 // "Preview pass off" and queue the prompt. Feature-detected; the dashboard falls back to an
                 // instructions toast when this does not answer (or app.queuePrompt is unavailable).
+                // Revise-modal "Send to Load Image" (issue #22): fill the selected / only / a new Load Image node.
+                if (event.data?.type === 'uscg_send_to_load_image') {
+                    const reply = (ok, message) => {
+                        try { event.source?.postMessage({ type: 'uscg_send_to_load_image_result', ok, message }, '*'); } catch (e) { /* ignore */ }
+                    };
+                    (async () => {
+                        try {
+                            const d = event.data;
+                            const u = new URL(String(d.url || ''), location.href);
+                            if (u.origin !== location.origin || u.pathname !== '/view') {
+                                reply(false, "Refused: the image URL is not this ComfyUI server's /view.");
+                                return;
+                            }
+                            const filename = String(d.filename || u.searchParams.get('filename') || '');
+                            const subfolder = String(d.subfolder || '');
+                            const imgType = String(d.imageType || 'output');
+                            if (!filename) { reply(false, 'No filename.'); return; }
+                            const all = (app.graph?._nodes || []);
+                            const loads = all.filter(n => n.type === 'LoadImage');
+                            const sel = Object.values(app.canvas?.selected_nodes || {}).filter(n => n.type === 'LoadImage');
+                            let node = sel[0] || (loads.length === 1 ? loads[0] : null);
+                            if (!node) {
+                                node = LiteGraph.createNode('LoadImage');
+                                if (!node) { reply(false, 'Could not create a Load Image node.'); return; }
+                                const dash = all.find(n => String(n.id) === String(d.node_id));
+                                node.pos = dash ? [dash.pos[0] + dash.size[0] + 40, dash.pos[1]] : [60, 60];
+                                app.graph.add(node);
+                            }
+                            const w = node.widgets?.find(x => x.name === 'image');
+                            if (!w) { reply(false, 'The Load Image node has no image widget.'); return; }
+                            let value = (subfolder ? subfolder + '/' : '') + filename + ' [' + imgType + ']';
+                            if (d.upload) {
+                                const blob = await (await fetch(u.href)).blob();
+                                const fd = new FormData();
+                                fd.append('image', new File([blob], filename, { type: blob.type }));
+                                fd.append('type', 'input');
+                                const r = await api.fetchApi('/upload/image', { method: 'POST', body: fd });
+                                if (!r.ok) { reply(false, 'Upload failed (HTTP ' + r.status + ').'); return; }
+                                const j = await r.json();
+                                value = j.subfolder ? j.subfolder + '/' + j.name : j.name;
+                            }
+                            const old = w.value;
+                            if (w.options?.values && !w.options.values.includes(value)) w.options.values.push(value);
+                            w.value = value;
+                            w.callback?.(value);
+                            node.onWidgetChanged?.(w.name, value, old, w);
+                            app.graph.setDirtyCanvas(true, true);
+                            reply(true, `Loaded into "${node.title || 'Load Image'}" (#${node.id})`);
+                        } catch (e) {
+                            reply(false, 'Could not send the image: ' + (e?.message || e));
+                        }
+                    })();
+                    return;
+                }
+
                 if (event.data?.type === 'uscg_run_full_pass') {
                     const reply = (ok, message) => {
                         try { event.source?.postMessage({ type: 'uscg_run_full_pass_result', ok, message }, '*'); } catch (e) { /* ignore */ }
