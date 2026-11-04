@@ -393,6 +393,11 @@ def run_deferred_upscales(
     Process deferred upscale jobs after generation completes.
     Runs all pipeline chains for each queued image.
     Called BEFORE finalization cleanup so VAE/model/CLIP are still loaded.
+
+    Queue entries: config, width, height, seed, batch_idx, actual_positive_prompt,
+    actual_negative_prompt, gen_index, config_fp and optionally base_item (the exact
+    manifest item to upscale; skips the identity search). The caller supplies a
+    model/VAE/CLIP/conditioning_cache that matches every job in the queue.
     """
     if not deferred_queue:
         return
@@ -427,16 +432,18 @@ def run_deferred_upscales(
         actual_positive_prompt = job["actual_positive_prompt"]
         actual_negative_prompt = job["actual_negative_prompt"]
 
-        # Find the base image in the manifest by matching identity
-        base_item = None
-        for item in existing_data.get("items", []):
-            if (item.get("seed") == current_seed and
-                item.get("width") == pipe_w and
-                item.get("height") == pipe_h and
-                not item.get("upscaled") and
-                item.get("positive") == actual_positive_prompt):
-                base_item = item
-                break
+        # Distributed callers hand over the exact manifest item; local entries search by identity
+        base_item = job.get("base_item")
+        if base_item is None:
+            # Find the base image in the manifest by matching identity
+            for item in existing_data.get("items", []):
+                if (item.get("seed") == current_seed and
+                    item.get("width") == pipe_w and
+                    item.get("height") == pipe_h and
+                    not item.get("upscaled") and
+                    item.get("positive") == actual_positive_prompt):
+                    base_item = item
+                    break
 
         if not base_item:
             print(f"[GridTester] ⚠️ Deferred upscale #{job_idx+1}: base image not found in manifest, skipping")
@@ -513,6 +520,15 @@ def run_deferred_upscales(
             else:
                 adjusted_prompt = actual_positive_prompt
             hires_cond = conditioning_cache["positive"].get(adjusted_prompt)
+            if hires_cond is None:
+                # not cached (fresh per-model cache): encode it, keep the base conditioning on failure
+                try:
+                    with pinned_clip(patched_clip):
+                        hires_cond = encode_prompt_with_combinators(patched_clip, adjusted_prompt, conf.get("clip_skip", 0))
+                    conditioning_cache["positive"][adjusted_prompt] = hires_cond
+                except Exception as e:
+                    print(f"[GridTester] ⚠️ Deferred upscale #{job_idx+1}: HiRes prompt encode failed: {e}, using base prompt")
+                    hires_cond = None
             if hires_cond is not None:
                 hires_positive_cond = hires_cond
                 hires_prompt_active = True
@@ -695,6 +711,150 @@ def run_deferred_upscales(
     print(f"[GridTester] ✅ Deferred upscale phase complete: {len(upscale_durations)}/{total_jobs} images upscaled")
 
 
+# Item fields that describe THIS image rather than its config (stripped when a config is rebuilt from an item).
+_ITEM_ONLY_KEYS = (
+    "id", "file", "filename", "favorited", "rejected", "note", "duration", "gen_index",
+    "config_fp", "base_fp", "metrics", "upscaled", "base_width", "base_height",
+)
+
+
+def _conf_from_item(item):
+    """Best-effort job config rebuilt from a manifest item (fallback when no distributed job matches)."""
+    conf = {k: v for k, v in item.items() if k not in _ITEM_ONLY_KEYS}
+    conf["positive"] = item.get("config_positive", item.get("positive", ""))
+    conf["negative"] = item.get("config_negative", item.get("negative", ""))
+    conf.setdefault("lora_expanded", item.get("lora", "None"))
+    return conf
+
+
+def _build_distributed_upscale_queue(items, pre_run_ids, jobs):
+    """
+    Build the deferred-upscale queue for a distributed run.
+
+    items: existing_data["items"] (newest first); pre_run_ids: ids present before the run
+    (only this run's images are upscaled); jobs: [(config, input_job)] of COMPLETED jobs.
+    Worker-inserted items carry only a /view URL (no filename, no config_fp), so each item is
+    matched back to its job config with the same rule resume uses (check_if_job_completed).
+    Returns entries shaped like the local deferred queue plus ``base_item``.
+    """
+    from .config_utils import config_fingerprint
+
+    by_key = {}
+    for cfg, ij in jobs:
+        by_key.setdefault((cfg.get("model"), cfg.get("sampler"), cfg.get("scheduler")), []).append((cfg, ij))
+
+    queue = []
+    for item in reversed(items):  # oldest first = generation order
+        if item.get("id") in pre_run_ids:
+            continue
+        if item.get("upscaled") or item.get("preview") or item.get("media_type") == "video":
+            continue
+        if item.get("model_type") == "ltx_video":
+            continue
+        if not item_filename(item):
+            print(f"[Distribution] ⚠️ Upscale: item {item.get('id')} has no filename, skipping")
+            continue
+
+        w, h = item.get("width"), item.get("height")
+        seed = item.get("seed")
+        bidx = item.get("batch_idx", 0)
+        pos, neg = item.get("positive", ""), item.get("negative", "")
+        matches = []
+        for cfg, _ij in by_key.get((item.get("model"), item.get("sampler"), item.get("scheduler")), []):
+            try:
+                if check_if_job_completed([item], cfg, seed, w, h, bidx, pos, neg) == 0:
+                    matches.append(cfg)
+            except Exception:
+                continue
+        if matches:
+            cfg = next((c for c in matches if c.get("seed") == seed), matches[0])
+        else:
+            cfg = _conf_from_item(item)
+
+        queue.append({
+            "config": cfg, "width": w, "height": h, "seed": seed,
+            "batch_idx": bidx, "actual_positive_prompt": pos,
+            "actual_negative_prompt": neg, "gen_index": item.get("gen_index", 0),
+            "config_fp": config_fingerprint(cfg, w, h, cfg.get("seed")),
+            "base_item": item,
+        })
+    return queue
+
+
+def _run_distributed_upscales(
+    queue, upscale_settings, session_settings, paths, existing_data, session_name, unique_id,
+    ckpt_name, use_remote_vae, optional_model, optional_clip, optional_vae,
+    optional_positive, optional_negative, model_cache, incompatible_loras
+):
+    """
+    Run a distributed run's upscales on the master, one (model, LoRA, VAE) group at a time.
+    Each group loads its own model and gets a fresh conditioning cache (conditioning from another
+    model's CLIP is invalid), then everything is released before the next group.
+    """
+    import comfy.model_management as mm
+
+    def _norm_vae(c):
+        v = c.get("vae", "Default")
+        return "Default" if (not v or str(v) in ("None", "none")) else v
+
+    groups = {}
+    for entry in queue:
+        c = entry["config"]
+        key = (get_model_cache_key(c), c.get("lora_expanded", c.get("lora", "None")), _norm_vae(c))
+        groups.setdefault(key, []).append(entry)
+
+    if optional_positive is not None or optional_negative is not None:
+        print("[Distribution] ℹ️ Positive/negative inputs are connected: upscale conditioning comes from the prompts, not those inputs")
+
+    PromptServer = None
+    try:
+        from server import PromptServer as _PS
+        PromptServer = _PS
+    except Exception:
+        pass
+
+    for (model_key, lora_str, vae_name), group in groups.items():
+        if mm.processing_interrupted():
+            print("[Distribution] 🛑 INTERRUPTED during distributed upscales")
+            break
+        cfg0 = group[0]["config"]
+        loaded_model = loaded_clip = loaded_vae = patched_model = patched_clip = None
+        cache = {"positive": {}, "negative": {}}
+        try:
+            loaded_model, loaded_clip, loaded_vae = load_model_by_type(
+                cfg0, ckpt_name, use_remote_vae, optional_model, optional_clip, optional_vae,
+                optional_positive, optional_negative, None, None, model_cache=model_cache
+            )
+            if loaded_vae is None and optional_vae is not None:
+                loaded_vae = optional_vae
+            if vae_name != "Default":
+                if is_remote_vae(vae_name):
+                    print(f"[Distribution] ℹ️ Remote VAE '{vae_name}': upscale encode/decode stays local with the model's VAE")
+                else:
+                    loaded_vae = load_vae_by_name(vae_name)
+            patched_model, patched_clip, should_skip = load_loras(
+                loaded_model, loaded_clip, lora_str, model_key, incompatible_loras, model_cache=model_cache
+            )
+            if should_skip:
+                print(f"[Distribution] ⚠️ LoRA incompatible for {model_key}; skipping {len(group)} upscales")
+                continue
+            if loaded_vae is None:
+                print(f"[Distribution] ⚠️ No local VAE for {model_key}; skipping {len(group)} upscales")
+                continue
+            run_deferred_upscales(
+                group, upscale_settings, session_settings, loaded_vae, patched_model, patched_clip,
+                cache, paths, existing_data, session_name, unique_id, PromptServer
+            )
+        except Exception as e:
+            if isinstance(e, InterruptProcessingException):
+                raise
+            print(f"[Distribution] ⚠️ Upscale group {model_key} failed: {e}")
+        finally:
+            patched_model, patched_clip = cleanup_model_references(patched_model, patched_clip, cache)
+            loaded_model = loaded_clip = loaded_vae = None
+            gc.collect()
+
+
 def _expand_lora_weight_arrays(expanded_configs):
     """
     Expand LoRA weight array bracket notation into Cartesian product of configs.
@@ -838,7 +998,7 @@ def run_generation_loop(
     
     from .config_utils import (
         parse_json_with_error, parse_float_input, parse_prompt_input_nested, derive_extra_seeds,
-        expand_configs, prepare_input_jobs
+        expand_configs, prepare_input_jobs, latent_job_pixel_size
     )
     from .config_utils import (
         JOB_ORDERS, build_job_plan, order_job_plan, count_switches, config_fingerprint,
@@ -1626,6 +1786,12 @@ def run_generation_loop(
             model_switched = True
         else:
             model_switched = False
+
+        # A connected latent's pixel size = latent cells x this model's ratio, known only now.
+        if job.get("latent_cells"):
+            w, h = latent_job_pixel_size(job, latent_ratio)
+            if job_fp is not None:
+                job_fp = config_fingerprint(conf, w, h, conf["seed"])
 
         # ==== PER-CONFIG VAE SWITCHING ====
         # Config Builder VAE settings take priority over sampler node's remote_vae_endpoint
@@ -3073,6 +3239,11 @@ def _run_distributed_generation(
     if image_format != "webp":
         print(f"[GridTester] 🖼️ Image save format (distributed master): {image_format}")
 
+    # Ids present before this run: only images made by this run get upscaled in the post-phase
+    _pre_run_ids = {it.get("id") for it in existing_data.get("items", [])}
+    if optional_latent is not None:
+        print("[Distribution] ⚠️ Latent input: remote workers render empty latents at the placeholder size")
+
     manager.populate_jobs(
         expanded, input_jobs, existing_data,
         overwrite_existing, has_optional_inputs, lora_triggerwords_mode
@@ -3339,6 +3510,9 @@ def _run_distributed_generation(
             latent_channels = get_latent_channels(loaded_model, optional_latent)
             latent_ratio = get_latent_downscale_ratio(loaded_model)
             if optional_latent is not None:
+                # pixel size of a connected latent = cells x this model's ratio
+                w = int(optional_latent["samples"].shape[3]) * latent_ratio
+                h = int(optional_latent["samples"].shape[2]) * latent_ratio
                 latent_in = {"samples": optional_latent["samples"].clone()}
             else:
                 latent_in = make_empty_latent(latent_channels, w, h, latent_ratio)
@@ -3616,29 +3790,31 @@ def _run_distributed_generation(
     if session_settings and session_settings.get("upscaling", {}).get("enabled", False):
         upscale_settings = session_settings.get("upscaling", {})
         print(f"[Distribution] 🔍 Running upscales on master for distributed results...")
-        # Build deferred upscale queue from all generated items
-        deferred_upscale_queue = []
-        for item_meta in existing_data.get("items", []):
-            if not item_meta.get("upscaled"):  # Skip items already upscaled
-                deferred_upscale_queue.append({
-                    "meta": item_meta,
-                    "config": {
-                        "model": item_meta.get("model", ckpt_name),
-                        "steps": item_meta.get("steps", 20),
-                        "sampler": item_meta.get("sampler", "euler"),
-                        "scheduler": item_meta.get("scheduler", "normal"),
-                        "cfg": item_meta.get("cfg", 7.0),
-                    }
-                })
-        if deferred_upscale_queue:
-            run_deferred_upscales(
-                deferred_upscale_queue, upscale_settings, existing_data,
-                session_name, paths, unique_id, ckpt_name,
-                conditioning_cache, model_cache,
-                use_remote_vae, remote_vae_endpoint
+        # Release the master's model first so the per-group loads below have the VRAM
+        patched_model, patched_clip = cleanup_model_references(patched_model, patched_clip, conditioning_cache)
+        conditioning_cache = {"positive": {}, "negative": {}}
+        loaded_model, loaded_clip, loaded_vae = None, None, None
+        gc.collect()
+        try:
+            with manager._lock:
+                _done_jobs = [(j.config, j.input_job) for j in manager._jobs.values() if j.state == JobState.COMPLETED]
+            deferred_upscale_queue = _build_distributed_upscale_queue(
+                existing_data.get("items", []), _pre_run_ids, _done_jobs
             )
-        else:
-            print(f"[Distribution] ℹ️ No items to upscale")
+            if deferred_upscale_queue:
+                print(f"[Distribution] 🔍 {len(deferred_upscale_queue)} images from this run to upscale")
+                _run_distributed_upscales(
+                    deferred_upscale_queue, upscale_settings, session_settings, paths, existing_data,
+                    session_name, unique_id, ckpt_name, use_remote_vae,
+                    optional_model, optional_clip, optional_vae, optional_positive, optional_negative,
+                    model_cache, incompatible_loras
+                )
+            else:
+                print(f"[Distribution] ℹ️ No items to upscale")
+        except InterruptProcessingException:
+            raise
+        except Exception as e:
+            print(f"[Distribution] Upscale phase failed: {e}")
 
     existing_data["meta"] = {
         "positive": positive_text, "negative": negative_text,
