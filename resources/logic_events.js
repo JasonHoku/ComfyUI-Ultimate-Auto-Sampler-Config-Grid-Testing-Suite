@@ -36,9 +36,9 @@ window.addEventListener('message', (event) => {
                 setTimeout(() => { if (etaBar) etaBar.style.display = 'none'; }, 30000);
             } else {
                 if (etaText) {
-                    const phaseLabel = p.phase === 'upscaling' ? 'Upscaling' : 'Job';
+                    const phaseLabel = p.phase === 'upscaling' ? 'Upscaling' : (p.phase === 'sweep' ? 'Sweep job' : 'Job');
                     const finishPart = p.finish_time ? ` | ~${p.finish_time}` : '';
-                    etaText.textContent = `${phaseLabel} ${p.current_job}/${p.total_jobs} (${p.progress_pct}%) | ETA: ${p.eta_str}${finishPart} | ${p.avg_duration}s/job`;
+                    etaText.textContent = `${phaseLabel} ${p.current_job}/${p.total_jobs} (${p.progress_pct}%) | ETA: ${p.eta_str}${finishPart} | ${p.avg_duration}s/job${p.errors ? ` | ${p.errors} error${p.errors === 1 ? '' : 's'}` : ''}`;
                 }
                 if (etaProgress) {
                     etaProgress.style.width = `${p.progress_pct}%`;

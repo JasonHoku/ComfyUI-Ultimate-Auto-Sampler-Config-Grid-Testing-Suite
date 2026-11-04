@@ -54,6 +54,9 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── manifest_utils.py            # Manifest Read/Write/Merge Helpers (120 lines)
 ├── network_utils.py             # ALL outbound network requests (CivitAI, HuggingFace VAE, Distribution LAN) (280 lines)
 ├── upscale_runner.py            # Dashboard async upscaling background thread (371 lines)
+├── workflow_sweep.py            # Workflow Sweep core: parse API workflow, bindings -> jobs, prompt substitution, fingerprints (pure, no torch/server)
+├── workflow_sweep_runner.py     # Workflow Sweep runner: ComfyBridge (in-process post_prompt mirror), windowed feeder thread, pause/resume/cancel, route helpers
+├── workflow_sweep_collect.py    # USCGSweepCollect output node: saves each job's image + manifest item into the USCG session
 ├── html_generator.py            # Reads /resources/ to build the Dashboard HTML (57 lines)
 ├── run_api.py                   # Pure helpers for POST /config_tester/run + run_status (no server imports)
 │
@@ -222,6 +225,11 @@ All routes registered via `PromptServer.instance.routes`.
 | POST | `/config_tester/export_favorites` | 435 | Export favorited images with options (metadata, workflow, organize) |
 | POST | `/config_tester/delete_non_favorites` | 662 | Delete all non-favorited images from session |
 | POST | `/config_tester/scan_directory` | 746 | Scan external dir, create symlinks, generate manifest |
+| POST | `/config_tester/sweep/parse` | - | Workflow Sweep: describe an API-format workflow `{api_json}` (nodes, outputs, image sources, suggested bindings) |
+| POST | `/config_tester/sweep/dry_run` | - | Workflow Sweep: first N concrete prompts + validation of job 1 `{state or configs_json, limit}`; queues nothing |
+| POST | `/config_tester/sweep/start` | - | Workflow Sweep: start a sweep `{state or configs_json, node_id?}` (400 invalid, 409 one already active) |
+| GET | `/config_tester/sweep/status` | - | Workflow Sweep: `?sweep_id=` or `?session_name=` (state, counts, ETA, last errors) |
+| POST | `/config_tester/sweep/pause`, `/resume`, `/cancel` | - | Workflow Sweep controls `{sweep_id}` |
 
 **Distribution APIs** (registered in `distribution_routes.py`):
 
@@ -756,7 +764,7 @@ __init__.py
 | Event Name | Sender | Data Fields | Purpose |
 |---|---|---|---|
 | `ultimate_grid.update` | `generation_orchestrator.py` / `image_generation.py` | `session_name, node, manifest, meta, new_items` | New images generated |
-| `ultimate_grid.progress` | `generation_orchestrator.py` | `session_name, node, progress_pct, eta_str, current_job, total_jobs, avg_duration, last_duration, finish_time` | ETA/progress bar |
+| `ultimate_grid.progress` | `generation_orchestrator.py` | `session_name, node, progress_pct, eta_str, current_job, total_jobs, avg_duration, last_duration, finish_time` | ETA/progress bar. Optional `phase`: `upscaling` (deferred upscales) or `sweep` (Workflow Sweep; also `sweep_id, state, errors`; label "Sweep job") |
 | `ultimate_grid.distribution_status` | `generation_orchestrator.py` | `session_name, workers, stats` | Distribution worker status |
 
 ---
@@ -790,6 +798,8 @@ __init__.py
 3. **onNodeCreated Must Be Synchronous** — In `conf-builder-main.js` line 51, `onNodeCreated` MUST remain synchronous. Async initialization runs inside a fire-and-forget `(async () => { ... })()` IIFE. Making `onNodeCreated` itself async breaks widget registration.
 
 4. **Resources Are Inlined** — `html_generator.py` reads all `/resources/` files and bakes them into one HTML string. Zero external HTTP requests. Changes to dashboard JS/CSS require re-generating the HTML (re-run the sampler node or call `/config_tester/get_session_html`).
+
+> **Workflow Sweep never blocks the executor.** `USCGSweepCollect` and the Generator in workflow mode only start/record work; the runner feeds sweep prompts through `PromptServer.instance.prompt_queue` from its own thread (an in-process mirror of `server.py post_prompt`, loop-bound calls via `ComfyBridge.run_on_loop`, never from the loop thread, no lock held across it). A node that waited on a prompt it queued would deadlock ComfyUI's single executor thread. The expansion/substitution core (`workflow_sweep.py`) is pure; only `ComfyBridge` touches ComfyUI, so tests use a fake bridge.
 
 5. **Manifest Merge on Save** — `manifest_utils.py` `save_manifest()` calls `merge_manifest_user_changes()` which reloads from disk before saving. This preserves user favorites/rejected/notes that changed concurrently while generation was running. Also, `flush_batch_with_vae()` (image_generation.py line 657) does its own disk sync.
 

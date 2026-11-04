@@ -570,6 +570,43 @@ class UltimateConfigBuilder:
         return unique_strings
     
     @staticmethod
+    def _workflow_array_to_config(config_array, global_positive_groups, global_negative):
+        """Emit one Workflow Sweep config (model_type "workflow"); see workflow_sweep.py.
+        The job count is the product of the bindings' axes, expanded by config_utils.expand_configs."""
+        wf = config_array.get("workflow") or {}
+        out = wf.get("output") or {}
+        config = {
+            "model_type": "workflow",
+            "name": str(config_array.get("name", "")),
+            "workflow": wf.get("api_prompt") or {},
+            "workflow_source": str(wf.get("source_name", "") or ""),
+            "workflow_output": {"node_id": str(out["node_id"]), "output_index": int(out.get("output_index", 0) or 0)}
+                               if out.get("node_id") is not None else {},
+            "workflow_run_other_outputs": bool(wf.get("run_other_outputs", False)),
+            "workflow_bindings": list(wf.get("bindings") or []),
+        }
+        use_custom = config_array.get("use_custom_prompts", False)
+        per_config_positive_groups = config_array.get("positive_prompt_groups", [])
+        per_config_negative = config_array.get("negative_prompt", "")
+        if use_custom and per_config_positive_groups:
+            config["positive"] = per_config_positive_groups
+            if per_config_negative:
+                config["negative"] = per_config_negative
+            config["_prompt_source"] = "custom"
+        elif global_positive_groups:
+            config["positive"] = global_positive_groups
+            if global_negative:
+                config["negative"] = global_negative
+            config["_prompt_source"] = "global"
+        # Drift check (same idea as _EXPECTED_CONFIG_KEYS for standard arrays)
+        _EXPECTED_WORKFLOW_KEYS = {"model_type", "name", "workflow", "workflow_source", "workflow_output",
+                                   "workflow_run_other_outputs", "workflow_bindings"}
+        missing = _EXPECTED_WORKFLOW_KEYS - set(config.keys())
+        if missing:
+            print(f"[ConfigBuilder] ⚠️ Workflow config schema drift: missing keys {missing}")
+        return config
+
+    @staticmethod
     def state_to_configs_json(state: dict) -> str:
         """
         Pure transformer: builder UI state -> configs_json string.
@@ -617,6 +654,12 @@ class UltimateConfigBuilder:
         total_lora_configs = 0
 
         for config_array in config_arrays:
+            # Workflow Sweep arrays carry an API-format workflow + bindings, not models/samplers
+            if config_array.get("kind") == "workflow":
+                configs_output.append(UltimateConfigBuilder._workflow_array_to_config(
+                    config_array, global_positive_groups, global_negative))
+                continue
+
             # Parse values from this config array
             sampler_list = UltimateConfigBuilder.parse_comma_list(config_array.get("samplers", "euler"))
             scheduler_list = UltimateConfigBuilder.parse_comma_list(config_array.get("schedulers", "normal"))
@@ -869,6 +912,9 @@ class UltimateConfigBuilder:
 
         # Build the output object with configs and optional distribution settings
         output_obj = {"configs": configs_output}
+
+        if state.get("distribution_enabled") and any(c.get("model_type") == "workflow" for c in configs_output):
+            print("[ConfigBuilder] ⚠️ Distribution is ignored for Workflow Sweep configs (they run through ComfyUI's own queue).")
 
         # Embed distribution config if enabled
         if state.get("distribution_enabled") and state.get("worker_urls"):

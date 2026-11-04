@@ -801,6 +801,23 @@ Both live in the **Run Settings** section of the Config Builder and default to t
 * A cell is identified by a **config fingerprint** (model, LoRA stack, VAE, text encoders, sampler, scheduler, CFG, denoise, seed, raw prompts, full resolution, plus advanced-sampling/SLG/deep-shrink settings; *not* steps). Cells whose seed is re-randomised on every run (`random_before`, extra random seeds) cannot be matched to a preview and simply render again.
 * ETA: preview and full jobs cost roughly 10x apart and the rolling average lags when slow models are grouped together; treat the ETA as approximate under Minimize.
 
+### Workflow Sweep (sweep any ComfyUI workflow)
+
+**Add Workflow Sweep** (next to Add Config Array) turns a config array into a sweep over *your own ComfyUI workflow*. Instead of USCG re-implementing a model family, the workflow you exported runs as-is through ComfyUI's own executor, one prompt per job, and every image lands in a normal USCG session (manifest, dashboard, favorites, filters, export).
+
+1. In ComfyUI export the workflow with **Workflow > Export (API)**. Load that file (or paste it) in the Workflow Sweep section. Editor-format JSON (with `nodes` and `links`) is rejected with a hint.
+2. **Image to collect**: the IMAGE socket that feeds the first Save Image is picked automatically; change it in the dropdown. Only the nodes upstream of that socket run (the workflow's own Save Image / Preview nodes are skipped unless you tick *Also run the workflow's own outputs*).
+3. **Sweep axes**: click a *Suggested* chip or `＋ sweep` next to any input in the node list. Each axis is one input (or several that must share a value, e.g. a seed feeding two nodes) with a list of values; the job count is the product of all axes. Special axes: **Positive / Negative prompt** (values come from the config's Prompts section, with the usual groups and 1-to-1 pairing rule), **LoRA** (bind LoraLoader nodes as slots; `name:0.8`, weight arrays `name:[0.5,1.0]`, folders and `None` work as in standard configs), **Resolution** (`WxH` into two width/height inputs). A linked input can be replaced by a literal with `＋ override link`.
+4. **Dry run** shows the first concrete prompts (template plus your substitutions plus the collector node), the validation result of job 1 and the exact job count, and lets you download a job as API JSON to compare by hand. **Start sweep** starts the run from the Builder; queueing the **Generator** node starts the same sweep and returns the dashboard immediately. **Pause / Resume / Cancel** control it, and a status line follows it.
+
+How it behaves:
+* Jobs are queued two at a time through ComfyUI's normal queue (so you can keep using ComfyUI, and nothing blocks the executor). Axes are ordered so loader values stay adjacent (checkpoint outermost, sampler settings innermost), which lets ComfyUI's cache keep models loaded between jobs. `--cache-none` or very tight RAM reloads models every job.
+* Each job has a fingerprint of the exact substituted workflow. Starting the same sweep again (also after a ComfyUI restart) skips jobs already in the session; *Overwrite existing* re-runs them and replaces the old image.
+* A failed job is recorded and the sweep continues; three failures in a row pause it. Pressing Cancel in ComfyUI during a job, or clearing the queue, pauses the sweep instead of silently finishing; Resume re-runs the affected jobs.
+* Manifest items get the normal fields (model, sampler, scheduler, steps, cfg, seed, denoise, vae, size, prompts) read from the workflow, plus `wf_params` (your bound values), `wf_fingerprint`, `wf_sweep_id`. Dashboard REVISE is hidden for these items.
+* Each sweep writes `benchmarks/<session>/workflow_sweeps/<sweep_id>.json` (templates, bindings, per-job status) so any executed prompt can be reconstructed.
+* v1 limits: one image output per job (no video), one sweep at a time, a workflow sweep cannot share a Generator run with standard configs (use two Builders), no upscale/distribution/trigger-word features, and Revise does not apply.
+
 ---
 
 ### Image Metrics (Optional)

@@ -8,9 +8,10 @@ no `metrics` yet. Pure CPU (PIL -> numpy), no VRAM, never touches the GPU.
 Manifest writes happen under manifest_utils._manifest_lock: the manifest is
 RELOADED from disk, the new `metrics` are set by item id, and the file is
 replaced atomically, so a stale full copy is never written back and a user's
-concurrent favorites/notes survive. Do not run it on a session that a
-generation run is currently writing: that run saves its own in-memory copy of
-the manifest and would drop metrics written meanwhile.
+concurrent favorites/notes survive. A generation run writing the same session
+keeps these metrics too: every manifest writer copies an item's on-disk
+`metrics` when its in-memory copy has none (manifest_utils, flush_batch_with_vae,
+the remote VAE worker).
 """
 import json
 import os

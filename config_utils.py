@@ -520,6 +520,15 @@ def expand_configs(raw_configs, pos_prompts, neg_prompts, denoise_values, seed, 
         return x if isinstance(x, list) else [x]
 
     for entry in raw_configs:
+        # Branch early for workflow sweeps: the entry carries an API-format workflow + bindings
+        if entry.get("model_type") == "workflow":
+            try:
+                from .workflow_sweep import expand_workflow_entry
+            except ImportError:
+                from workflow_sweep import expand_workflow_entry
+            expanded.extend(expand_workflow_entry(entry, extra_seeds, pos_prompts, neg_prompts))
+            continue
+
         # Branch early for LTX video — different field shape, separate cartesian
         if entry.get("model_type") == "ltx_video":
             expanded.extend(_expand_ltx_entry(entry))
