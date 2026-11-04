@@ -46,6 +46,8 @@ Node names in the "Add Node" menu, under `sampling/testing`:
 
 **Drag [`SamplrConfig-Basic-Workflow.json`](SamplrConfig-Basic-Workflow.json) into your ComfyUI canvas** — it includes all three nodes pre-wired with a working example. Swap in your checkpoint and hit Run.
 
+**Or start from a model-specific example:** [`examples/`](examples/README.md) has one ready workflow per model family (SDXL/Illustrious, Anima, Z-Image Turbo, Krea 2, Flux.2 Klein 9B, MOSS-Image) with the model, text encoder, CLIP type and VAE already set. See [`examples/README.md`](examples/README.md) for the files each one needs.
+
 > **Troubleshooting:** If the Config Builder loads as a plain node with no sliders/UI, right-click it and choose *Fix this node*, or delete and re-add it. Make sure you're on the latest version via Comfy Manager (1.9.2 or newer) and have restarted ComfyUI after updating.
 
 ### Manual wiring
@@ -855,6 +857,8 @@ Clicking **REVISE** on a card opens the studio view:
 ---
 
 ## 🎯 Example Workflows
+
+Ready-to-load workflow files for each model family live in [`examples/`](examples/README.md).
 
 ### Quick Quality Test (40 images)
 ```json

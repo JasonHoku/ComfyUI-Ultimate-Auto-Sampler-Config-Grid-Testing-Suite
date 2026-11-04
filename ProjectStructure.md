@@ -80,6 +80,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_events.js          # Interaction Handler (Hotkeys, API calls) (91 lines)
 │   └── logic_utils.js           # Helpers (Export, Scan, Session loading) (599 lines)
 │
+├── examples/                    # Ready-to-load workflows per model family (+ README with the files each needs)
 ├── docs/plans/                  # Design docs and implementation plans
 ├── pyproject.toml               # Package metadata (36 lines)
 ├── requirements.txt             # Python deps — diffusers, piexif
