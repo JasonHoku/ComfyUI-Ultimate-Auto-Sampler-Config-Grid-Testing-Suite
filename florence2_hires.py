@@ -839,7 +839,7 @@ def run_florence2_step(
 
 def build_florence2_manifest_entry(
     step_result, item, *, session_name, pipeline_name, upscale_id,
-    upscaled_filename, current_index, hires_denoise
+    upscaled_filename, current_index, hires_denoise, base_dims=None
 ):
     """Build the manifest entry dict for a successful Florence2 hi-res-fix.
 
@@ -876,17 +876,19 @@ def build_florence2_manifest_entry(
         "florence2_bbox": step_result.get("florence2_bbox"),
         "hires_denoise": hires_denoise,
     })
+    if base_dims:
+        base.update(base_dims)
     return base
 
 
-def build_florence2_no_detection_entry(step_result, item, *, sentinel_id, current_index):
+def build_florence2_no_detection_entry(step_result, item, *, sentinel_id, current_index, base_dims=None):
     """Build a sentinel manifest entry for a Florence2 no-detection result.
 
     No new image file is written — the entry points back at the source filename
     so the dashboard can render a "no detection" badge alongside the original.
     """
     text = step_result.get("florence2_text_input", "")
-    return {
+    entry = {
         "id": sentinel_id,
         "gen_index": current_index,
         "filename": item.get("filename", ""),
@@ -897,3 +899,6 @@ def build_florence2_no_detection_entry(step_result, item, *, sentinel_id, curren
         "florence2_model": step_result.get("florence2_model", ""),
         "note": f"Florence2 found no '{text}' in image",
     }
+    if base_dims:
+        entry.update(base_dims)
+    return entry

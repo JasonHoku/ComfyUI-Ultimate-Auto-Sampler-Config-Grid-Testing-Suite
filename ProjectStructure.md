@@ -891,6 +891,10 @@ __init__.py
 
 ---
 
+- **Item id ranges:** generated ids are `int(time.time()*100000)+rand` (below 2^52 until the year ~3400); scanned ids are `manifest_utils.stable_item_id("scan:<relpath>")` in `[2^52, 2^53)` (JS-safe integers). A re-scan of an existing session reuses old ids (legacy random ids included) via `merge_rescan`/`write_rescan_manifest` and carries favorited/rejected/note/notes/metrics/comparisons.
+- **Compare "ctx keys" must exclude per-image fields:** `CMP_EXCLUDED_KEYS` in `logic_ratings.js` is a deny list, so any new per-image manifest field (fingerprints, metrics, detection results) must be added there or it blocks matched/one-axis pairing.
+- **Upscaled items record `base_width/base_height`** at every write site (`tests/test_upscaled_base_dims.py` guards new ones; dashboard upscales use `manifest_utils.base_dims_of`).
+
 ### **Testing Changes**
 
 - **Python backend files:** Restart ComfyUI

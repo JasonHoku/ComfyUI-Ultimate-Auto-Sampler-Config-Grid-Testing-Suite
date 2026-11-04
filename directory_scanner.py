@@ -11,6 +11,7 @@ import random
 from PIL import Image
 
 from .metadata_packer import extract_metadata_from_image
+from .manifest_utils import stable_item_id, scan_relpath, assign_scan_ids
 
 
 # =============================================================================
@@ -455,6 +456,7 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
         image_files = image_files[:max_items]
 
     total_files = len(image_files)
+    needs_id = []   # scan-assigned ids: collision-checked together after the loop
     for i, (file_path, _mtime) in enumerate(image_files):
         # gen_index: oldest=0, newest=total-1. Since image_files is
         # newest-first, index 0 is the newest file.
@@ -469,12 +471,14 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
             from urllib.parse import quote
             item["file"] = f"/view?filename={quote(filename, safe='')}&type=output&subfolder={quote(view_subfolder, safe='/')}"
             item["source_file"] = filename
+            item["source_relpath"] = scan_relpath(file_path, directory_path)
             # Assign gen_index based on mtime-sorted order so Oldest/Newest sort
             # matches file age (overrides any stale gen_index from cached manifest)
             item["gen_index"] = gen_idx
             # Ensure it has an ID
             if "id" not in item:
-                item["id"] = int(time.time() * 100000) + random.randint(0, 1000)
+                item["id"] = stable_item_id("scan:" + item["source_relpath"])
+                needs_id.append(item)
             # For videos: ensure media_type is set and probe real dimensions
             # if the cached entry has missing or stale (default 1280x720) values.
             ext_check = os.path.splitext(filename)[1].lower()
@@ -501,10 +505,15 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
             item = _process_single_image(file_path, directory_path, view_subfolder, gen_index=gen_idx)
             if item:
                 items.append(item)
+                needs_id.append(item)
         except Exception as e:
             print(f"[DirScanner] Warning: Skipping {filename}: {e}")
             stats["skipped"] += 1
             continue
+
+    # Same files -> same ids on every scan; a hash clash is resolved deterministically.
+    _scan_assigned = {id(i) for i in needs_id}
+    assign_scan_ids(needs_id, reserved={i["id"] for i in items if id(i) not in _scan_assigned and "id" in i})
 
     # Count items that had metadata
     stats["with_metadata"] = sum(
@@ -525,8 +534,9 @@ def _process_single_image(file_path, directory_path, view_subfolder="", gen_inde
     ext = os.path.splitext(filename)[1].lower()
     is_video = ext in VIDEO_EXTENSIONS
 
-    # Generate unique ID (matching existing manifest pattern)
-    ts = int(time.time() * 100000) + random.randint(0, 1000)
+    # Stable id: derived from the path relative to the scanned folder, so a re-scan keeps it
+    relpath = scan_relpath(file_path, directory_path)
+    ts = stable_item_id("scan:" + relpath)
 
     # Build URL using ComfyUI's built-in /view endpoint
     from urllib.parse import quote
@@ -560,6 +570,7 @@ def _process_single_image(file_path, directory_path, view_subfolder="", gen_inde
             "rejected": False,
             "favorited": False,
             "source_file": filename,
+            "source_relpath": relpath,
         }
 
     # Get image dimensions from PIL
@@ -604,6 +615,7 @@ def _process_single_image(file_path, directory_path, view_subfolder="", gen_inde
         "rejected": False,
         "favorited": False,
         "source_file": filename,
+        "source_relpath": relpath,
     }
 
     return item

@@ -98,6 +98,8 @@ class Dashboard:
         self.page = page
         self.manifest = manifest
         self.request_log = []      # (method, path, parsed_json_body_or_None)
+        self.sessions = []         # payload of /config_tester/list_sessions
+        self.comparisons = []      # votes echoed back by /config_tester/save_comparisons
         self.pageerrors = []
 
     make_item = staticmethod(make_item)
@@ -136,7 +138,16 @@ class Dashboard:
             return route.fulfill(status=200, content_type="application/json",
                                  body='{"status":"ok"}')
         if path == "/config_tester/list_sessions":
-            return route.fulfill(status=200, content_type="application/json", body="[]")
+            return route.fulfill(status=200, content_type="application/json", body=json.dumps(self.sessions))
+        if path == "/config_tester/save_comparisons":
+            body = body or {}
+            drop = set(body.get("remove") or [])
+            self.comparisons = [c for c in self.comparisons
+                                if f"{c.get('ts')}:{c.get('a')}:{c.get('b')}" not in drop]
+            self.comparisons += list(body.get("append") or [])
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps({"comparisons": self.comparisons,
+                                                  "total": len(self.comparisons)}))
         return route.fulfill(status=200, content_type="application/json", body="{}")
 
 
@@ -165,3 +176,43 @@ def dashboard(page, manifest_meta):
 def dashboard_kit():
     """Raw pieces for tests that need a custom page around the dashboard (e.g. an iframe wrapper)."""
     return {"ORIGIN": ORIGIN, "Dashboard": Dashboard, "make_manifest": make_manifest}
+
+
+@pytest.fixture
+def phone_dashboard(browser, playwright):
+    """Factory: the same fake-origin dashboard in a Pixel 7 context (touch, coarse pointer, 412 px wide).
+
+    `phone_dashboard(manifest=None, sessions=None, init_scripts=(), n_items=N_ITEMS)` returns a
+    Dashboard; init scripts run before the page loads. Contexts are closed at teardown.
+    """
+    contexts, dashboards = [], []
+
+    def make(manifest=None, sessions=None, init_scripts=(), n_items=N_ITEMS):
+        from playwright.sync_api import expect
+        ctx = browser.new_context(**playwright.devices["Pixel 7"])
+        contexts.append(ctx)
+        for js in init_scripts:
+            ctx.add_init_script(js)
+        page = ctx.new_page()
+        d = Dashboard(page, manifest or make_manifest())
+        d.sessions = sessions or []
+        dashboards.append(d)
+        page.on("pageerror", lambda e: d.pageerrors.append(str(e)))
+        loaded = []
+        page.on("console", lambda m: loaded.append(1) if "Session loaded successfully" in m.text else None)
+        page.route("**/*", d.handle)
+        page.goto(ORIGIN + "/")
+        page.wait_for_function(
+            f"typeof processedData!=='undefined' && processedData.length==={n_items}")
+        expect(page.locator("#grid .card:visible").first).to_be_visible()
+        for _ in range(100):   # the startup loadSession() closes the settings panel when it finishes
+            if loaded:
+                break
+            page.wait_for_timeout(50)
+        return d
+
+    yield make
+    for d in dashboards:
+        assert d.pageerrors == []
+    for ctx in contexts:
+        ctx.close()

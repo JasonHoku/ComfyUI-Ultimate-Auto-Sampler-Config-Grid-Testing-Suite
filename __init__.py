@@ -1317,31 +1317,10 @@ async def scan_directory_route(request):
         # Save manifest to benchmarks session directory
         manifest_path = os.path.join(base_dir, "manifest.json")
 
-        # If manifest already exists, preserve user tags (favorited/rejected/notes)
-        if os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r") as f:
-                    old_manifest = json.load(f)
-                # Build lookup of old items by source_file for tag preservation
-                old_by_source = {}
-                for old_item in old_manifest.get("items", []):
-                    src = old_item.get("source_file")
-                    if src:
-                        old_by_source[src] = old_item
-                # Merge user tags into new items
-                for item in items:
-                    src = item.get("source_file")
-                    if src and src in old_by_source:
-                        old = old_by_source[src]
-                        item["favorited"] = old.get("favorited", False)
-                        item["rejected"] = old.get("rejected", False)
-                        if old.get("notes"):
-                            item["notes"] = old["notes"]
-            except Exception as e:
-                print(f"[DirScanner] Warning: Could not merge old tags: {e}")
-
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f, indent=2)
+        # Re-scan of an existing session: keep ids, favorites/rejects/notes, metrics and pairwise votes
+        # (merged under the manifest lock, written atomically)
+        from .manifest_utils import write_rescan_manifest
+        write_rescan_manifest(manifest_path, manifest)
 
         print(f"[DirScanner] Created image links in: {link_dir}")
 

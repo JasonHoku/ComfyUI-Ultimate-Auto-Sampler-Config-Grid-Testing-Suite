@@ -31,6 +31,62 @@ function openStandalone() {
     }
 }
 
+// URL of the session this page shows (landing page -> landing URL), for sharing.
+function uscgSessionUrl() {
+    var sess = window._uscgLoadedSession || '';
+    return new URL('/config_tester/dashboard' + (sess ? '?session=' + encodeURIComponent(sess) : ''), location.href).href;
+}
+
+// Share (phone share sheet) or copy the session link. Plain http over a Tailscale IP is not a secure
+// context, so the execCommand path is the common one there; its boolean result is checked.
+async function uscgShareLink(btn) {
+    var url = uscgSessionUrl();
+    var done = function () {
+        if (!btn) return;
+        var old = btn.innerHTML;
+        btn.textContent = '✓';
+        setTimeout(function () { btn.innerHTML = old; }, 1200);
+    };
+    if (navigator.share) {
+        try {
+            await navigator.share({ title: document.title, url: url });
+            done();
+            return;
+        } catch (e) {
+            if (e && e.name === 'AbortError') return;   // the user closed the share sheet
+        }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(url); done(); return; } catch (e) { /* fall through */ }
+    }
+    var ok = false;
+    try {
+        var ta = document.createElement('textarea');
+        ta.value = url;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;font-size:16px;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+    if (ok) done(); else prompt('Copy this link', url);
+}
+
+// Phone header 📂 button: open the settings panel at the session list.
+function uscgOpenSessionPicker() {
+    var panel = document.getElementById('cog-menu-dropdown');
+    if (panel && (panel.style.display === 'none' || !panel.style.display) && typeof toggleCogMenu === 'function') toggleCogMenu();
+    var list = document.getElementById('session-picker-list');
+    if (list && list.scrollIntoView) list.scrollIntoView({ block: 'nearest' });
+    // only focus the search box with a real keyboard (a phone would pop the on-screen one)
+    if (window.matchMedia && matchMedia('(pointer: fine)').matches) {
+        var s = document.getElementById('session-search');
+        if (s) s.focus();
+    }
+}
+
 // Lightbox "GENERATE NEW" without a ComfyUI graph: queue via the run API into the session being viewed.
 async function uscgRunViaApi(btn, configOutput) {
     var sess = window._uscgLoadedSession || (document.getElementById('session-input') || {}).value || '';
@@ -70,6 +126,10 @@ if (USCG_STANDALONE) {
 
         var openBtn = document.getElementById('open-standalone-btn');
         if (openBtn) openBtn.style.display = 'none';
+        ['session-switch-btn', 'share-link-btn'].forEach(function (id) {
+            var b = document.getElementById(id);
+            if (b) b.style.display = '';
+        });
 
         var sendBtn = document.getElementById('modal-send-loadimage-btn');
         if (sendBtn) {
@@ -141,7 +201,9 @@ if (USCG_STANDALONE) {
             resyncTimer = setTimeout(function () {
                 resyncTimer = null;
                 if (navigator.onLine === false) return;
-                loadSession();
+                // a background resync must not close the settings panel / session picker the user has open
+                window._uscgResyncing = true;
+                Promise.resolve(loadSession()).finally(function () { window._uscgResyncing = false; });
             }, 2000);
         }
 

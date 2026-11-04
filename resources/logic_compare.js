@@ -21,6 +21,7 @@ var _cmp = {
     sessionVotes: 0,
     undoStack: [],       // votes cast in this compare session (objects living in comparisons)
     lastTs: 0,
+    swipeTs: 0,          // last touch gesture that moved > 10 px (suppresses the tap vote that follows)
     pairsEstimate: 0
 };
 
@@ -143,6 +144,7 @@ function cmpSettingsChanged() {
 }
 
 function initCompareUI() {
+    cmpInitSwipe();
     cmpLoadSettings();
     cmpSyncSettingsUI();
     _cmpSess = cmpSessionName();
@@ -307,7 +309,7 @@ function cmpBuildPool() {
     var src = processedData || [];
     for (var i = 0; i < src.length; i++) {
         var d = src[i];
-        if (d && d.file && !d.rejected) out.push(d);   // a reject is a decision already made
+        if (d && d.file && !d.rejected && !d.florence2_no_detection) out.push(d);   // a reject is a decision already made
     }
     return out;
 }
@@ -404,18 +406,89 @@ function cmpUpdateProgress() {
 function cmpFillMedia(el, d, asVideo) {
     el.textContent = '';
     var m;
+    var pane = el.parentNode;
+    var oldPlay = pane && pane.querySelector ? pane.querySelector('.cmp-play') : null;
+    if (oldPlay) oldPlay.remove();
     if (asVideo) {
         m = document.createElement('video');
+        // iOS/Android only autoplay when muted + playsinline are in place BEFORE the source loads,
+        // and play() must run on an element that is already in the document.
+        m.muted = true; m.defaultMuted = true; m.setAttribute('muted', '');
+        m.playsInline = true; m.setAttribute('playsinline', ''); m.setAttribute('webkit-playsinline', '');
+        m.loop = true; m.autoplay = true; m.preload = 'auto';
         m.src = d.file;
-        m.autoplay = true; m.muted = true; m.loop = true; m.playsInline = true;
-        m.setAttribute('muted', ''); m.setAttribute('playsinline', '');
-        var p = m.play && m.play(); if (p && p.catch) p.catch(function () { });
     } else {
         m = document.createElement('img');
         m.src = d.file;
         m.draggable = false;
     }
     el.appendChild(m);
+    if (asVideo) {
+        var p = m.play && m.play();
+        if (p && p.catch) p.catch(function () { cmpShowPlayButton(pane); });   // e.g. iOS Low Power Mode
+    }
+}
+
+// Autoplay was refused: a tap-to-play button on the pane (does not vote).
+function cmpShowPlayButton(pane) {
+    if (!pane || pane.querySelector('.cmp-play')) return;
+    var b = document.createElement('button');
+    b.className = 'cmp-play';
+    b.textContent = '▶';
+    b.title = 'Play';
+    b.onclick = function (e) {
+        e.stopPropagation();
+        var vids = document.querySelectorAll('#cmp-panes video');
+        for (var i = 0; i < vids.length; i++) { var q = vids[i].play(); if (q && q.catch) q.catch(function () { }); }
+        document.querySelectorAll('#cmp-panes .cmp-play').forEach(function (x) { x.remove(); });
+    };
+    pane.appendChild(b);
+}
+
+// Pane tap = vote for that side, unless a swipe just happened (it already voted or was cancelled).
+function cmpPaneTap(side) {
+    if (Date.now() - (_cmp.swipeTs || 0) < 450) return;
+    cmpVoteSide(side);
+}
+
+// Swipe left = A, swipe right = B (like ArrowLeft / ArrowRight). One finger only.
+function cmpInitSwipe() {
+    var host = document.getElementById('cmp-panes');
+    if (!host || host._cmpSwipe) return;
+    host._cmpSwipe = true;
+    var st = null;
+    var clearHint = function () {
+        var ps = host.querySelectorAll('.cmp-swipe-pick');
+        for (var i = 0; i < ps.length; i++) ps[i].classList.remove('cmp-swipe-pick');
+    };
+    var cancel = function () { st = null; clearHint(); };
+    host.addEventListener('touchstart', function (e) {
+        if (e.touches.length !== 1) { cancel(); return; }
+        var t = e.touches[0];
+        st = { x: t.clientX, y: t.clientY, t0: Date.now(), moved: 0 };
+    }, { passive: true });
+    host.addEventListener('touchmove', function (e) {
+        if (!st) return;
+        if (e.touches.length !== 1) { cancel(); return; }
+        var t = e.touches[0];
+        var dx = t.clientX - st.x, dy = t.clientY - st.y;
+        st.moved = Math.max(st.moved, Math.abs(dx), Math.abs(dy));
+        var side = cmpSwipeSide(dx, dy, Date.now() - st.t0, host.clientWidth);
+        clearHint();
+        var pane = side ? document.getElementById('cmp-pane-' + side) : null;
+        if (pane) pane.classList.add('cmp-swipe-pick');
+    }, { passive: true });
+    host.addEventListener('touchend', function (e) {
+        if (!st) return;
+        var t = e.changedTouches[0];
+        var dx = t.clientX - st.x, dy = t.clientY - st.y;
+        var moved = Math.max(st.moved, Math.abs(dx), Math.abs(dy));
+        var side = cmpSwipeSide(dx, dy, Date.now() - st.t0, host.clientWidth);
+        cancel();
+        if (moved > 10) _cmp.swipeTs = Date.now();
+        if (side) cmpVoteSide(side);
+    }, { passive: true });
+    host.addEventListener('touchcancel', function () { if (st && st.moved > 10) _cmp.swipeTs = Date.now(); cancel(); }, { passive: true });
 }
 
 function cmpRenderChips(show) {

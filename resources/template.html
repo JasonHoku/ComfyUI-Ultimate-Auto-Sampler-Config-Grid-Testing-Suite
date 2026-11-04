@@ -81,6 +81,8 @@
         </div>
 
         <button class="fs-btn" id="open-standalone-btn" onclick="openStandalone()" title="Open standalone dashboard (new tab, phone-friendly URL)">↗</button>
+        <button class="fs-btn" id="session-switch-btn" onclick="uscgOpenSessionPicker()" title="Switch session" style="display:none;">&#128194;</button>
+        <button class="fs-btn" id="share-link-btn" onclick="uscgShareLink(this)" title="Share / copy a link to this session" style="display:none;">&#128279;</button>
         <button class="fs-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">⛶</button>
     </div>
 
@@ -829,12 +831,12 @@
             <button class="cmp-head-btn cmp-close" onclick="closeCompareMode()" title="Close (Esc)">&#10005;</button>
         </div>
         <div id="cmp-panes">
-            <div class="cmp-pane" id="cmp-pane-a" onclick="cmpVoteSide('a')">
+            <div class="cmp-pane" id="cmp-pane-a" onclick="cmpPaneTap('a')">
                 <div class="cmp-label">A</div>
                 <div class="cmp-media" id="cmp-media-a"></div>
                 <div class="cmp-chips" id="cmp-chips-a"></div>
             </div>
-            <div class="cmp-pane" id="cmp-pane-b" onclick="cmpVoteSide('b')">
+            <div class="cmp-pane" id="cmp-pane-b" onclick="cmpPaneTap('b')">
                 <div class="cmp-label">B</div>
                 <div class="cmp-media" id="cmp-media-b"></div>
                 <div class="cmp-chips" id="cmp-chips-b"></div>
@@ -918,11 +920,12 @@
         </div>
         <!-- Phone action bar (hidden by CSS unless coarse pointer / standalone on a narrow screen) -->
         <div id="modal-action-bar">
-            <button onclick="modalNav(-1)" title="Previous">◀ Prev</button>
-            <button id="modal-fav-btn" onclick="toggleModalFavorite()" title="Favorite">☆ Favorite</button>
-            <button onclick="rejectModalItem()" title="Reject">✕ Reject</button>
-            <button onclick="var c=document.querySelector('#modal .controls'); if(c) c.scrollIntoView({behavior:'smooth'});" title="Revise parameters">✎ Revise</button>
-            <button onclick="modalNav(1)" title="Next">Next ▶</button>
+            <button onclick="modalNav(-1)" title="Previous"><span class="mab-ico">◀</span><span class="mab-lbl">Prev</span></button>
+            <button id="modal-fav-btn" onclick="toggleModalFavorite()" title="Favorite"><span class="mab-ico">☆</span><span class="mab-lbl">Favorite</span></button>
+            <button onclick="rejectModalItem()" title="Reject"><span class="mab-ico">✕</span><span class="mab-lbl">Reject</span></button>
+            <button id="modal-compare-btn" onclick="openCompareMode()" title="Compare pairs"><span class="mab-ico">&#8644;</span><span class="mab-lbl">Compare</span></button>
+            <button id="modal-revise-btn" onclick="var c=document.querySelector('#modal .controls'); if(c) c.scrollIntoView({behavior:'smooth'});" title="Revise parameters"><span class="mab-ico">✎</span><span class="mab-lbl">Revise</span></button>
+            <button onclick="modalNav(1)" title="Next"><span class="mab-ico">▶</span><span class="mab-lbl">Next</span></button>
         </div>
     </div>
 
