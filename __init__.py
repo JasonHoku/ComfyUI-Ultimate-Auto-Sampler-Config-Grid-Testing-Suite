@@ -919,6 +919,12 @@ async def delete_rejected(request):
                     except Exception as e:
                         print(f"[Delete] Error deleting {filename}: {e}")
 
+        # Tombstone rejected PREVIEW cells: a later full pass must still know the user rejected them
+        # even though the preview item (the only record of the rejection) is gone after this delete.
+        from .config_utils import collect_rejected_preview_fps
+        manifest.setdefault("meta", {})["rejected_preview_fps"] = collect_rejected_preview_fps(
+            rejected, manifest.get("meta", {}).get("rejected_preview_fps", []))
+
         # Update manifest to remove rejected items
         manifest["items"] = kept
         with open(manifest_path, "w", encoding="utf-8") as f:

@@ -1049,3 +1049,16 @@ def build_full_fp_set(items):
             if fp:
                 out.add(fp)
     return out
+
+
+def collect_rejected_preview_fps(rejected_items, existing=()):
+    """Union of ``existing`` tombstones and the ``preview_of`` of rejected PREVIEW items (deduped, order kept)."""
+    out = list(existing or [])
+    seen = set(out)
+    for it in rejected_items:
+        if it.get("preview") is True:
+            fp = it.get("preview_of") or item_fingerprint(it)
+            if fp and fp not in seen:
+                seen.add(fp)
+                out.append(fp)
+    return out
