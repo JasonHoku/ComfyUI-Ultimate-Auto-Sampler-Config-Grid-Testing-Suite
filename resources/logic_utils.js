@@ -977,3 +977,71 @@ async function scanDirectory() {
 }
 
 setupKeyReloadFullscreen()
+
+// ---------------------------------------------------------------------------
+// FULL PASS FOR SURVIVORS (preview-pass workflow)
+// Strategy (a): ask the parent ComfyUI page (web/dashboard.js) to flip the matching Config Builder to
+// "Preview pass off", then queue the prompt. Needs a parent that understands 'uscg_run_full_pass'.
+// Strategy (b): STUB for a future run API (see _uscgTryRunApi). Fallback: instructions toast.
+// ---------------------------------------------------------------------------
+function _uscgToast(msg, ok) {
+    var el = document.createElement('div');
+    el.textContent = msg;
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:80%;z-index:99999;' +
+        'padding:10px 16px;border-radius:6px;font-size:12px;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,0.5);' +
+        'background:' + (ok ? '#1f5a2e' : '#5a3a14') + ';border:1px solid ' + (ok ? '#3c9a55' : '#a8741f') + ';';
+    document.body.appendChild(el);
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 9000);
+}
+
+// Strategy (b) stub: wire the run API here once it exists. Detection: window.USCG_RUN_API (set by the host
+// page) or a '/config_tester/run' route. Resolves to {ok, message} when it handled the request, else null.
+async function _uscgTryRunApi(session) {
+    try {
+        if (window.USCG_RUN_API && typeof window.USCG_RUN_API.run === 'function') {
+            // TODO(merge with the run-API task): confirm the real signature; overrides below are the contract.
+            var res = await window.USCG_RUN_API.run({
+                session_name: session,
+                settings_overrides: { preview_pass: { enabled: false }, skip_rejected_previews: true }
+            });
+            return { ok: true, message: (res && res.message) || 'Full pass queued.' };
+        }
+        var probe = await fetch('/config_tester/run', { method: 'GET' }).catch(function () { return null; });
+        if (probe && probe.status !== 404) {
+            // TODO(merge with the run-API task): POST /config_tester/run with the same overrides, then return
+            // {ok, message}. Intentionally not implemented here (this task does not depend on it).
+        }
+    } catch (e) { /* fall through to the instructions toast */ }
+    return null;
+}
+
+function _uscgAskParentFullPass(session) {
+    return new Promise(function (resolve) {
+        if (!window.parent || window.parent === window) { resolve(null); return; }
+        var done = false;
+        var onMsg = function (ev) {
+            if (!ev.data || ev.data.type !== 'uscg_run_full_pass_result') return;
+            done = true;
+            window.removeEventListener('message', onMsg);
+            resolve({ ok: !!ev.data.ok, message: ev.data.message || '' });
+        };
+        window.addEventListener('message', onMsg);
+        window.parent.postMessage({ type: 'uscg_run_full_pass', session_name: session }, '*');
+        setTimeout(function () {
+            if (done) return;
+            window.removeEventListener('message', onMsg);
+            resolve(null);   // parent too old to answer
+        }, 4000);
+    });
+}
+
+async function runFullPassForSurvivors() {
+    var session = (document.getElementById('session-input') && document.getElementById('session-input').value) ||
+        (fullManifest && fullManifest.session_name) || '';
+    var manual = 'In the Config Builder open Run Settings, untick "Preview Pass" and queue the workflow again. ' +
+        'Only cells whose preview was not rejected will render at full quality.';
+    var res = await _uscgAskParentFullPass(session);
+    if (!res) res = await _uscgTryRunApi(session);
+    if (res && res.ok) { _uscgToast(res.message || 'Full pass queued.', true); return; }
+    _uscgToast((res && res.message ? res.message + ' ' : '') + manual, false);
+}

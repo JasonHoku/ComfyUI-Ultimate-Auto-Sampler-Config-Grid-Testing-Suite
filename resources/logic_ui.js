@@ -558,7 +558,7 @@ function initFilters() {
     if (!activeData || activeData.length === 0) return;
 
     // Ensure all filter Sets exist (add new ones if missing)
-    const filterKeys = ['model', 'sampler', 'scheduler', 'denoise', 'lora', 'positive', 'negative', 'size', 'seed', 'steps', 'cfg', 'upscaleMethod', 'mediaType'];
+    const filterKeys = ['model', 'sampler', 'scheduler', 'denoise', 'lora', 'positive', 'negative', 'size', 'seed', 'steps', 'cfg', 'upscaleMethod', 'mediaType', 'passType'];
     filterKeys.forEach(key => {
         if (!filters.hasOwnProperty(key) || !(filters[key] instanceof Set)) {
             filters[key] = new Set();
@@ -587,11 +587,18 @@ function initFilters() {
                 return shortModel ? `${mode} + ${shortModel}` : mode || 'Upscaled';
             }
             if (key === 'mediaType') return d.media_type || 'image';
+            if (key === 'passType') return d.preview ? 'Preview' : 'Full';
             return d[key];
         }))].sort();
 
         const container = document.getElementById('filter-' + key);
         if (!container) return;
+
+        // The Pass row only matters once the session holds preview images
+        if (key === 'passType') {
+            const passRow = container.closest('.filter-row');
+            if (passRow) passRow.style.display = unique.length > 1 ? '' : 'none';
+        }
 
         const cacheKey = unique.join(',');
         if (filterButtonCache[key] === cacheKey) {
@@ -699,7 +706,7 @@ function initFilters() {
 function resetAllFilters() {
     if (!activeData || activeData.length === 0) return;
 
-    const filterKeys = ['model', 'sampler', 'scheduler', 'denoise', 'lora', 'positive', 'negative', 'size', 'seed', 'steps', 'cfg', 'upscaleMethod', 'mediaType'];
+    const filterKeys = ['model', 'sampler', 'scheduler', 'denoise', 'lora', 'positive', 'negative', 'size', 'seed', 'steps', 'cfg', 'upscaleMethod', 'mediaType', 'passType'];
 
     // Re-populate every filter Set with all unique values from activeData
     filterKeys.forEach(key => {
@@ -722,6 +729,7 @@ function resetAllFilters() {
                     val = shortModel ? `${mode} + ${shortModel}` : mode || 'Upscaled';
                 }
             } else if (key === 'mediaType') val = d.media_type || 'image';
+            else if (key === 'passType') val = d.preview ? 'Preview' : 'Full';
             else val = d[key];
             if (val !== undefined && val !== null) filters[key].add(val);
         });
@@ -1332,6 +1340,9 @@ function createCard(d) {
     const reviseBtn = isVideo ? '' : `<button class="revise-btn" onclick="event.stopPropagation(); openM(${d.id})">REVISE</button>`;
     const upscaleBtn = isVideo ? '' : `<button class="upscale-btn" onclick="openUpscaleModal(${d.id})" title="Upscale this image">\u2B06</button>`;
     const videoBadge = isVideo ? '<div class="video-badge">\u25B6 VIDEO</div>' : '';
+    const previewBadge = d.preview
+        ? `<div class="preview-badge" title="Preview of ${d.full_width}x${d.full_height} @ ${d.full_steps} steps">PREVIEW \u00B7 ${d.steps} st</div>`
+        : '';
 
     // FIXED LAYOUT: Star top-right, Revise below it, time bottom-right, index bottom-left
     card.innerHTML = `
@@ -1342,6 +1353,7 @@ function createCard(d) {
             ${reviseBtn}
             ${upscaleBtn}
             ${videoBadge}
+            ${previewBadge}
             <div class="time-tag">${d.duration}s</div>
             <div class="index-tag">#${totalIndex}</div>
             ${buildLabelOverlay(d)}
@@ -1386,6 +1398,15 @@ function openM(id) {
     const d = activeData.find(x => x.id === id);
     if (!d) return;
     document.getElementById('m-img').src = d.file;
+    const previewNote = document.getElementById('m-preview-note');
+    if (previewNote) {
+        if (d.preview) {
+            previewNote.textContent = `Preview of ${d.full_width}x${d.full_height} @ ${d.full_steps} steps (this image: ${d.width}x${d.height} @ ${d.steps} steps)`;
+            previewNote.style.display = 'block';
+        } else {
+            previewNote.style.display = 'none';
+        }
+    }
     console.log(d)
     // Populate read-only info fields
     const modelEl = document.getElementById('f-model');
@@ -1999,15 +2020,16 @@ const _qfTypeLabels = {
     cfg: 'CFG',
     upscaleMethod: 'Upscale',
     mediaType: 'Media',
+    passType: 'Pass',
     positive: 'Positive',
     negative: 'Negative'
 };
 
 // All types that Quick Filter supports (type-menu order)
-const _qfAllTypes = ['lora', 'lora_strength', 'cfg', 'steps', 'sampler', 'scheduler', 'denoise', 'size', 'model', 'seed', 'upscaleMethod', 'mediaType', 'positive', 'negative'];
+const _qfAllTypes = ['lora', 'lora_strength', 'cfg', 'steps', 'sampler', 'scheduler', 'denoise', 'size', 'model', 'seed', 'upscaleMethod', 'mediaType', 'passType', 'positive', 'negative'];
 
 // Types shown in the expanded facet panel (omit prompt types for brevity)
-const _qfFacetableTypes = ['sampler', 'scheduler', 'lora', 'lora_strength', 'model', 'denoise', 'cfg', 'steps', 'size', 'seed', 'upscaleMethod', 'mediaType'];
+const _qfFacetableTypes = ['sampler', 'scheduler', 'lora', 'lora_strength', 'model', 'denoise', 'cfg', 'steps', 'size', 'seed', 'upscaleMethod', 'mediaType', 'passType'];
 
 /**
  * Extract a facet value (or array of values) from an item for a given type.
@@ -2046,6 +2068,7 @@ function _qfExtractItemValue(item, type) {
         return shortModel ? `${mode} + ${shortModel}` : mode || 'Upscaled';
     }
     if (type === 'mediaType') return item.media_type || 'image';
+    if (type === 'passType') return item.preview ? 'Preview' : 'Full';
     const v = item[type];
     if (v === undefined || v === null) return null;
     return String(v);

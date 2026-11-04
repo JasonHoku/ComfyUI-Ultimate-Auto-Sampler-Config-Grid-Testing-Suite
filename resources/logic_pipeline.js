@@ -157,6 +157,7 @@ function getFilterKey() {
         [...filters.cfg].sort().join(','),
         [...filters.upscaleMethod].sort().join(','),
         [...filters.mediaType].sort().join(','),
+        [...(filters.passType || [])].sort().join(',') + '#' + supersededFps.size,
         searchFilters.map(f => `${f.type}:${f.term}`).join('|'),
         (typeof logicFilters !== 'undefined' ? logicFilters.map(f => `${f.field}${f.op}${f.value}`).join('|') : ''),
         (typeof quickFilters !== 'undefined' ? quickFilters.map(f => `${f.type}:${f.value}`).join('|') : '')
@@ -335,6 +336,63 @@ function runMultiSort(list) {
 
 // --- 4. PIPELINE & FILTER LOGIC ---
 
+// Preview pass support -------------------------------------------------------
+// A preview is "superseded" once a full (non-preview) item exists for the same cell fingerprint.
+// Superseded previews are hidden by default; isolating the Pass filter on "Preview" (without "Full") shows them.
+function isSupersededPreview(d) {
+    if (!d.preview || !d.preview_of || !supersededFps.has(d.preview_of)) return false;
+    const pf = filters.passType;
+    if (pf && pf.has('Preview') && !pf.has('Full')) return false;
+    return true;
+}
+
+// newItems omitted: rebuild the whole set from activeData. With newItems: add only their fingerprints and
+// return true when that superseded a preview that is currently displayed (caller then re-runs the pipeline).
+function refreshSupersededFps(newItems) {
+    if (!newItems) {
+        const s = new Set();
+        for (let i = 0; i < activeData.length; i++) {
+            const d = activeData[i];
+            if (d.preview) continue;
+            if (d.config_fp) s.add(d.config_fp);
+            if (d.base_fp) s.add(d.base_fp);
+        }
+        supersededFps = s;
+        return false;
+    }
+    let grew = false;
+    for (let i = 0; i < newItems.length; i++) {
+        const d = newItems[i];
+        if (d.preview) continue;
+        if (d.config_fp && !supersededFps.has(d.config_fp)) { supersededFps.add(d.config_fp); grew = true; }
+        if (d.base_fp && !supersededFps.has(d.base_fp)) { supersededFps.add(d.base_fp); grew = true; }
+    }
+    if (!grew) return false;
+    return processedData.some(p => p.preview && supersededFps.has(p.preview_of));
+}
+
+// Shows "N previews | M awaiting a full pass" + the full-pass button when the session holds previews.
+function updatePreviewBar() {
+    const bar = document.getElementById('preview-bar');
+    if (!bar) return;
+    let previews = 0, survivors = 0;
+    for (let i = 0; i < activeData.length; i++) {
+        const d = activeData[i];
+        if (!d.preview) continue;
+        previews++;
+        if (!d.rejected && !supersededFps.has(d.preview_of)) survivors++;
+    }
+    if (previews === 0) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    const txt = document.getElementById('preview-bar-text');
+    if (txt) txt.textContent = `${previews} preview image${previews === 1 ? '' : 's'} | ${survivors} not rejected and awaiting a full pass`;
+    const btn = document.getElementById('full-pass-btn');
+    if (btn) {
+        btn.textContent = `\u25B6 Full pass for survivors (${survivors})`;
+        btn.disabled = survivors === 0;
+    }
+}
+
 function incrementalFilter(newItems) {
     const hasButtonFilters = filters.sampler.size > 0 ||
         filters.scheduler.size > 0 ||
@@ -348,13 +406,15 @@ function incrementalFilter(newItems) {
         filters.steps.size > 0 ||
         filters.cfg.size > 0 ||
         filters.upscaleMethod.size > 0 ||
-        filters.mediaType.size > 0;
+        filters.mediaType.size > 0 ||
+        (filters.passType && filters.passType.size > 0);
 
     return newItems.filter(d => {
         // Apply top-level filters (Favorites/Non-Favorited/Rejected visibility)
         if (d.favorited && !topFilters.showFavorites) return false;
         if (!d.favorited && !d.rejected && !topFilters.showNonFavorited) return false;
         if (d.rejected && !topFilters.showRejected) return false;
+        if (d.preview && isSupersededPreview(d)) return false;
 
         // Apply button filters
         if (hasButtonFilters) {
@@ -395,6 +455,9 @@ function incrementalFilter(newItems) {
                 const mt = d.media_type || 'image';
                 if (!filters.mediaType.has(mt)) return false;
             }
+            if (filters.passType && filters.passType.size > 0) {
+                if (!filters.passType.has(d.preview ? 'Preview' : 'Full')) return false;
+            }
         }
 
         // Apply search filters
@@ -427,6 +490,7 @@ let pipelineAbortId = 0;
 
 function executePipeline() {
     const startTime = performance.now();
+    refreshSupersededFps();
     const currentFilterKey = getFilterKey();
     const filtersChanged = currentFilterKey !== lastFilterKey;
 
@@ -449,7 +513,8 @@ function executePipeline() {
         filters.steps.size > 0 ||
         filters.cfg.size > 0 ||
         filters.upscaleMethod.size > 0 ||
-        filters.mediaType.size > 0;
+        filters.mediaType.size > 0 ||
+        (filters.passType && filters.passType.size > 0);
 
     const hasSearchFilters = typeof matchesSearchFilters === 'function' && searchFilters.length > 0;
 
@@ -458,6 +523,7 @@ function executePipeline() {
         if (d.favorited && !topFilters.showFavorites) return false;
         if (!d.favorited && !d.rejected && !topFilters.showNonFavorited) return false;
         if (d.rejected && !topFilters.showRejected) return false;
+        if (d.preview && isSupersededPreview(d)) return false;
 
         // Apply button filters (skip entirely if none are active)
         if (hasButtonFilters) {
@@ -495,6 +561,9 @@ function executePipeline() {
                 const mt = d.media_type || 'image';
                 if (!filters.mediaType.has(mt)) return false;
             }
+            if (filters.passType && filters.passType.size > 0) {
+                if (!filters.passType.has(d.preview ? 'Preview' : 'Full')) return false;
+            }
         }
 
         if (hasSearchFilters && !matchesSearchFilters(d)) return false;
@@ -523,6 +592,7 @@ function executePipeline() {
     const elapsed = (performance.now() - startTime).toFixed(1);
     console.log(`[Pipeline] Processed ${processedData.length} items in ${elapsed}ms`);
     updateJSONs(processedData);
+    updatePreviewBar();
 
     if (filtersChanged) {
         if(typeof renderDOM === 'function') renderDOM();
@@ -541,6 +611,15 @@ function processNewData(newItems) {
     // IMPORTANT: Update indices when new data arrives
     // (activeData already contains the new items via fullManifest.items reference)
     refreshIndices();
+
+    // A full image landing for a cell supersedes its preview: if any preview on screen just became
+    // superseded, re-run the whole pipeline (it rebuilds the superseded set and hides them).
+    if (refreshSupersededFps(newItems)) {
+        updateFiltersForNewData(newItems);
+        updateDataPipeline();
+        return;
+    }
+    updatePreviewBar();
 
     // Recompute label global values when data changes (new items may change what's unique)
     // Then refresh ALL existing card labels since what's "unique" may have changed
@@ -647,7 +726,7 @@ function loadSortPreference() {
 function updateFiltersForNewData(newItems) {
     // Track which filter categories actually got new unique values
     let changed = false;
-    const filterKeys = ['model', 'sampler', 'scheduler', 'denoise', 'lora', 'positive', 'negative', 'size', 'seed'];
+    const filterKeys = ['model', 'sampler', 'scheduler', 'denoise', 'lora', 'positive', 'negative', 'size', 'seed', 'passType'];
 
     // Build a set of new values for each key in a single pass over newItems
     for (let i = 0; i < newItems.length; i++) {
@@ -659,9 +738,10 @@ function updateFiltersForNewData(newItems) {
             else if (key === 'positive') val = d.positive || meta.positive || "";
             else if (key === 'negative') val = d.negative || meta.negative || "";
             else if (key === 'size') val = `${d.width}x${d.height}`;
+            else if (key === 'passType') val = d.preview ? 'Preview' : 'Full';
             else val = d[key];
 
-            if (val !== undefined && val !== null && !filters[key].has(val)) {
+            if (val !== undefined && val !== null && !(filters[key] && filters[key].has(val))) {
                 changed = true;
                 // Don't break - we need to continue checking all items/keys
                 // so that initFilters gets a complete picture

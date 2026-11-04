@@ -227,6 +227,7 @@ If you'd rather build the graph yourself:
 * **Unified Settings Panel:** Gear icon (⚙️) opens a consolidated settings panel with Session management, Grid Display controls, Export Favorites, and Scan External Directory — replacing the old separate SESSION button.
 * **Scan External Directory:** Load image sessions from any folder (including other ComfyUI instances) into the dashboard for viewing and filtering. Reads PNG metadata for full config display.
 * **Export Favorites:** Copy all favorited images to a dedicated export folder with optional CivitAI metadata packing for sharing.
+* **Preview Pass support:** preview images carry an amber `PREVIEW` badge, a **Pass** filter row (Preview / Full, shown once previews exist) separates them, and a preview whose cell now has a full image is hidden by default (isolate `Preview` in the Pass row to see them). A bar under the header counts previews and offers **Full pass for survivors (N)**, which switches Preview Pass off in the matching Config Builder and queues the workflow (falls back to instructions if the ComfyUI frontend does not allow it).
 
 ### ⚡ The "Revise & Generate" Workflow
 * **One-Click Revision:** Click "REVISE" on any image to open a detail view.
@@ -840,6 +841,7 @@ Both live in the **Run Settings** section of the Config Builder and default to t
 * **Bottom Right:** Generation time in seconds.
 * **Top Left (on hover):** Red ✕ button to reject/hide image.
 * **Top Right (on hover):** Gold ⭐ button to favorite image, and green "REVISE" button to open studio view.
+* **Bottom Center:** amber `PREVIEW · N st` badge on preview-pass images (hover for the full-quality size/steps it stands in for).
 
 ### JSON Bars (Bottom — Horizontal Layout)
 * **Green Bar (Left — Accepted):** Contains optimized JSON of all currently visible images. Click to select all, then copy-paste back into the `configs_json` widget to refine your batch.

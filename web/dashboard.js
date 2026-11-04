@@ -158,6 +158,45 @@ app.registerExtension({
                     return;
                 }
 
+                // Full pass for survivors (preview-pass workflow): flip the matching Config Builder to
+                // "Preview pass off" and queue the prompt. Feature-detected; the dashboard falls back to an
+                // instructions toast when this does not answer (or app.queuePrompt is unavailable).
+                if (event.data?.type === 'uscg_run_full_pass') {
+                    const reply = (ok, message) => {
+                        try { event.source?.postMessage({ type: 'uscg_run_full_pass_result', ok, message }, '*'); } catch (e) { /* ignore */ }
+                    };
+                    try {
+                        const san = (s) => String(s || '').replace(/[^\w\-]/g, '');
+                        const wanted = san(event.data.session_name);
+                        const builders = (app.graph?._nodes || []).filter(n =>
+                            n.type === "UltimateConfigBuilder" && n.state && san(n.state.session_name) === wanted);
+                        if (builders.length !== 1) {
+                            reply(false, builders.length === 0
+                                ? `No Config Builder in this workflow uses session "${wanted}".`
+                                : `${builders.length} Config Builders use session "${wanted}".`);
+                            return;
+                        }
+                        if (typeof app.queuePrompt !== 'function') {
+                            reply(false, 'This ComfyUI frontend does not expose app.queuePrompt.');
+                            return;
+                        }
+                        const b = builders[0];
+                        if (!b.state.preview_pass || typeof b.state.preview_pass !== 'object') {
+                            b.state.preview_pass = { enabled: false, steps: 8, scale: 0.5, cfg_override: null };
+                        }
+                        b.state.preview_pass.enabled = false;
+                        b.state.skip_rejected_previews = true;
+                        b.saveState?.();
+                        b.renderUI?.();
+                        Promise.resolve(app.queuePrompt(0, 1)).then(
+                            () => reply(true, 'Queued the full pass (Preview pass switched off in the Config Builder).'),
+                            (err) => reply(false, 'Queueing failed: ' + (err?.message || err)));
+                    } catch (e) {
+                        reply(false, 'Could not queue the full pass: ' + (e?.message || e));
+                    }
+                    return;
+                }
+
                 if (event.data?.type === 'toggle_fullscreen') {
                     const nodeId = parseInt(event.data.node_id);
                     const graphNode = app.graph.getNodeById(nodeId);
