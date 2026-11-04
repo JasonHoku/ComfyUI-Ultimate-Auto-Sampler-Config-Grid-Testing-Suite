@@ -656,6 +656,8 @@ export function convertConfigsToConfigArrays(configs) {
     };
 
     configs.forEach((config, idx) => {
+        // Workflow Sweep entries are restored by workflowConfigToArray (loadSession); never build a standard array from one
+        if (config && config.model_type === "workflow") return;
         const loraValue = config.lora;
         let loras = [];
         let hasCombined = false;
