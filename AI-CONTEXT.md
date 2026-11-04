@@ -28,12 +28,12 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `__init__.py` | 1597 | API endpoints (config CRUD, presets, dashboard save/export/delete, scan, async upscale, pairwise votes, metrics jobs, standalone dashboard page, run API, workflow sweep), node mappings, path security |
 | `sampler_node.py` | 401 | Main node class. Unwraps configs, extracts `_distribution` + `_session_settings`, delegates to orchestrator |
 | `config_builder_node.py` | 1578 | Config builder node. `state_to_configs_json(state)` is the ONLY state-to-configs implementation (`generate_config()` and `POST /configbuilder/preview` both call it). API endpoints for model lists, trigger lookups |
-| `generation_orchestrator.py` | 3693 | **Largest file.** Main generation loop over a flat job plan (`config_utils.build_job_plan`), smart skip, preview pass, upscaling pipelines, deferred upscales (`run_deferred_upscales()`), GPU cooldown, distribution, ETA tracking, Start At Job # |
+| `generation_orchestrator.py` | 3892 | **Largest file.** Main generation loop over a flat job plan (`config_utils.build_job_plan`), smart skip, preview pass, upscaling pipelines, deferred upscales (`run_deferred_upscales()`), GPU cooldown, distribution, ETA tracking, Start At Job # |
 | `image_generation.py` | 1321 | KSampler wrapper, VAE decode, `flush_batch_with_vae()` (saves images + updates manifest), `upscale_image()`, `create_image_metadata()`, rolling ETA |
 | `batch_encoding.py` | 878 | Prompt pre-encode with combinators, `pinned_clip()` (one text-encoder load per pass), `te_batch_size` text-encoder batching |
 | `civitai.py`, `distribution.py` | 40, 107 | Thin facades for the companion plugins (ComfyUI-USCG-CivitAI, ComfyUI-USCG-Distributed). No outbound network code in this package. |
 | `upscale_runner.py` | 642 | Dashboard async upscaling. Background thread loads models, runs pipeline chains, updates manifests, sends progress events. |
-| `config_utils.py` | 1108 | Config expansion (Cartesian products), nested prompt parsing, job preparation, job plan / ordering, `config_fingerprint()` |
+| `config_utils.py` | 1141 | Config expansion (Cartesian products), nested prompt parsing, job preparation, job plan / ordering, `config_fingerprint()` |
 | `model_loader.py` | 907 | Checkpoint/LoRA/VAE/GGUF loading, latent geometry (`get_latent_downscale_ratio`), CLIP type resolution |
 | `model_cache.py` | 935 | 3-tier cache: LoRA files → incremental states → patched models. Async preloading |
 | `manifest_utils.py` | 316 | Load/save/merge manifest. `save_manifest()` reloads from disk first to preserve concurrent user edits (favorites, votes, metrics) |

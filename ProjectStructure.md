@@ -38,7 +38,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── config_builder_node.py       # "Config Builder" Node + API endpoints + state_to_configs_json (1578 lines)
 ├── json_text_node.py            # "Smart JSON" Node (60 lines)
 │
-├── generation_orchestrator.py   # The "Conductor" (Loop Logic, job plan, preview pass, 3693 lines)
+├── generation_orchestrator.py   # The "Conductor" (Loop Logic, job plan, preview pass, 3892 lines)
 ├── image_generation.py          # KSampler & VAE Wrappers (1321 lines)
 ├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters (ADAPTERS registry: node ids/signatures pinned to pack shas, loader defaults + `prefer`, `scale`, `max_batch`, `vram_mb`; `adapter_status()` reports `problem`) (668 lines)
 ├── metrics_runner.py            # Background job: compute metrics for an existing session (CPU, manifest lock) (167 lines)
@@ -52,7 +52,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── conditioning_cache.py        # Disk-based Conditioning Cache (372 lines)
 ├── lora_utils.py                # LoRA Searching & Validation (468 lines)
 ├── trigger_words.py             # Trigger Word Prompt Assembly (377 lines)
-├── config_utils.py              # Config Parsing, Expansion, Cartesian Products, job plan + fingerprints (1108 lines)
+├── config_utils.py              # Config Parsing, Expansion, Cartesian Products, job plan + fingerprints (1141 lines)
 ├── directory_scanner.py         # External Directory Session Scanner (609 lines)
 ├── metadata_packer.py           # PNG/WebP Metadata Embedding for Exports (561 lines)
 ├── manifest_utils.py            # Manifest Read/Write/Merge Helpers, comparisons (316 lines)
