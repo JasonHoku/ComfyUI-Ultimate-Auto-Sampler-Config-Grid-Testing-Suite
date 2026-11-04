@@ -507,6 +507,11 @@ def start_sweep(configs, session_settings=None, origin_node=None, client_id=None
         sw.bridge.run_on_loop(validate_first(sw))
         return launch(sw)
     except SweepAlreadyRunning as e:
+        if e.sweep.state == "paused":
+            ok, msg = resume(e.sweep.id)
+            print(f"[GridTester] ▶️ Same workflow sweep was paused ({e.sweep.id}, session "
+                  f"'{e.sweep.session}'): resumed ({msg})")
+            return e.sweep
         print(f"[GridTester] 🔁 Same workflow sweep already running ({e.sweep.id}, session "
               f"'{e.sweep.session}'): attaching, nothing re-queued")
         return e.sweep

@@ -462,11 +462,23 @@ def run_deferred_upscales(
 
         # Check if already upscaled (resume support)
         already_upscaled = False
+        _job_fp = job.get("config_fp")
         for item in existing_data.get("items", []):
-            if (item.get("upscaled") and
-                item.get("seed") == current_seed and
+            if not item.get("upscaled"):
+                continue
+            if _job_fp:
+                # keyed on the base cell's identity (sampler/cfg/... included): a fixed-seed grid has
+                # many cells sharing seed + prompt, and each one needs its own upscale
+                if item.get("base_fp") == _job_fp:
+                    already_upscaled = True
+                    break
+                continue
+            # legacy manifests / queue entries without a fingerprint: seed + prompt, and the same base size
+            if (item.get("seed") == current_seed and
                 item.get("positive") == actual_positive_prompt and
-                item.get("width") != pipe_w):
+                item.get("width") != pipe_w and
+                item.get("base_width", pipe_w) == pipe_w and
+                item.get("base_height", pipe_h) == pipe_h):
                 already_upscaled = True
                 break
         if already_upscaled:
@@ -1180,6 +1192,7 @@ def run_generation_loop(
         print(f"[GridTester] ℹ️ distribution_config is None/empty, running normal generation")
 
     # ==== PREVIEW PASS: no upscaling at all (one change point covers inline, deferred, HiRes pre-encode) ====
+    session_settings_full = session_settings  # pre-override: a legacy distributed companion ignores the preview pass
     if preview_on:
         session_settings = {**(session_settings or {}), "upscaling": {"enabled": False}}
         print(f"[GridTester] 🔎 Preview pass: {pv_steps} steps, x{pv_scale} scale"
@@ -1204,7 +1217,8 @@ def run_generation_loop(
             session_settings=session_settings,
             job_order=job_order, preview_on=preview_on, pv_steps=pv_steps, pv_scale=pv_scale,
             pv_cfg=pv_cfg, meta_run=_meta_run, job_plan=job_plan,
-            skip_rejected_previews=skip_rejected_previews, only_favorited_previews=only_favorited_previews
+            skip_rejected_previews=skip_rejected_previews, only_favorited_previews=only_favorited_previews,
+            upscale_session_settings=session_settings_full
         )
 
     # The schedule above used `expanded`; the main loop walks job_plan, so the smart cache needs
@@ -3382,7 +3396,8 @@ def _run_distributed_generation(
     optional_positive, optional_negative, optional_latent, model_cache,
     session_settings=None,
     job_order="as_written", preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
-    meta_run=None, job_plan=None, skip_rejected_previews=True, only_favorited_previews=False
+    meta_run=None, job_plan=None, skip_rejected_previews=True, only_favorited_previews=False,
+    upscale_session_settings=None
 ):
     """
     Run generation in distributed mode.
@@ -3446,6 +3461,14 @@ def _run_distributed_generation(
         pv_scale=pv_scale, pv_cfg=pv_cfg, skip_rejected=skip_rejected_previews,
         only_favorited=only_favorited_previews
     )
+
+    # A legacy companion (no populate_from_plan) ignores the preview pass, so its workers render FULL
+    # images: the master must still upscale them, with the settings from before the preview override.
+    if (preview_on and upscale_session_settings is not None
+            and not (job_plan is not None and hasattr(manager, "populate_from_plan"))):
+        session_settings = upscale_session_settings
+        print(f"[GridTester] ⚠️ Legacy distributed companion ignores the preview pass: workers render full "
+              f"images, so the master keeps the upscale phase enabled")
 
     # Make manager accessible to API endpoints
     distribution.set_active_manager(manager)
@@ -3706,15 +3729,16 @@ def _run_distributed_generation(
             # --- Create Latent ---
             latent_channels = get_latent_channels(loaded_model, optional_latent)
             latent_ratio = get_latent_downscale_ratio(loaded_model)
+            if optional_latent is not None:
+                # pixel size of a connected latent = cells x this model's ratio
+                w = int(optional_latent["samples"].shape[3]) * latent_ratio
+                h = int(optional_latent["samples"].shape[2]) * latent_ratio
             gen_w, gen_h = w, h
             _pv_scale = (ux.get("render") or {}).get("preview_scale")
             if _pv_scale and optional_latent is None:
                 from .config_utils import preview_dims
                 gen_w, gen_h = preview_dims(w, h, _pv_scale, latent_ratio)
             if optional_latent is not None:
-                # pixel size of a connected latent = cells x this model's ratio
-                w = int(optional_latent["samples"].shape[3]) * latent_ratio
-                h = int(optional_latent["samples"].shape[2]) * latent_ratio
                 latent_in = {"samples": optional_latent["samples"].clone()}
             else:
                 latent_in = make_empty_latent(latent_channels, gen_w, gen_h, latent_ratio)

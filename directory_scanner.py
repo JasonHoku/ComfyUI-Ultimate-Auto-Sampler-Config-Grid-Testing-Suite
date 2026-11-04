@@ -11,7 +11,7 @@ import random
 from PIL import Image
 
 from .metadata_packer import extract_metadata_from_image
-from .manifest_utils import stable_item_id, scan_relpath, assign_scan_ids
+from .manifest_utils import stable_item_id, scan_relpath, assign_scan_ids, scan_key
 
 
 # =============================================================================
@@ -400,7 +400,7 @@ def _probe_mp4_dimensions(file_path):
         return None
 
 
-def scan_directory_for_images(directory_path, max_items=5000, view_subfolder=""):
+def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="", session_name=""):
     """
     Scan a directory for image files and build manifest-compatible items.
 
@@ -409,6 +409,8 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
         max_items: Maximum number of images to process
         view_subfolder: Subfolder path for ComfyUI's /view endpoint
                         (e.g. "benchmarks/session/external_images")
+        session_name: Optional session name; namespaces the stable scan ids so the same
+                        relpath in two sessions does not collide (blank = legacy ids)
 
     Returns:
         tuple: (items_list, stats_dict)
@@ -477,7 +479,7 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
             item["gen_index"] = gen_idx
             # Ensure it has an ID
             if "id" not in item:
-                item["id"] = stable_item_id("scan:" + item["source_relpath"])
+                item["id"] = stable_item_id(scan_key(item["source_relpath"], session_name))
                 needs_id.append(item)
             # For videos: ensure media_type is set and probe real dimensions
             # if the cached entry has missing or stale (default 1280x720) values.
@@ -502,7 +504,7 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
 
         # No manifest entry — fall through to normal image processing
         try:
-            item = _process_single_image(file_path, directory_path, view_subfolder, gen_index=gen_idx)
+            item = _process_single_image(file_path, directory_path, view_subfolder, gen_index=gen_idx, session_name=session_name)
             if item:
                 items.append(item)
                 needs_id.append(item)
@@ -513,7 +515,7 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
 
     # Same files -> same ids on every scan; a hash clash is resolved deterministically.
     _scan_assigned = {id(i) for i in needs_id}
-    assign_scan_ids(needs_id, reserved={i["id"] for i in items if id(i) not in _scan_assigned and "id" in i})
+    assign_scan_ids(needs_id, reserved={i["id"] for i in items if id(i) not in _scan_assigned and "id" in i}, namespace=session_name)
 
     # Count items that had metadata
     stats["with_metadata"] = sum(
@@ -526,7 +528,7 @@ def scan_directory_for_images(directory_path, max_items=5000, view_subfolder="")
     return items, stats
 
 
-def _process_single_image(file_path, directory_path, view_subfolder="", gen_index=0):
+def _process_single_image(file_path, directory_path, view_subfolder="", gen_index=0, session_name=""):
     """
     Process a single image or video file into a manifest-compatible item dict.
     """
@@ -536,7 +538,7 @@ def _process_single_image(file_path, directory_path, view_subfolder="", gen_inde
 
     # Stable id: derived from the path relative to the scanned folder, so a re-scan keeps it
     relpath = scan_relpath(file_path, directory_path)
-    ts = stable_item_id("scan:" + relpath)
+    ts = stable_item_id(scan_key(relpath, session_name))
 
     # Build URL using ComfyUI's built-in /view endpoint
     from urllib.parse import quote

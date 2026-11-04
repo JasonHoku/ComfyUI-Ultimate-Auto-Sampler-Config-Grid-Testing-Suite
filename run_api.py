@@ -65,6 +65,8 @@ def load_manifest_for_fetch(benchmarks_base, raw_session, if_none_match=None):
         return 503, json.dumps({"error": "manifest is being written, retry"}).encode(), {"Retry-After": "1"}
     if (st2.st_mtime_ns, st2.st_size) != (st1.st_mtime_ns, st1.st_size):
         return 503, json.dumps({"error": "manifest changed while reading, retry"}).encode(), {"Retry-After": "1"}
+    if isinstance(data, dict):
+        data.pop("__uscg_lazy__", None)  # heal files corrupted by a SAVE on the lazy shell
     body = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return 200, body, headers
 

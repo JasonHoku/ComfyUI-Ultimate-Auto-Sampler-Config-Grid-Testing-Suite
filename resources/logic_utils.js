@@ -38,13 +38,20 @@ function setupKeyReloadFullscreen() {
 
 // Persist session to disk
 async function saveState() {
+    // The lazy shell is empty on purpose and carries __uscg_lazy__: saving it would persist the flag.
+    if (fullManifest && fullManifest.__uscg_lazy__) {
+        console.log('[Save] skipped: manifest still loading (lazy shell)');
+        return;
+    }
+    const toSave = Object.assign({}, fullManifest);
+    delete toSave.__uscg_lazy__;
     try {
         await fetch('/config_tester/save_manifest', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 session_name: document.getElementById('session-input')?.value || "default",
-                manifest: fullManifest
+                manifest: toSave
             })
         });
     } catch (e) { console.error("Save failed", e); }

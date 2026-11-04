@@ -149,7 +149,14 @@ app.registerExtension({
 
         // 3. FULLSCREEN + CTRL+S LISTENER (SINGLETON - only register once)
         if (!window.__ultimateGridFullscreenListenerInstalled) {
+            // Only the iframes of dashboard nodes may drive these handlers.
+            const isDashboardSource = (event) => {
+                const src = event.source;
+                if (!src) return false;
+                return (app.graph?._nodes || []).some(n => n.iframe?.contentWindow === src);
+            };
             window.addEventListener("message", (event) => {
+                if (!isDashboardSource(event)) return;
                 // Forward Ctrl+S from dashboard iframe to ComfyUI's save workflow
                 if (event.data?.type === 'forward_ctrl_s') {
                     document.dispatchEvent(new KeyboardEvent('keydown', {
@@ -419,8 +426,14 @@ app.registerExtension({
                         const currentSession = getSessionName();
 
                         // Optimization: If session already loaded, try incremental update
-                        if (node.loaded_session === currentSession) {
-                            const newHtml = message.html[0];
+                        // The widget can be stale when the connected Builder switched the session, so
+                        // trust the session_name inside the HTML payload when it has one.
+                        const newHtml = message.html[0];
+                        const sm = /\/\*__JSON_START__\*\/\s*let fullManifest = (\{[\s\S]*?\});\s*\/\*__JSON_END__\*\//.exec(newHtml);
+                        let payloadSession = null;
+                        if (sm && sm[1]) { try { payloadSession = JSON.parse(sm[1]).session_name || null; } catch (e) { /* ignore */ } }
+                        const targetSession = payloadSession ? String(payloadSession) : currentSession;
+                        if (node.loaded_session === targetSession) {
 
                             // Try to extract just the manifest data
                             const pattern = /\/\*__JSON_START__\*\/\s*let fullManifest = (\{[\s\S]*?\});\s*\/\*__JSON_END__\*\//;
@@ -460,7 +473,7 @@ app.registerExtension({
 
                         // Full reload (when incremental fails or first load)
                         node.iframe.srcdoc = message.html[0];
-                        node.loaded_session = currentSession;
+                        node.loaded_session = targetSession;
                         console.log('[UltimateGrid] 🔄 Full reload');
                     }
 

@@ -107,7 +107,11 @@ export function outputKey(o) {
 
 /** Inverse of outputKey -> the stored `wf.output` shape. Image outputs carry only node_id/output_index. */
 export function outputFromKey(key) {
-    const [n, i, media, frames] = String(key).split(":");
+    // Subgraph node ids contain ":" ("57:35"), so the id is everything before the last three fields
+    // (index, media, frames_from); frames_from may itself be a subgraph id.
+    const m = /^(.*?):(\d+):(image|video):(.*)$/.exec(String(key));
+    const parts = String(key).split(":");
+    const [n, i, media, frames] = m ? [m[1], m[2], m[3], m[4]] : [parts.slice(0, -3).join(":") || parts[0], ...parts.slice(-3)];
     if (n === undefined || n === "") return null;
     const out = { node_id: n, output_index: parseInt(i, 10) || 0 };
     if (media === "video") {

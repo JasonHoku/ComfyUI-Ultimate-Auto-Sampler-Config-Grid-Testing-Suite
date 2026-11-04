@@ -388,7 +388,12 @@ def scan_relpath(file_path, directory_path):
     return os.path.relpath(file_path, directory_path).replace(os.sep, "/")
 
 
-def assign_scan_ids(items, reserved=()):
+def scan_key(relpath, namespace=""):
+    """Hash key for a scanned item: `scan:<relpath>`, or `scan:<namespace>:<relpath>` when a session namespace is given."""
+    return f"scan:{namespace}:{relpath}" if namespace else "scan:" + relpath
+
+
+def assign_scan_ids(items, reserved=(), namespace=""):
     """
     Give every item a stable id derived from its `source_relpath`, in place. Items are processed
     sorted by relpath (not mtime, which changes), `reserved` ids are never reused, and a clash is
@@ -405,7 +410,7 @@ def assign_scan_ids(items, reserved=()):
     for it in sorted(todo, key=lambda x: x["source_relpath"]):
         salt = 0
         while True:
-            cid = stable_item_id("scan:" + it["source_relpath"], salt)
+            cid = stable_item_id(scan_key(it["source_relpath"], namespace), salt)
             if cid not in used:
                 break
             salt += 1
@@ -425,17 +430,25 @@ def merge_rescan(old, new):
         return new
     old_items = [i for i in (old.get("items") or []) if isinstance(i, dict)]
     by_rel, by_src = {}, {}
+    src_count = {}
     for oi in old_items:
         if oi.get("source_relpath"):
             by_rel.setdefault(oi["source_relpath"], oi)
         if oi.get("source_file"):
+            src_count[oi["source_file"]] = src_count.get(oi["source_file"], 0) + 1
             by_src.setdefault(oi["source_file"], oi)
+    # legacy basename fallback only for basenames that are unambiguous among the old items
+    by_src = {k: v for k, v in by_src.items() if src_count[k] == 1}
+    consumed = set()
     reused, pending = set(), []
     for it in new.get("items", []):
         oi = by_rel.get(it.get("source_relpath")) or by_src.get(it.get("source_file"))
+        if oi is not None and id(oi) in consumed:
+            oi = None   # an old item donates its id/user fields to ONE new item only
         if oi is None:
             pending.append(it)
             continue
+        consumed.add(id(oi))
         if "id" in oi:
             it["id"] = oi["id"]
             reused.add(oi["id"])
@@ -449,7 +462,11 @@ def merge_rescan(old, new):
     # new files: ids stay stable unless they clash with a reused legacy id
     fresh = [i for i in pending if isinstance(i.get("id"), int) and i["id"] >= SCAN_ID_BASE and i.get("source_relpath")]
     keep = {i["id"] for i in pending if i not in fresh and "id" in i}
-    assign_scan_ids(fresh, reserved=reused | keep)
+    # keep whichever key family the scanner used (session-namespaced, or legacy un-namespaced)
+    ns = new.get("session_name") or ""
+    if ns and not any(i["id"] == stable_item_id(scan_key(i["source_relpath"], ns)) for i in fresh):
+        ns = ""
+    assign_scan_ids(fresh, reserved=reused | keep, namespace=ns)
     if isinstance(old.get("comparisons"), list):
         new["comparisons"] = old["comparisons"]
     old_meta = old.get("meta")
