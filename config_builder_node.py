@@ -575,13 +575,18 @@ class UltimateConfigBuilder:
         The job count is the product of the bindings' axes, expanded by config_utils.expand_configs."""
         wf = config_array.get("workflow") or {}
         out = wf.get("output") or {}
+        workflow_output = ({"node_id": str(out["node_id"]), "output_index": int(out.get("output_index", 0) or 0)}
+                           if out.get("node_id") is not None else {})
+        if workflow_output and out.get("media") == "video":  # video-only keys: image sweeps emit the same JSON as ever
+            workflow_output["media"] = "video"
+            if out.get("frames_from") is not None:
+                workflow_output["frames_from"] = str(out["frames_from"])
         config = {
             "model_type": "workflow",
             "name": str(config_array.get("name", "")),
             "workflow": wf.get("api_prompt") or {},
             "workflow_source": str(wf.get("source_name", "") or ""),
-            "workflow_output": {"node_id": str(out["node_id"]), "output_index": int(out.get("output_index", 0) or 0)}
-                               if out.get("node_id") is not None else {},
+            "workflow_output": workflow_output,
             "workflow_run_other_outputs": bool(wf.get("run_other_outputs", False)),
             "workflow_bindings": list(wf.get("bindings") or []),
         }
