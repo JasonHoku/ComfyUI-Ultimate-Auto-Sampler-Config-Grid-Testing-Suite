@@ -22,7 +22,7 @@ var CMP_EXCLUDED_KEYS = new Set([
     'sampler', 'scheduler', 'cfg', 'steps', 'denoise', 'upscaled', 'source_file',
     'image_path', 'preview_path', 'video_path', 'hash', 'hires_denoise',
     // per-image outcomes / bookkeeping, not settings
-    'config_fp', 'base_fp', 'metrics', 'preview_of', 'source_relpath',
+    'config_fp', 'base_fp', 'metrics', 'preview_of', 'source_relpath', 'dist_worker',
     'florence2_bbox', 'florence2_detection_count', 'florence2_no_detection'
 ]);
 var CMP_EXCLUDED_RE = /^upscale_|^hires_prompt_|_hash$|^worker|^_/;

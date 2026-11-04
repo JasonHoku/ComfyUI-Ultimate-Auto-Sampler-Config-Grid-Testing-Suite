@@ -82,6 +82,14 @@ test('axisDiff single, double, ctx and excluded keys', () => {
     assert.deepStrictEqual(R.axisDiff(a, item({ seed: 2 })).axes, ['seed']);
 });
 
+test('dist_worker (which machine rendered it) never makes two items different settings', () => {
+    const a = item({ dist_worker: 'master' });
+    const b = item({ dist_worker: 'w_1a2b3c4d' });
+    assert.ok(R.CMP_EXCLUDED_KEYS.has('dist_worker'));
+    assert.deepStrictEqual(R.axisDiff(a, b).axes, []);
+    assert.strictEqual(R.axisDiff(a, b, { withCtxKeys: true }).ctxEqual, true);
+});
+
 // ---- Bradley-Terry ----
 test('BT: A beats B 3-1', () => {
     const A = item({}), B = item({});
