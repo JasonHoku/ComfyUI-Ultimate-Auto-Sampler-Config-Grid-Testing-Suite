@@ -15,7 +15,7 @@ sys.path.insert(0, _ROOT)
 
 def _load_helper():
     src = open(os.path.join(_ROOT, "image_generation.py"), encoding="utf-8").read()
-    m = re.search(r"^def pil_to_image_array\(.*?(?=^def )", src, re.S | re.M)
+    m = re.search(r"^def pil_to_image_array\(.*?(?=^(?:def |@|#))", src, re.S | re.M)  # stop at the next top-level def/decorator/comment
     ns = {}
     exec(m.group(0), ns)
     return ns["pil_to_image_array"]
