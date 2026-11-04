@@ -182,7 +182,7 @@ README is 2000+ words; most users won't read it. Efficiency Nodes grew via commu
 Verify `te_batch_size` on the 5060 Ti with the real MOSS-Image, Krea 2 and Qwen-Image encoders, then decide whether the default of 1 (off) should change.
 
 #### **30. Distributed companion parity**
-Preview pass, `job_order` and metrics are ignored in distributed mode today. Teach the ComfyUI-USCG-Distributed companion about them.
+**Done (wave 3, `feat/dist-parity`):** `job_order`, the preview pass and image metrics now work in distributed mode (master-owned plan, `populate_from_plan`, `dist_worker` on every item). Open: re-check rejects made mid-run at claim time, claim affinity, Start At Job in distributed mode, LTX workers.
 
 #### **31. Scorer-pack adapters**
 Verify the node ids of the optional aesthetic / reward scorer packs against the real packs, then enable the shipped adapter entries.

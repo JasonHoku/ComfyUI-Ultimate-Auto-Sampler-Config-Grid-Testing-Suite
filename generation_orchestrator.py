@@ -1179,11 +1179,16 @@ def run_generation_loop(
     else:
         print(f"[GridTester] ℹ️ distribution_config is None/empty, running normal generation")
 
+    # ==== PREVIEW PASS: no upscaling at all (one change point covers inline, deferred, HiRes pre-encode) ====
+    if preview_on:
+        session_settings = {**(session_settings or {}), "upscaling": {"enabled": False}}
+        print(f"[GridTester] 🔎 Preview pass: {pv_steps} steps, x{pv_scale} scale"
+              f"{'' if pv_cfg is None else f', cfg {pv_cfg}'}, upscales skipped")
+        if any(c.get("model_type") == "ltx_video" for c in expanded):
+            print(f"[GridTester] ℹ️ Preview pass does not apply to LTX video configs - they render normally")
+
     if dist_enabled:
         print(f"[GridTester] 🌐 ENTERING DISTRIBUTED MODE with {len(distribution_config.get('worker_urls', []))} worker(s)")
-        if (job_order != "as_written" or preview_on
-                or any(it.get("preview") is True for it in existing_data.get("items", []))):
-            print(f"[GridTester] ⚠️ job_order / preview pass / preview promotion are not supported in distributed mode yet - ignored")
         # Upscaling in distributed mode: workers generate base images, master runs upscales after collection
         if session_settings and session_settings.get("upscaling", {}).get("enabled", False):
             print(f"[GridTester] ℹ️ Upscaling enabled — workers will generate base images, master will run upscales after all generation completes.")
@@ -1196,21 +1201,16 @@ def run_generation_loop(
             remote_vae_endpoint, save_conditioning_cache_to_file,
             enable_model_cache, optional_model, optional_clip, optional_vae,
             optional_positive, optional_negative, optional_latent, model_cache,
-            session_settings=session_settings
+            session_settings=session_settings,
+            job_order=job_order, preview_on=preview_on, pv_steps=pv_steps, pv_scale=pv_scale,
+            pv_cfg=pv_cfg, meta_run=_meta_run, job_plan=job_plan,
+            skip_rejected_previews=skip_rejected_previews, only_favorited_previews=only_favorited_previews
         )
 
     # The schedule above used `expanded`; the main loop walks job_plan, so the smart cache needs
     # plan positions (identical to the old behaviour when there is one resolution and as_written).
     if model_cache:
         model_cache.register_schedule([pj["conf"] for pj in job_plan])
-
-    # ==== PREVIEW PASS: no upscaling at all (one change point covers inline, deferred, HiRes pre-encode) ====
-    if preview_on:
-        session_settings = {**(session_settings or {}), "upscaling": {"enabled": False}}
-        print(f"[GridTester] 🔎 Preview pass: {pv_steps} steps, x{pv_scale} scale"
-              f"{'' if pv_cfg is None else f', cfg {pv_cfg}'}, upscales skipped")
-        if any(c.get("model_type") == "ltx_video" for c in expanded):
-            print(f"[GridTester] ℹ️ Preview pass does not apply to LTX video configs - they render normally")
 
     # ==== OPTIONAL CONDITIONING SETUP ====
     if optional_positive or optional_negative:
@@ -3184,6 +3184,193 @@ def _send_distribution_status(manager):
         pass
 
 
+def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, has_optional_inputs,
+                              lora_triggerwords_mode, preview=None, skip_rejected=True, only_favorited=False):
+    """Turn the (already ordered) job plan into the entries the distributed manager queues.
+
+    The master decides everything stateful here, with the same rules and order as the normal loop
+    (existing-image skip, preview promotion skip, survivor seed, fingerprints), so workers stay stateless
+    renderers and a preview/full pass behaves the same with or without workers.
+
+    ``preview`` is None (full pass) or ``{"steps", "scale", "cfg"}`` (cfg may be None = keep).
+    Returns ``(entries, counts)``; an entry is ``{"config", "input_job", "extra"}`` where ``extra`` holds
+    ``stamp`` (manifest fields the master adds on collection), optional ``render`` (``preview_scale``) and
+    optional ``seed`` (survivor seed to re-render). ``counts`` = {"exists", "promotion", "full_exists"}.
+    """
+    from .config_utils import (
+        config_fingerprint, build_preview_index, build_full_fp_set, should_skip_for_previews
+    )
+    items = existing_data.get("items", [])
+    meta = existing_data.get("meta") or {}
+    pindex = build_preview_index(items, meta.get("rejected_preview_fps", []))
+    full_fps = build_full_fp_set(items) if preview else set()
+    entries = []
+    counts = {"exists": 0, "promotion": 0, "full_exists": 0}
+
+    for pj in job_plan:
+        conf, w, h, batch_idx = pj["conf"], pj["w"], pj["h"], pj["batch_idx"]
+        is_ltx = conf.get("model_type") == "ltx_video"
+        is_pv = bool(preview) and not is_ltx
+        fp = None if is_ltx else config_fingerprint(conf, w, h, conf["seed"])
+        randomize = conf.get("seed_behavior") == "randomize"
+
+        survivor_seed = None
+        if not is_pv and not has_optional_inputs and fp is not None and randomize:
+            pe = pindex.get(fp)
+            if pe and pe.get("seed") is not None:
+                survivor_seed = pe["seed"]  # re-render the survivor with the seed the user approved
+
+        # Preview promotion skip. A rejection is an explicit user signal, so overwrite_existing does not
+        # override it; it still overrides the "full image exists" skip.
+        why = None
+        if not (has_optional_inputs or is_ltx or fp is None):
+            if is_pv:
+                why = "full_exists" if fp in full_fps else None
+            else:
+                why = should_skip_for_previews(fp, pindex, skip_rejected, only_favorited)
+        if why and not (why == "full_exists" and overwrite_existing):
+            counts["full_exists" if why == "full_exists" else "promotion"] += 1
+            continue
+
+        eff_conf = conf
+        if is_pv:
+            eff_conf = {**conf, "steps": preview["steps"],
+                        "cfg": conf["cfg"] if preview.get("cfg") is None else preview["cfg"]}
+
+        # A randomized seed never matches an old item (the normal loop rolls a fresh one before the check),
+        # except a survivor's approved seed.
+        if not overwrite_existing and (not randomize or survivor_seed is not None):
+            pos_, _ = build_prompt_with_triggers(conf, lora_triggerwords_mode)
+            if check_if_job_completed(
+                items, eff_conf, survivor_seed if survivor_seed is not None else conf["seed"],
+                w, h, batch_idx, pos_, conf["negative"],
+                has_optional_inputs=has_optional_inputs, preview=is_pv
+            ) != -1:
+                counts["exists"] += 1
+                continue
+
+        extra = {}
+        if fp is not None:
+            stamp = {"config_fp": fp}
+            if is_pv:
+                stamp.update({
+                    "preview": True, "preview_of": fp,
+                    "full_steps": conf["steps"], "full_cfg": conf["cfg"],
+                    "full_width": w, "full_height": h, "preview_scale": preview["scale"],
+                })
+            extra["stamp"] = stamp
+        if is_pv:
+            extra["render"] = {"preview_scale": preview["scale"]}
+        if survivor_seed is not None:
+            extra["seed"] = survivor_seed
+        entries.append({
+            "config": eff_conf,
+            "input_job": {"label": pj["job"].get("label", f"{w}x{h}"), "width": w, "height": h,
+                          "batch_idx": batch_idx},
+            "extra": extra,
+        })
+    return entries, counts
+
+
+def _distributed_metrics_pass(existing_data, pre_ids, images_dir, image_path_for=None):
+    """Metrics for images that workers rendered. Run once on the master after collection.
+
+    Workers measure the builtins on the decoded GPU tensor (same numbers the master gets for its own images,
+    when their companion/main code is new enough); adapters (aesthetic scorer ...) only ever run here, so
+    workers do not need the scorer pack installed. An item with no metrics at all (older worker) gets
+    builtins from the saved file and its adapters. Master-rendered items already have everything and are
+    left alone. Returns ``{"adapters": n, "builtins_from_file": m}``; no-op without an active metrics run.
+    """
+    from . import image_metrics
+    spec = image_metrics.current_spec()
+    out = {"adapters": 0, "builtins_from_file": 0}
+    if not spec:
+        return out
+    if image_path_for is None:
+        from .metrics_runner import _image_path_for as image_path_for
+    from PIL import Image
+    adapter_names = list(spec.get("adapters") or [])
+    for item in existing_data.get("items", []):
+        if item.get("id") in pre_ids or item.get("upscaled") or item.get("media_type") == "video":
+            continue
+        have = item.get("metrics") or {}
+        need_builtins = bool(spec.get("builtins")) and not have
+        need_adapters = any(a not in have for a in adapter_names)
+        if not (need_builtins or need_adapters):
+            continue
+        path = image_path_for(item, images_dir)
+        if path is None:
+            continue
+        try:
+            with Image.open(path) as im:
+                pil = im.convert("RGB")
+        except Exception as e:
+            print(f"[Distribution] ⚠️ metrics skipped for item {item.get('id')}: {e}")
+            continue
+        if need_builtins:
+            image_metrics.attach(item, pil)
+            out["builtins_from_file"] += 1
+        else:
+            image_metrics.attach_adapters(item, pil)
+        if need_adapters:
+            out["adapters"] += 1
+    return out
+
+
+def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing,
+                                  has_optional_inputs, lora_triggerwords_mode, *, job_order="as_written",
+                                  preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
+                                  skip_rejected=True, only_favorited=False):
+    """Queue the run on the distributed manager: the master's own plan when the companion supports it
+    (populate_from_plan), else the companion's legacy nested loop (job order / preview ignored)."""
+    if job_plan is not None and hasattr(manager, "populate_from_plan"):
+        # The master decides order, skips, preview promotion and fingerprints; workers just render.
+        _pv = {"steps": pv_steps, "scale": pv_scale, "cfg": pv_cfg} if preview_on else None
+        entries, _counts = _distributed_plan_entries(
+            job_plan, existing_data, overwrite_existing=overwrite_existing,
+            has_optional_inputs=has_optional_inputs, lora_triggerwords_mode=lora_triggerwords_mode,
+            preview=_pv, skip_rejected=skip_rejected, only_favorited=only_favorited
+        )
+        print(f"[Distribution] 📋 Plan: {len(entries)} job(s) to render | skipped: {_counts['exists']} already exist, "
+              f"{_counts['promotion']} rejected/unfavorited previews, {_counts['full_exists']} already full")
+        if job_order != "as_written":
+            print(f"[Distribution] 🧭 Job order {job_order}: jobs are claimed in the master's plan order")
+        if preview_on:
+            print(f"[GridTester] 🔎 Distributed preview pass: {pv_steps} steps, x{pv_scale} scale")
+        _spec = image_metrics.current_spec()
+        manager.populate_from_plan(
+            entries, run_extras={"metrics_builtins": list(_spec.get("builtins") or [])} if _spec else {})
+    else:
+        if (job_order != "as_written" or preview_on
+                or any(it.get("preview") is True for it in existing_data.get("items", []))):
+            print(f"[GridTester] ⚠️ job_order / preview pass / preview promotion need an updated ComfyUI-USCG-Distributed "
+                  f"companion - ignored in distributed mode")
+        manager.populate_jobs(
+            expanded, input_jobs, existing_data,
+            overwrite_existing, has_optional_inputs, lora_triggerwords_mode
+        )
+
+
+
+def _distributed_run_meta(existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+                          configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
+                          pv_scale, pv_cfg, meta_run):
+    """Manifest meta for a distributed run: the same keys the normal loop writes, so the preview
+    tombstones (rejected_preview_fps), job order and the run-API session_settings survive. The distributed
+    path used to overwrite meta with a short dict, which erased all of them."""
+    return {
+        "positive": positive_text, "negative": negative_text,
+        "model": ckpt_name, "seed": seed,
+        "vae_batch_size": vae_batch_size,
+        "configs_json": configs_json, "resolutions_json": resolutions_json,
+        "image_format": image_format,
+        "job_order": job_order,
+        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+        **(meta_run or {})
+    }
+
+
 def _run_distributed_generation(
     self, distribution_config, expanded, input_jobs, existing_data,
     overwrite_existing, has_optional_inputs, lora_triggerwords_mode,
@@ -3193,7 +3380,9 @@ def _run_distributed_generation(
     remote_vae_endpoint, save_conditioning_cache_to_file,
     enable_model_cache, optional_model, optional_clip, optional_vae,
     optional_positive, optional_negative, optional_latent, model_cache,
-    session_settings=None
+    session_settings=None,
+    job_order="as_written", preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
+    meta_run=None, job_plan=None, skip_rejected_previews=True, only_favorited_previews=False
 ):
     """
     Run generation in distributed mode.
@@ -3244,9 +3433,18 @@ def _run_distributed_generation(
     if optional_latent is not None:
         print("[Distribution] ⚠️ Latent input: remote workers render empty latents at the placeholder size")
 
-    manager.populate_jobs(
-        expanded, input_jobs, existing_data,
-        overwrite_existing, has_optional_inputs, lora_triggerwords_mode
+    def _write_meta():
+        existing_data["meta"] = _distributed_run_meta(
+            existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+            configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
+            pv_scale, pv_cfg, meta_run)
+
+    _pre_ids = {it.get("id") for it in existing_data.get("items", [])}
+    _populate_distributed_manager(
+        manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing, has_optional_inputs,
+        lora_triggerwords_mode, job_order=job_order, preview_on=preview_on, pv_steps=pv_steps,
+        pv_scale=pv_scale, pv_cfg=pv_cfg, skip_rejected=skip_rejected_previews,
+        only_favorited=only_favorited_previews
     )
 
     # Make manager accessible to API endpoints
@@ -3282,13 +3480,7 @@ def _run_distributed_generation(
         manager.deactivate()
         distribution.clear_active_manager()
 
-        existing_data["meta"] = {
-            "positive": positive_text, "negative": negative_text,
-            "model": ckpt_name, "seed": seed,
-            "vae_batch_size": vae_batch_size,
-            "configs_json": configs_json, "resolutions_json": resolutions_json,
-            "image_format": image_format
-        }
+        _write_meta()
         save_manifest(paths["manifest"], existing_data)
 
         html = get_html_template(session_name, existing_data, unique_id)
@@ -3386,8 +3578,13 @@ def _run_distributed_generation(
             w = input_job["width"]
             h = input_job["height"]
             batch_idx = input_job.get("batch_idx", 0)
+            # Main-USCG extras the master queued with this job (seed to re-render / preview render override /
+            # manifest stamp). Absent for an old plan-less queue.
+            ux = claimed_job.get("uscg") or {}
             current_seed = conf["seed"]
-            if conf.get("seed_behavior") == "randomize":
+            if ux.get("seed") is not None:
+                current_seed = ux["seed"]  # re-render the survivor with the seed the user approved
+            elif conf.get("seed_behavior") == "randomize":
                 import random
                 current_seed = random.randint(0, 2**63 - 1)
 
@@ -3509,13 +3706,18 @@ def _run_distributed_generation(
             # --- Create Latent ---
             latent_channels = get_latent_channels(loaded_model, optional_latent)
             latent_ratio = get_latent_downscale_ratio(loaded_model)
+            gen_w, gen_h = w, h
+            _pv_scale = (ux.get("render") or {}).get("preview_scale")
+            if _pv_scale and optional_latent is None:
+                from .config_utils import preview_dims
+                gen_w, gen_h = preview_dims(w, h, _pv_scale, latent_ratio)
             if optional_latent is not None:
                 # pixel size of a connected latent = cells x this model's ratio
                 w = int(optional_latent["samples"].shape[3]) * latent_ratio
                 h = int(optional_latent["samples"].shape[2]) * latent_ratio
                 latent_in = {"samples": optional_latent["samples"].clone()}
             else:
-                latent_in = make_empty_latent(latent_channels, w, h, latent_ratio)
+                latent_in = make_empty_latent(latent_channels, gen_w, gen_h, latent_ratio)
 
             # --- Generate Image ---
             try:
@@ -3557,8 +3759,8 @@ def _run_distributed_generation(
                     slg_single_layers=conf.get("slg_single_layers", "22"),
                     slg_start_percent=conf.get("slg_start_percent", 0.0),
                     slg_end_percent=conf.get("slg_end_percent", 0.5),
-                    width=w,
-                    height=h
+                    width=gen_w,
+                    height=gen_h
                 )
 
                 job_durations.append(duration)
@@ -3569,10 +3771,13 @@ def _run_distributed_generation(
                     )
 
                 meta = create_image_metadata(
-                    conf, w, h, duration, current_seed, batch_idx,
+                    conf, gen_w, gen_h, duration, current_seed, batch_idx,
                     actual_positive_prompt, actual_negative_prompt,
                     gen_index=gen_index_offset + total_generated
                 )
+                if ux.get("stamp"):
+                    meta.update(ux["stamp"])
+                meta["dist_worker"] = "master"
 
                 pending_batch.append((result_latent["samples"].clone(), meta))
                 pending_job_ids.append(job_id)
@@ -3648,13 +3853,7 @@ def _run_distributed_generation(
             remote_vae_worker.wait_completion()
             remote_vae_worker.stop()
 
-        existing_data["meta"] = {
-            "positive": positive_text, "negative": negative_text,
-            "model": ckpt_name, "seed": seed,
-            "vae_batch_size": vae_batch_size,
-            "configs_json": configs_json, "resolutions_json": resolutions_json,
-            "image_format": image_format
-        }
+        _write_meta()
         save_manifest(paths["manifest"], existing_data)
 
         loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -3708,13 +3907,7 @@ def _run_distributed_generation(
                         remote_vae_worker.wait_completion()
                         remote_vae_worker.stop()
 
-                    existing_data["meta"] = {
-                        "positive": positive_text, "negative": negative_text,
-                        "model": ckpt_name, "seed": seed,
-                        "vae_batch_size": vae_batch_size,
-                        "configs_json": configs_json, "resolutions_json": resolutions_json,
-                        "image_format": image_format
-                    }
+                    _write_meta()
                     save_manifest(paths["manifest"], existing_data)
 
                     loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -3786,6 +3979,14 @@ def _run_distributed_generation(
 
     print_incompatible_loras_summary(incompatible_loras)
 
+    # === Metrics for worker-rendered images (adapters only run here; see _distributed_metrics_pass) ===
+    if image_metrics.current_spec():
+        _mres = _distributed_metrics_pass(existing_data, _pre_ids, paths["images"])
+        if _mres["adapters"] or _mres["builtins_from_file"]:
+            save_manifest(paths["manifest"], existing_data)
+            print(f"[Distribution] 📏 measured {_mres['adapters']} worker image(s) on master "
+                  f"({_mres['builtins_from_file']} builtins from file)")
+
     # === Run deferred upscales on master after all distributed generation is complete ===
     if session_settings and session_settings.get("upscaling", {}).get("enabled", False):
         upscale_settings = session_settings.get("upscaling", {})
@@ -3816,13 +4017,7 @@ def _run_distributed_generation(
         except Exception as e:
             print(f"[Distribution] Upscale phase failed: {e}")
 
-    existing_data["meta"] = {
-        "positive": positive_text, "negative": negative_text,
-        "model": ckpt_name, "seed": seed,
-        "vae_batch_size": vae_batch_size,
-        "configs_json": configs_json, "resolutions_json": resolutions_json,
-        "image_format": image_format
-    }
+    _write_meta()
     save_manifest(paths["manifest"], existing_data)
 
     print(f"[Distribution] 🧹 Cleaning up...")
