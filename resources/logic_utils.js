@@ -221,7 +221,12 @@ async function loadSession(prefetched, opts) {
             alert("Load Error: " + e.message);
         }
     } finally {
-        if (boot) window._uscgBootPending = false;
+        if (boot) {
+            const wasPending = window._uscgBootPending;
+            window._uscgBootPending = false;
+            // success path (the failure path already refreshed the landing page): populate the session picker now
+            if (wasPending && typeof fetchAndShowSessions === 'function') fetchAndShowSessions();
+        }
     }
 }
 
@@ -403,8 +408,10 @@ function showSessionLandingIfEmpty() {
     const landing = document.getElementById('session-landing');
     const viewport = document.getElementById('viewport');
 
-    // Always populate session picker dropdown and landing cards
-    fetchAndShowSessions();
+    // Always populate session picker dropdown and landing cards. While the first manifest fetch is in
+    // flight the list waits (loadSession fetches it right after): /list_sessions scans every session
+    // folder on the server's event loop and would hold up the manifest response behind it.
+    if (!window._uscgBootPending) fetchAndShowSessions();
 
     if (!hasData && landing && viewport) {
         landing.style.display = 'block';
