@@ -839,6 +839,23 @@ import hashlib
 JOB_ORDERS = ("as_written", "minimize_reloads")
 
 
+def run_meta_extras(session_settings, has_optional_inputs):
+    """Manifest-meta keys that let the Dashboard re-queue this session headless (POST /config_tester/run).
+    meta.configs_json only holds the configs list (sampler_node strips _session_settings)."""
+    ss = session_settings if isinstance(session_settings, dict) else {}
+    return {"session_settings": json.loads(json.dumps(ss, default=str)),
+            "has_optional_inputs": bool(has_optional_inputs)}
+
+
+def job_order_note(before, after):
+    """None when minimize_reloads changed the switch counts, else a note saying it changed nothing."""
+    if before != after:
+        return None
+    return ("minimize_reloads changed nothing: this grid is already grouped by model (it only helps when LoRA "
+            "folders or random LoRA picks expand into different stacks, or a batched latent makes each model "
+            "run once per latent)")
+
+
 def build_job_plan(expanded, input_jobs):
     """Flatten the nested ``for job in input_jobs: for conf in expanded`` loop.
 

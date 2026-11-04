@@ -840,7 +840,8 @@ def run_generation_loop(
     )
     from .config_utils import (
         JOB_ORDERS, build_job_plan, order_job_plan, count_switches, config_fingerprint,
-        preview_dims, build_preview_index, should_skip_for_previews, build_full_fp_set
+        preview_dims, build_preview_index, should_skip_for_previews, build_full_fp_set,
+        run_meta_extras, job_order_note
     )
 
     # ==== JOB ORDER / PREVIEW PASS SETTINGS (defaults reproduce the old behaviour) ====
@@ -963,7 +964,11 @@ def run_generation_loop(
         _sw_before = count_switches(_plan_as_written, get_model_cache_key)
         _sw_after = count_switches(job_plan, get_model_cache_key)
         print(f"[GridTester] 🧭 Job order: minimize_reloads | model loads {_sw_before['model_loads']} -> {_sw_after['model_loads']}, "
-              f"LoRA switches {_sw_before['lora_switches']} -> {_sw_after['lora_switches']}")
+              f"LoRA switches {_sw_before['lora_switches']} -> {_sw_after['lora_switches']}, "
+              f"VAE switches {_sw_before['vae_switches']} -> {_sw_after['vae_switches']}")
+        _note = job_order_note(_sw_before, _sw_after)
+        if _note:
+            print(f"[GridTester] ℹ️ Job order: {_note}")
 
     print(f"{'='*80}")
     print(f"[GridTester] 🚀 GENERATION START")
@@ -986,6 +991,7 @@ def run_generation_loop(
         optional_negative is not None,
         optional_latent is not None
     ])
+    _meta_run = run_meta_extras(session_settings, has_optional_inputs)
 
     if has_optional_inputs and not overwrite_existing:
         print(f"[GridTester] ⚠️ Optional inputs connected — job skip/resume DISABLED.")
@@ -1421,7 +1427,8 @@ def run_generation_loop(
                     "image_format": image_format,
                     "job_order": job_order,
                     "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+                    **_meta_run
                 }
                 save_manifest(paths["manifest"], existing_data)
 
@@ -1768,7 +1775,8 @@ def run_generation_loop(
                             "image_format": image_format,
                             "job_order": job_order,
                             "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                            "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+                            "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+                            **_meta_run
                         }
                         save_manifest(paths["manifest"], existing_data)
 
@@ -2593,7 +2601,8 @@ def run_generation_loop(
                     "image_format": image_format,
                     "job_order": job_order,
                     "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+                    **_meta_run
                 }
                 save_manifest(paths["manifest"], existing_data)
 
@@ -2702,7 +2711,8 @@ def run_generation_loop(
         "image_format": image_format,
         "job_order": job_order,
         "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", []))
+        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+        **_meta_run
     }
     save_manifest(paths["manifest"], existing_data)
 

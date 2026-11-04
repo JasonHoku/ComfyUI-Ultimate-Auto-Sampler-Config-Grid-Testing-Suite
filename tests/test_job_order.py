@@ -157,3 +157,28 @@ def test_list_valued_model_keys_are_hashable():
     plan = build_job_plan(expanded, _jobs((64, 64)))
     after = order_job_plan(plan, "minimize_reloads", lambda c: [c["model"], ["te"]])
     assert [p["conf"]["model"] for p in after] == ["A", "A", "B"]
+
+
+def test_job_order_note():
+    from config_utils import job_order_note
+    assert job_order_note({"model_loads": 1}, {"model_loads": 0}) is None
+    note = job_order_note({"model_loads": 1}, {"model_loads": 1})
+    assert isinstance(note, str) and "changed nothing" in note
+
+
+def test_per_config_resolutions_in_model_order_gain_nothing():
+    expanded = [_conf(model=m, resolution=r) for m in ("A", "B") for r in ((512, 512), (768, 768))]
+    plan = build_job_plan(expanded, _jobs((1024, 1024)))
+    before = count_switches(plan, _key)
+    after = count_switches(order_job_plan(plan, "minimize_reloads", _key), _key)
+    assert before == after
+
+
+def test_minimize_reloads_can_trade_vae_switches_for_lora_switches():
+    # As written, VAE is the slower-changing axis (vae outer, lora inner), but the sort ranks LoRA first.
+    expanded = [_conf(lora=l, vae=v) for v in ("V1", "V2") for l in ("L1", "L2")]
+    plan = build_job_plan(expanded, _jobs((1024, 1024)))
+    before = count_switches(plan, _key)
+    after = count_switches(order_job_plan(plan, "minimize_reloads", _key), _key)
+    assert (before["lora_switches"], after["lora_switches"]) == (4, 2)
+    assert (before["vae_switches"], after["vae_switches"]) == (2, 4)

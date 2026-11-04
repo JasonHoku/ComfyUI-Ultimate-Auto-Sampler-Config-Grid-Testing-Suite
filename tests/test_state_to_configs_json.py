@@ -261,3 +261,17 @@ def test_cfg_override_blank_is_null_and_zero_is_kept():
 
 def test_unknown_job_order_becomes_as_written():
     assert _ss(job_order="alphabetical")["job_order"] == "as_written"
+
+
+def test_checkpoint_without_vae_omits_key_and_reports_no_drift(capsys):
+    state = make_state(models=["m.safetensors"])
+    out = json.loads(UltimateConfigBuilder.state_to_configs_json(state))
+    assert all("vae" not in c for c in out["configs"])
+    assert "schema drift" not in capsys.readouterr().out.lower()
+
+
+def test_picked_vae_is_still_emitted(capsys):
+    state = make_state(models=["m.safetensors"], extra_array_fields={"vaes": ["my.vae.safetensors"]})
+    out = json.loads(UltimateConfigBuilder.state_to_configs_json(state))
+    assert any(c.get("vae") for c in out["configs"])
+    assert "schema drift" not in capsys.readouterr().out.lower()

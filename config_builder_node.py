@@ -897,9 +897,10 @@ class UltimateConfigBuilder:
             # later by the orchestrator (seed, denoise) or only set for
             # specific model types (clip_type, text_encoders, gguf_options,
             # ltx_*) are intentionally excluded so they don't fire false alarms.
+            # "vae" is omitted when no VAE is picked (see 'Process VAEs' above), so it is excluded too.
             _EXPECTED_CONFIG_KEYS = {
                 "sampler", "scheduler", "steps", "cfg", "seed_behavior",
-                "model", "model_type", "lora", "vae",
+                "model", "model_type", "lora",
                 "model_sampling_override", "use_advanced_sampling", "use_flux_guidance",
                 "model_prompt_prefix", "model_prompt_suffix", "attention_mode",
                 "use_deep_shrink", "use_slg",

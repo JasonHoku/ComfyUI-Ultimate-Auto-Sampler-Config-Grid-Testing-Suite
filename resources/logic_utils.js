@@ -1008,7 +1008,7 @@ setupKeyReloadFullscreen()
 // FULL PASS FOR SURVIVORS (preview-pass workflow)
 // Strategy (a): ask the parent ComfyUI page (web/dashboard.js) to flip the matching Config Builder to
 // "Preview pass off", then queue the prompt. Needs a parent that understands 'uscg_run_full_pass'.
-// Strategy (b): STUB for a future run API (see _uscgTryRunApi). Fallback: instructions toast.
+// Strategy (b): queue it through the run API (POST /config_tester/run) from the manifest meta. Fallback: instructions toast.
 // ---------------------------------------------------------------------------
 function _uscgToast(msg, ok) {
     var el = document.createElement('div');
@@ -1020,25 +1020,49 @@ function _uscgToast(msg, ok) {
     setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 9000);
 }
 
-// Strategy (b) stub: wire the run API here once it exists. Detection: window.USCG_RUN_API (set by the host
-// page) or a '/config_tester/run' route. Resolves to {ok, message} when it handled the request, else null.
+// Strategy (b): queue the full pass through POST /config_tester/run, re-using the configs and Run Settings the
+// orchestrator recorded in this session's manifest meta (configs_json + session_settings, see run_meta_extras).
+function uscgFullPassBody(manifest, session) {
+    var m = (manifest && manifest.meta) || {};
+    if (!m.configs_json) return { error: 'This session has no recorded configs (meta.configs_json).' };
+    if (!m.session_settings || typeof m.session_settings !== 'object')
+        return { error: 'This session was rendered before the hub recorded its Run Settings in the manifest.' };
+    if (m.has_optional_inputs)
+        return { error: "This session used the Generator's optional inputs, which a headless run cannot reproduce." };
+    var configs;
+    try { configs = typeof m.configs_json === 'string' ? JSON.parse(m.configs_json) : m.configs_json; }
+    catch (e) { return { error: 'meta.configs_json is not valid JSON.' }; }
+    if (configs && !Array.isArray(configs) && Array.isArray(configs.configs)) configs = configs.configs;
+    if (!Array.isArray(configs) || !configs.length) return { error: 'meta.configs_json holds no configs.' };
+    var ss = JSON.parse(JSON.stringify(m.session_settings));
+    ss.preview_pass = Object.assign({ steps: 8, scale: 0.5, cfg_override: null }, ss.preview_pass || {}, { enabled: false });
+    ss.skip_rejected_previews = true;
+    ss.start_at_job = 0;
+    ss.overwrite_existing = false;
+    ss.session_name = session;
+    return { body: { configs_json: { configs: configs, _session_settings: ss },
+                     session_name: session, overwrite_existing: false, force: true } };
+}
+
+// Resolves to {ok, message} when the run API answered (or the session cannot be re-queued), or null when the
+// server has no run API (older USCG), so the caller shows the manual instructions.
 async function _uscgTryRunApi(session) {
+    var built = uscgFullPassBody(typeof fullManifest !== 'undefined' ? fullManifest : null, session);
+    if (built.error) return { ok: false, message: built.error };
+    var r;
     try {
-        if (window.USCG_RUN_API && typeof window.USCG_RUN_API.run === 'function') {
-            // TODO(merge with the run-API task): confirm the real signature; overrides below are the contract.
-            var res = await window.USCG_RUN_API.run({
-                session_name: session,
-                settings_overrides: { preview_pass: { enabled: false }, skip_rejected_previews: true }
-            });
-            return { ok: true, message: (res && res.message) || 'Full pass queued.' };
-        }
-        var probe = await fetch('/config_tester/run', { method: 'GET' }).catch(function () { return null; });
-        if (probe && probe.status !== 404) {
-            // TODO(merge with the run-API task): POST /config_tester/run with the same overrides, then return
-            // {ok, message}. Intentionally not implemented here (this task does not depend on it).
-        }
-    } catch (e) { /* fall through to the instructions toast */ }
-    return null;
+        r = await fetch('/config_tester/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: JSON.stringify(built.body) });
+    } catch (e) { return null; }
+    if (r.status === 404 || r.status === 405) return null;
+    var j = null;
+    try { j = await r.json(); } catch (e) { /* non-JSON error body */ }
+    if (!r.ok) {
+        var err = j && j.error ? (typeof j.error === 'string' ? j.error : JSON.stringify(j.error)) : ('HTTP ' + r.status);
+        return { ok: false, message: 'Run API: ' + String(err).slice(0, 200) + '.' };
+    }
+    return { ok: true, message: 'Full pass queued (prompt ' + String((j && j.prompt_id) || '?').slice(0, 8) +
+             '). Rejected previews are skipped; full images replace their previews as they finish.' };
 }
 
 function _uscgAskParentFullPass(session) {
@@ -1049,7 +1073,7 @@ function _uscgAskParentFullPass(session) {
             if (!ev.data || ev.data.type !== 'uscg_run_full_pass_result') return;
             done = true;
             window.removeEventListener('message', onMsg);
-            resolve({ ok: !!ev.data.ok, message: ev.data.message || '' });
+            resolve({ ok: !!ev.data.ok, message: ev.data.message || '', reason: ev.data.reason || null });
         };
         window.addEventListener('message', onMsg);
         window.parent.postMessage({ type: 'uscg_run_full_pass', session_name: session }, '*');
@@ -1062,12 +1086,13 @@ function _uscgAskParentFullPass(session) {
 }
 
 async function runFullPassForSurvivors() {
-    var session = (document.getElementById('session-input') && document.getElementById('session-input').value) ||
+    var session = window._uscgLoadedSession ||
+        (document.getElementById('session-input') && document.getElementById('session-input').value) ||
         (fullManifest && fullManifest.session_name) || '';
     var manual = 'In the Config Builder open Run Settings, untick "Preview Pass" and queue the workflow again. ' +
         'Only cells whose preview was not rejected will render at full quality.';
     var res = await _uscgAskParentFullPass(session);
-    if (!res) res = await _uscgTryRunApi(session);
+    if (!res || (!res.ok && (res.reason === 'no_builder' || res.reason === 'no_queue'))) res = await _uscgTryRunApi(session);
     if (res && res.ok) { _uscgToast(res.message || 'Full pass queued.', true); return; }
     _uscgToast((res && res.message ? res.message + ' ' : '') + manual, false);
 }
