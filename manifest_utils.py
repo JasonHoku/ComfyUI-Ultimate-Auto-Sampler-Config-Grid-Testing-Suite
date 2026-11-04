@@ -326,3 +326,107 @@ def base_dims_of(item):
         return {}          # legacy upscaled source: let normResolution estimate
     w, h = item.get("width"), item.get("height")
     return {"base_width": w, "base_height": h} if w and h else {}
+
+
+# ---------------------------------------------------------------------------
+# Stable ids for scanned items (a re-scan of the same folder keeps ids, so votes,
+# favorites, notes and metrics stay attached)
+# ---------------------------------------------------------------------------
+SCAN_ID_BASE = 1 << 52          # scanned ids live in [2^52, 2^53); generated ids are ~1.8e14 (time*1e5)
+
+
+def stable_item_id(key, salt=0):
+    """Deterministic int id in [2^52, 2^53) for `key` (JS-safe: < Number.MAX_SAFE_INTEGER + 1)."""
+    k = key if not salt else f"{key}#{salt}"
+    h = int.from_bytes(hashlib.blake2b(k.encode("utf-8"), digest_size=8).digest(), "big") >> 12   # 52 bits
+    return SCAN_ID_BASE + h
+
+
+def scan_relpath(file_path, directory_path):
+    """Path of a scanned file relative to the scanned directory, with forward slashes."""
+    return os.path.relpath(file_path, directory_path).replace(os.sep, "/")
+
+
+def assign_scan_ids(items, reserved=()):
+    """
+    Give every item a stable id derived from its `source_relpath`, in place. Items are processed
+    sorted by relpath (not mtime, which changes), `reserved` ids are never reused, and a clash is
+    resolved deterministically by retrying with salt 1, 2, ... so the same files get the same ids
+    on every machine and scan. Items without a relpath are left alone (their id is reserved).
+    """
+    used = set(reserved)
+    todo = []
+    for it in items:
+        if it.get("source_relpath"):
+            todo.append(it)
+        elif "id" in it:
+            used.add(it["id"])
+    for it in sorted(todo, key=lambda x: x["source_relpath"]):
+        salt = 0
+        while True:
+            cid = stable_item_id("scan:" + it["source_relpath"], salt)
+            if cid not in used:
+                break
+            salt += 1
+        it["id"] = cid
+        used.add(cid)
+    return items
+
+
+def merge_rescan(old, new):
+    """
+    Merge a fresh scan manifest (`new`, modified in place and returned) with the manifest already on
+    disk for the same session: an old item matched by `source_relpath` (else legacy `source_file`)
+    donates its id (one-time migration of random legacy ids) and its user fields (favorited, rejected,
+    note, notes, metrics); top-level `comparisons` and meta.rejected_preview_fps are carried over.
+    """
+    if not isinstance(old, dict):
+        return new
+    old_items = [i for i in (old.get("items") or []) if isinstance(i, dict)]
+    by_rel, by_src = {}, {}
+    for oi in old_items:
+        if oi.get("source_relpath"):
+            by_rel.setdefault(oi["source_relpath"], oi)
+        if oi.get("source_file"):
+            by_src.setdefault(oi["source_file"], oi)
+    reused, pending = set(), []
+    for it in new.get("items", []):
+        oi = by_rel.get(it.get("source_relpath")) or by_src.get(it.get("source_file"))
+        if oi is None:
+            pending.append(it)
+            continue
+        if "id" in oi:
+            it["id"] = oi["id"]
+            reused.add(oi["id"])
+        it["favorited"] = bool(oi.get("favorited", False))
+        it["rejected"] = bool(oi.get("rejected", False))
+        for k in ("note", "notes"):
+            if oi.get(k):
+                it[k] = oi[k]
+        if "metrics" in oi and "metrics" not in it:
+            it["metrics"] = oi["metrics"]
+    # new files: ids stay stable unless they clash with a reused legacy id
+    fresh = [i for i in pending if isinstance(i.get("id"), int) and i["id"] >= SCAN_ID_BASE and i.get("source_relpath")]
+    keep = {i["id"] for i in pending if i not in fresh and "id" in i}
+    assign_scan_ids(fresh, reserved=reused | keep)
+    if isinstance(old.get("comparisons"), list):
+        new["comparisons"] = old["comparisons"]
+    old_meta = old.get("meta")
+    if isinstance(old_meta, dict) and old_meta.get("rejected_preview_fps"):
+        new.setdefault("meta", {})["rejected_preview_fps"] = old_meta["rejected_preview_fps"]
+    return new
+
+
+def write_rescan_manifest(manifest_path, manifest):
+    """Locked merge of a re-scan into the manifest on disk (if any) + atomic write. Returns the manifest."""
+    with _manifest_lock:
+        old = None
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r") as f:
+                    old = json.load(f)
+            except Exception as e:
+                print(f"[GridTester] ⚠️ Could not merge old manifest on re-scan: {e}")
+        merge_rescan(old, manifest)
+        _atomic_write_json(manifest_path, manifest)
+    return manifest
