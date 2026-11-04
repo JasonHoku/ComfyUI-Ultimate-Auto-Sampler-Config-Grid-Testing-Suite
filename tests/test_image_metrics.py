@@ -90,9 +90,9 @@ def test_normalize_spec():
     assert im.normalize_spec({"enabled": True, "builtins": ["bogus"]}) is None
     assert im.normalize_spec({"enabled": True, "builtins": ["luma", "bogus", "entropy"]}) == \
         {"builtins": ["entropy", "luma"], "adapters": []}
-    # idempotent on a normalized spec; disabled registry entries are dropped
-    s = im.normalize_spec({"enabled": True, "builtins": ["luma"], "adapters": ["aesthetic"]})
-    assert s == {"builtins": ["luma"], "adapters": []}
+    # idempotent on a normalized spec; disabled registry entries (imagereward) are dropped
+    s = im.normalize_spec({"enabled": True, "builtins": ["luma"], "adapters": ["aesthetic", "imagereward"]})
+    assert s == {"builtins": ["luma"], "adapters": ["aesthetic"]}
     assert im.normalize_spec(s) == s
     assert im.normalize_spec({"enabled": True, "builtins": {"luma": True, "entropy": False}}) == \
         {"builtins": ["luma"], "adapters": []}

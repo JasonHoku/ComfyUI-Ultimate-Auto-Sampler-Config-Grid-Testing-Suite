@@ -35,32 +35,44 @@ _LUMA_W = (0.299, 0.587, 0.114)
 
 
 # ---------------------------------------------------------------------------
-# Optional scorer packs (adapters). Entries stay DISABLED until the node ids
-# have been confirmed against the real pack: nothing here can be verified
-# without the pack installed. A disabled entry is reported to the Builder UI
-# but never runs and is dropped by normalize_spec().
+# Optional scorer packs (adapters). Each entry is checked against the pack's
+# real node signatures (pinned shas below). A disabled entry is reported to the
+# Builder UI but never runs and is dropped by normalize_spec(). Keys:
+#   loaders[].prefer = {combo_input: [preferred values]} (first one present wins),
+#   scale = multiplier applied to the node's output, max_batch = images per call.
 # ---------------------------------------------------------------------------
 ADAPTERS = {
+    # strimmlarn/ComfyUI-Strimmlarns-Aesthetic-Score@42bed3fd78488dda50d83bdc39b5cff6772919c9
+    # (LoadAesteticModel: combo model_name; CalculateAestheticScore: image + aesthetic_model,
+    # scores image[0] only, returns int(score * 100))
     "aesthetic": {
-        "enabled": False,
-        "label": "Aesthetic score",
+        "enabled": True,
+        "label": "Aesthetic score (LAION, ~1-10)",
         "node_id": "CalculateAestheticScore",
         "image_arg": "image",
-        "loaders": [{"node_id": "LoadAesteticModel", "kwargs": {}, "pass_as": "aesthetic_model", "output_index": 0}],
+        "loaders": [{"node_id": "LoadAesteticModel", "kwargs": {}, "pass_as": "aesthetic_model", "output_index": 0,
+                     "prefer": {"model_name": ["sac+logos+ava1-l14-linearMSE.pth", "chadscorer.pth"]}}],
         "output_index": 0,
-        "pack_hint": "ComfyUI-Strimmlarns-Aesthetic-Score",
-        "note": "node ids not yet verified against the pack",
+        "scale": 0.01,
+        "max_batch": 1,
+        "vram_mb": 1500,
+        "pack_hint": "ComfyUI-Strimmlarns-Aesthetic-Score (+ pip pytorch-lightning, openai CLIP; model in models/aesthetic/)",
+        "note": "verified against strimmlarn@42bed3f; the node returns score x100 (int), rescaled",
     },
+    # ZaneA/ComfyUI-ImageReward@5e9936ded972d8447c26ea2670a92e999036821d
+    # (ImageRewardLoader: STRING model; ImageRewardScore: model + prompt + images, FLOAT mean)
     "imagereward": {
         "enabled": False,
-        "label": "ImageReward",
+        "label": "ImageReward (prompt-aware, ~-2..2)",
         "node_id": "ImageRewardScore",
         "image_arg": "images",
         "text_arg": "prompt",
-        "loaders": [{"node_id": "ImageRewardLoader", "kwargs": {}, "pass_as": "model", "output_index": 0}],
+        "loaders": [{"node_id": "ImageRewardLoader", "kwargs": {"model": "ImageReward-v1.0"}, "pass_as": "model", "output_index": 0}],
         "output_index": 0,
-        "pack_hint": "ComfyUI-ImageReward",
-        "note": "node ids not yet verified against the pack",
+        "max_batch": 1,
+        "vram_mb": 2500,
+        "pack_hint": "ComfyUI-ImageReward (pip image-reward==1.4; downloads ~1.8 GB on first use)",
+        "note": "signatures verified against ZaneA@5e9936d; not live-tested, so disabled",
     },
 }
 
@@ -316,6 +328,7 @@ class _RunContext:
         self.disabled_adapters = set()
         self.checked_adapters = set()
         self.times = []              # seconds per image (builtins only)
+        self.adapter_times = {}      # adapter name -> [seconds per call]
         self.lock = threading.Lock()
         self.closed = False
 
@@ -355,6 +368,12 @@ def end_run(token=None):
     with ctx.lock:
         times = list(ctx.times)
         ctx.loader_cache.clear()
+        adapter_times = {k: list(v) for k, v in ctx.adapter_times.items()}
+    if adapter_times:
+        _release_vram(None)
+    for aname, ts in adapter_times.items():
+        if ts:
+            print(f"[GridTester] 📏 metric adapter '{aname}': {len(ts)} images, mean {sum(ts) * 1000.0 / len(ts):.0f} ms")
     if times:
         ms = [t * 1000.0 for t in times]
         print(f"[GridTester] 📏 metrics: {len(ms)} images, mean {sum(ms) / len(ms):.1f} ms, max {max(ms):.1f} ms")
@@ -558,12 +577,68 @@ def _adapter_defs(name):
     return ad if ad and ad.get("enabled") else None
 
 
+def _combo_options(cls, name):
+    """Option list of a V1 combo input (required or optional), or None when `name` is not a combo."""
+    try:
+        types = cls.INPUT_TYPES()
+        for section in ("required", "optional"):
+            v = types.get(section, {}).get(name)
+            if v is not None:
+                kind = v[0] if isinstance(v, (tuple, list)) and v else v
+                if isinstance(kind, (list, tuple)):
+                    return list(kind)
+                return None
+    except Exception:
+        pass
+    return None
+
+
+def _loader_kwargs(cls, loader):
+    """Kwargs for a loader node: required-input defaults (combo -> first option), then the
+    `prefer` picks (first preferred value present in the combo), then explicit `kwargs`.
+
+    Returns (kwargs, problem). problem is a short reason when a required input stays uncovered
+    or a combo has no options at all (e.g. no model file in the pack's folder).
+    """
+    kwargs = {}
+    req = _required_inputs(cls)
+    missing = None
+    if req is not None:
+        req, missing = req
+    explicit = dict(loader.get("kwargs", {}))
+    prefer = loader.get("prefer", {}) or {}
+    for name, default in (req or {}).items():
+        opts = _combo_options(cls, name)
+        if opts is not None and not opts and name not in explicit:
+            if loader.get("node_id") == "LoadAesteticModel":
+                return kwargs, "no model file in models/aesthetic (download sac+logos+ava1-l14-linearMSE.pth)"
+            return kwargs, f"'{loader['node_id']}' input '{name}' has no options (no model file installed?)"
+        if default is not missing:
+            kwargs[name] = default
+    for name, wanted in prefer.items():
+        opts = _combo_options(cls, name) or []
+        for w in wanted:
+            if w in opts:
+                kwargs[name] = w
+                break
+    kwargs.update(explicit)
+    if req is not None:
+        for name, default in req.items():
+            if name not in kwargs and default is missing:
+                return kwargs, f"required input '{name}' of '{loader['node_id']}' is not covered"
+    return kwargs, None
+
+
 def _adapter_problem(ad, mappings):
     """Return None when installed and call-compatible, else a short reason."""
     ids = [ad["node_id"]] + [l["node_id"] for l in ad.get("loaders", [])]
     for nid in ids:
         if nid not in mappings:
             return f"node '{nid}' not installed"
+    for loader in ad.get("loaders", []):
+        _, problem = _loader_kwargs(mappings[loader["node_id"]], loader)
+        if problem:
+            return problem
     covered = {ad.get("image_arg"), ad.get("text_arg")} | set(ad.get("kwargs", {}))
     covered |= {l["pass_as"] for l in ad.get("loaders", [])}
     covered.discard(None)
@@ -577,26 +652,49 @@ def _adapter_problem(ad, mappings):
 
 
 def adapter_status():
-    """For the Builder hint route: [{name,label,installed,enabled,pack_hint,note}]."""
+    """For the Builder hint route: [{name,label,installed,enabled,problem,pack_hint,note}]."""
     mappings = _node_mappings()
     out = []
     for name, ad in ADAPTERS.items():
+        installed = all(n in mappings for n in [ad["node_id"]] + [l["node_id"] for l in ad.get("loaders", [])])
+        try:
+            problem = _adapter_problem(ad, mappings)
+        except Exception as e:
+            problem = str(e)
         out.append({
             "name": name,
             "label": ad.get("label", name),
             "enabled": bool(ad.get("enabled")),
-            "installed": all(n in mappings for n in [ad["node_id"]] + [l["node_id"] for l in ad.get("loaders", [])]),
+            "installed": installed,
+            "problem": problem,
             "pack_hint": ad.get("pack_hint", ""),
             "note": ad.get("note", ""),
         })
     return out
 
 
+def _release_vram(need_mb):
+    """Ask ComfyUI's memory manager to make room (need_mb) or just empty the cache (None). Never raises."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return
+        import comfy.model_management as mm
+        if need_mb:
+            mm.free_memory(int(need_mb) * 1024 * 1024, mm.get_torch_device())
+        else:
+            import gc
+            gc.collect()
+            mm.soft_empty_cache()
+    except Exception:
+        pass
+
+
 def _adapter_image(image):
     """Whatever we were given -> [B,H,W,3] float tensor in [0,1] when torch is real (else numpy)."""
     torch = _real_torch()
     if _is_tensor(image):
-        return _to_bhwc_full(image)
+        return _to_bhwc_full(image).cpu()      # some packs call .numpy() on the input
     arr = np.asarray(image.convert("RGB")) if hasattr(image, "convert") else np.asarray(image)
     if arr.dtype == np.uint8:
         arr = arr.astype(np.float32) / 255.0
@@ -643,14 +741,19 @@ def _run_adapters(ctx, names, image, meta):
                     raise RuntimeError(problem)
             if img is None:
                 img = _adapter_image(image)
+            t0 = time.perf_counter()
             outputs = ctx.loader_cache.setdefault(name, {})
             kwargs = dict(ad.get("kwargs", {}))
             for li, loader in enumerate(ad.get("loaders", [])):
                 if li not in outputs:
-                    res = _call_node(mappings[loader["node_id"]], dict(loader.get("kwargs", {})))
+                    lk, lproblem = _loader_kwargs(mappings[loader["node_id"]], loader)
+                    if lproblem:
+                        raise RuntimeError(lproblem)
+                    res = _call_node(mappings[loader["node_id"]], lk)
                     outputs[li] = _output(res, loader.get("output_index", 0))
                 kwargs[loader["pass_as"]] = outputs[li]
-            kwargs[ad["image_arg"]] = img
+            mb = ad.get("max_batch")
+            kwargs[ad["image_arg"]] = img[:mb] if mb and getattr(img, "shape", None) is not None and img.shape[0] > mb else img
             if ad.get("text_arg"):
                 kwargs[ad["text_arg"]] = str(meta.get("positive") or meta.get("config_positive") or "")
             cls = mappings[ad["node_id"]]
@@ -660,8 +763,12 @@ def _run_adapters(ctx, names, image, meta):
                 for k, d in req.items():
                     if k not in kwargs and d is not missing:
                         kwargs[k] = d          # widget defaults
+            _release_vram(ad.get("vram_mb"))
             res = _call_node(cls, kwargs)
-            out[name] = _round4(_float_of(_output(res, ad.get("output_index", 0))))
+            out[name] = _round4(_float_of(_output(res, ad.get("output_index", 0))) * ad.get("scale", 1.0))
+            _release_vram(None)
+            with ctx.lock:
+                ctx.adapter_times.setdefault(name, []).append(time.perf_counter() - t0)
         except Exception as e:
             ctx.disabled_adapters.add(name)
             _warn_once(ctx, f"adapter:{name}", f"metric adapter '{name}' disabled: {e}")

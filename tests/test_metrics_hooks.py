@@ -297,6 +297,232 @@ def test_v3_style_node_and_prompt_arg(monkeypatch):
     assert meta["metrics"] == {"fake": 7.5} and seen["prompt"] == "a red cat"
 
 
-def test_shipped_registry_entries_are_disabled():
-    assert im.ADAPTERS and all(not a["enabled"] for a in im.ADAPTERS.values())
-    assert im.normalize_spec({"enabled": True, "builtins": ["luma"], "adapters": ["aesthetic"]})["adapters"] == []
+# ---- real pack signatures (copied from the packs' source) --------------------
+# strimmlarn/ComfyUI-Strimmlarns-Aesthetic-Score@42bed3fd78488dda50d83bdc39b5cff6772919c9 my_node.py
+_STRIM_FILES = ["sac+logos+ava1-l14-linearMSE.pth"]
+
+
+class _StrimLoader:
+    calls = 0
+    FUNCTION = "load_model"
+    RETURN_TYPES = ("AESTHETIC_MODEL",)
+    seen = []
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"model_name": (list(_STRIM_FILES),)}}
+
+    def load_model(self, model_name):
+        _StrimLoader.calls += 1
+        _StrimLoader.seen.append(model_name)
+        return ("models/aesthetic/" + model_name,)
+
+
+class _StrimScore:
+    FUNCTION = "execute"
+    RETURN_TYPES = ("SCORE",)
+    calls = 0
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image": ("IMAGE",), "aesthetic_model": ("AESTHETIC_MODEL",)}}
+
+    def execute(self, image, aesthetic_model):
+        _StrimScore.calls += 1
+        arr = image[0].numpy() if hasattr(image[0], "numpy") else np.asarray(image[0])   # real node needs CPU
+        assert image.shape[0] == 1 and arr.ndim == 3
+        return (612,)
+
+
+# ZaneA/ComfyUI-ImageReward@5e9936ded972d8447c26ea2670a92e999036821d
+class _IRLoader:
+    FUNCTION = "load_model"
+    RETURN_TYPES = ("IMAGEREWARD_MODEL",)
+    seen = []
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"model": ("STRING", {"default": "ImageReward-v1.0"})}}
+
+    def load_model(self, model):
+        _IRLoader.seen.append(model)
+        return ("IRMODEL",)
+
+
+class _IRScore:
+    FUNCTION = "score_images"
+    RETURN_TYPES = ("FLOAT", "STRING")
+    seen = []
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"model": ("IMAGEREWARD_MODEL",), "prompt": ("STRING", {"multiline": True}),
+                             "images": ("IMAGE",)}}
+
+    def score_images(self, model, prompt, images):
+        _IRScore.seen.append((model, prompt))
+        return (0.42, "0.42")
+
+
+@pytest.fixture
+def strim_nodes(monkeypatch):
+    mapping = {"LoadAesteticModel": _StrimLoader, "CalculateAestheticScore": _StrimScore,
+               "ImageRewardLoader": _IRLoader, "ImageRewardScore": _IRScore}
+    monkeypatch.setattr(sys.modules["nodes"], "NODE_CLASS_MAPPINGS", mapping, raising=False)
+    monkeypatch.setattr(_StrimLoader, "INPUT_TYPES",
+                        classmethod(lambda cls: {"required": {"model_name": (list(_STRIM_FILES),)}}))
+    _StrimLoader.calls = 0
+    _StrimLoader.seen = []
+    _StrimScore.calls = 0
+    _IRLoader.seen = []
+    _IRScore.seen = []
+    monkeypatch.setattr(sys.modules[__name__], "_STRIM_FILES", ["sac+logos+ava1-l14-linearMSE.pth"])
+    return mapping
+
+
+def test_shipped_registry_entries_match_pack_signatures(strim_nodes):
+    assert im.ADAPTERS["aesthetic"]["enabled"] is True
+    assert im.ADAPTERS["imagereward"]["enabled"] is False        # not live-tested
+    assert im._adapter_problem(im.ADAPTERS["aesthetic"], strim_nodes) is None
+    assert im._adapter_problem(im.ADAPTERS["imagereward"], strim_nodes) is None
+    assert im.normalize_spec({"enabled": True, "builtins": ["luma"], "adapters": ["aesthetic", "imagereward"]})["adapters"] == ["aesthetic"]
+
+
+def test_real_aesthetic_entry_stores_rescaled_score_and_loads_once(strim_nodes):
+    tok = im.begin_run({"builtins": ["luma"], "adapters": ["aesthetic"]})
+    m1, m2 = {}, {}
+    im.attach(m1, _pil())
+    im.attach(m2, _pil())
+    im.end_run(tok)
+    assert m1["metrics"]["aesthetic"] == 6.12 and m2["metrics"]["aesthetic"] == 6.12
+    assert _StrimLoader.calls == 1 and _StrimScore.calls == 2
+    tok = im.begin_run({"builtins": [], "adapters": ["aesthetic"]})
+    im.attach({}, _pil())
+    im.end_run(tok)
+    assert _StrimLoader.calls == 2                       # end_run dropped the cache
+
+
+def test_prefer_picks_first_preferred_file(strim_nodes, monkeypatch):
+    files = ["chadscorer.pth", "sac+logos+ava1-l14-linearMSE.pth"]
+    monkeypatch.setattr(_StrimLoader, "INPUT_TYPES", classmethod(lambda cls: {"required": {"model_name": (list(files),)}}))
+    tok = im.begin_run({"builtins": [], "adapters": ["aesthetic"]})
+    im.attach({}, _pil())
+    im.end_run(tok)
+    assert _StrimLoader.seen == ["sac+logos+ava1-l14-linearMSE.pth"]
+
+
+def test_without_preferred_file_first_option_is_used(strim_nodes, monkeypatch):
+    files = ["zzz.pth", "other.pth"]
+    monkeypatch.setattr(_StrimLoader, "INPUT_TYPES", classmethod(lambda cls: {"required": {"model_name": (list(files),)}}))
+    tok = im.begin_run({"builtins": [], "adapters": ["aesthetic"]})
+    im.attach({}, _pil())
+    im.end_run(tok)
+    assert _StrimLoader.seen == ["zzz.pth"]
+
+
+def test_empty_model_folder_reports_problem_and_disables_once(strim_nodes, monkeypatch, capsys):
+    monkeypatch.setattr(_StrimLoader, "INPUT_TYPES", classmethod(lambda cls: {"required": {"model_name": ([],)}}))
+    st = {a["name"]: a for a in im.adapter_status()}
+    assert st["aesthetic"]["installed"] is True and "models/aesthetic" in st["aesthetic"]["problem"]
+    tok = im.begin_run({"builtins": ["luma"], "adapters": ["aesthetic"]})
+    m1, m2 = {}, {}
+    im.attach(m1, _pil())
+    im.attach(m2, _pil())
+    im.end_run(tok)
+    out = capsys.readouterr().out
+    assert _StrimLoader.calls == 0 and _StrimScore.calls == 0
+    assert out.count("metric adapter 'aesthetic' disabled") == 1 and "models/aesthetic" in out
+    assert set(m1["metrics"]) == {"luma"}
+
+
+def test_adapter_status_problem_is_none_when_ok_and_set_when_missing(strim_nodes):
+    st = {a["name"]: a for a in im.adapter_status()}
+    assert st["aesthetic"]["problem"] is None
+    del strim_nodes["CalculateAestheticScore"]
+    st = {a["name"]: a for a in im.adapter_status()}
+    assert st["aesthetic"]["installed"] is False and "not installed" in st["aesthetic"]["problem"]
+
+
+def test_imagereward_entry_against_real_signature(strim_nodes, monkeypatch):
+    monkeypatch.setitem(im.ADAPTERS["imagereward"], "enabled", True)
+    tok = im.begin_run({"builtins": [], "adapters": ["imagereward"]})
+    m1, m2 = {"positive": "a red cat"}, {"config_positive": "fallback text"}
+    im.attach(m1, _pil())
+    im.attach(m2, _pil())
+    im.end_run(tok)
+    assert _IRLoader.seen == ["ImageReward-v1.0"]
+    assert _IRScore.seen == [("IRMODEL", "a red cat"), ("IRMODEL", "fallback text")]
+    assert m1["metrics"]["imagereward"] == 0.42
+
+
+def test_scale_applied_and_defaults_to_one(fake_nodes, monkeypatch):
+    monkeypatch.setattr(im, "ADAPTERS", {"fake": _fake_ad(scale=0.5)})
+    tok = im.begin_run({"builtins": [], "adapters": ["fake"]})
+    m = {}
+    im.attach(m, _pil())
+    im.end_run(tok)
+    assert m["metrics"]["fake"] == pytest.approx(3.0617, abs=2e-4)
+    monkeypatch.setattr(im, "ADAPTERS", {"fake": _fake_ad()})
+    tok = im.begin_run({"builtins": [], "adapters": ["fake"]})
+    m = {}
+    im.attach(m, _pil())
+    im.end_run(tok)
+    assert m["metrics"]["fake"] == pytest.approx(6.1234, abs=2e-4)
+
+
+def test_adapter_image_from_pil_and_max_batch():
+    img = im._adapter_image(_pil(255))
+    assert tuple(img.shape) == (1, 24, 32, 3) and float(img.max()) <= 1.0 and float(img.min()) >= 0.0
+    torch = pytest.importorskip("torch")
+    if getattr(torch, "__file__", None) is None or not hasattr(torch, "cuda"):
+        pytest.skip("stub torch")
+    t = torch.rand(2, 8, 8, 3)
+    out = im._adapter_image(t)
+    assert out.device.type == "cpu" and tuple(out.shape) == (2, 8, 8, 3)
+
+
+def test_max_batch_slices_tensor_input(monkeypatch, fake_nodes):
+    shapes = []
+
+    class Rec(_Scorer):
+        def score(self, image, model, mode, scale):
+            shapes.append(tuple(image.shape))
+            return (1.0,)
+    fake_nodes["FakeScore"] = Rec
+    monkeypatch.setattr(im, "ADAPTERS", {"fake": _fake_ad(max_batch=1)})
+    monkeypatch.setattr(im, "_adapter_image", lambda image: np.zeros((2, 4, 4, 3), np.float32))
+    tok = im.begin_run({"builtins": [], "adapters": ["fake"]})
+    im.attach({}, _pil())
+    im.end_run(tok)
+    assert shapes == [(1, 4, 4, 3)]
+
+
+def test_release_vram_is_noop_without_comfy():
+    im._release_vram(1500)
+    im._release_vram(None)
+
+
+def test_release_vram_calls_comfy_with_bytes(monkeypatch):
+    calls = []
+    comfy_pkg = type(sys)("comfy")
+    mm = type(sys)("comfy.model_management")
+    mm.free_memory = lambda n, dev: calls.append(("free", n, dev))
+    mm.get_torch_device = lambda: "cuda:0"
+    mm.soft_empty_cache = lambda: calls.append(("empty",))
+    comfy_pkg.model_management = mm
+    fake_torch = type(sys)("torch")
+    fake_torch.cuda = type("C", (), {"is_available": staticmethod(lambda: True)})
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "comfy", comfy_pkg)
+    monkeypatch.setitem(sys.modules, "comfy.model_management", mm)
+    im._release_vram(1500)
+    im._release_vram(None)
+    assert calls == [("free", 1500 * 2 ** 20, "cuda:0"), ("empty",)]
+
+
+def test_adapter_timing_line_printed_at_end_run(strim_nodes, capsys):
+    tok = im.begin_run({"builtins": [], "adapters": ["aesthetic"]})
+    im.attach({}, _pil())
+    im.attach({}, _pil())
+    im.end_run(tok)
+    assert "metric adapter 'aesthetic': 2 images, mean" in capsys.readouterr().out
