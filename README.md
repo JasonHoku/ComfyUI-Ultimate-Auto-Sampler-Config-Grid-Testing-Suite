@@ -62,25 +62,33 @@ If you'd rather build the graph yourself:
 
 ## 📑 Table of Contents
 
+- [Quick Start](#-quick-start--the-3-nodes-you-need)
 - [Key Features](#-key-features)
   - [Powerful Grid Generation](#-powerful-grid-generation)
+  - [Distributed Processing (Multi-Machine)](#-distributed-processing-multi-machine)
+  - [Upscaling & Post-Processing](#-upscaling--post-processing)
+  - [Favorites Export & Workflow Packing](#-favorites-export--workflow-packing)
   - [Interactive Dashboard (The "IDE")](#-interactive-dashboard-the-ide)
   - [The "Revise & Generate" Workflow](#-the-revise--generate-workflow)
   - [Curation & JSON Export](#-curation--json-export)
-  - [Config Builder Node (Visual UI For Creating Runs)](#-config-builder-node-visual-ui)
-    - [Basic Setup](#basic-setup)
-    - [Understanding the Interface](#understanding-the-interface)
-    - [Session Management](#session-management)
-    - [Config Management (Save/Load Presets)](#config-management-saveload-presets)
-    - [Config Arrays](#config-arrays)
-    - [Fast CivitAI Info Lookup](#fast-civitai-info-lookup)
+- [Optional Companion Plugins](#optional-companion-plugins)
 - [Installation](#-installation)
 - [Getting Started](#getting-started)
   - [The Nodes](#1-the-nodes)
   - [Generator Node Parameters](#2-generator-node-parameters)
+    - [Core Settings](#core-settings)
+    - [Performance Settings (incl. Text-Encoder Batching)](#performance-settings)
+    - [Advanced Settings](#advanced-settings)
   - [The JSON Configuration](#3-the-json-configuration)
   - [Hybrid Inputs (Optional)](#4-hybrid-inputs-optional)
-
+- [Config Builder Node (Visual UI For Creating Runs)](#-config-builder-node-visual-ui)
+  - [Run Settings](#run-settings)
+  - [Basic Setup](#basic-setup)
+  - [Understanding the Interface](#understanding-the-interface)
+  - [Session Management](#session-management)
+  - [Config Management (Save/Load Presets)](#config-management-saveload-presets)
+  - [Config Arrays](#config-arrays)
+  - [Fast CivitAI Info Lookup](#fast-civitai-info-lookup)
     - [Basic Parameters](#basic-parameters)
     - [Iteration Count Display](#iteration-count-display)
     - [Config Array Controls](#config-array-controls)
@@ -95,15 +103,22 @@ If you'd rather build the graph yourself:
   - [LoRA Stacking](#lora-stacking)
   - [VAEs Section](#vaes-section)
   - [Attention Modes](#attention-modes)
+  - [Skip Layer Guidance](#skip-layer-guidance-dit-models)
+  - [MOSS-Image, Flux.2, Krea 2 (16 px latent models)](#moss-image-flux2-krea-2-16-px-latent-models)
   - [Model-Specific Prompts](#model-specific-prompts)
   - [Recursive Cartesian Prompt Builder](#recursive-cartesian-prompt-builder)
+  - [Job Order & Preview Pass](#job-order--preview-pass-run-settings)
+  - [Image Metrics (Optional)](#image-metrics-optional)
+  - [Workflow Sweep](#workflow-sweep-sweep-any-comfyui-workflow)
 - [Dashboard Interface](#-dashboard-interface)
   - [Header Bar](#header-bar)
   - [Toolbar](#toolbar)
   - [Navigation & Controls](#navigation--controls)
   - [Card Overlays](#card-overlays)
-  - [JSON Bars](#json-bars-bottom---horizontal-layout)
+  - [JSON Bars](#json-bars-bottom--horizontal-layout)
   - [Revision Modal](#revision-modal)
+  - [Pairwise Review](#pairwise-review-blind-ab-compare--scoreboard)
+  - [Standalone Dashboard](#standalone-dashboard-phone--second-monitor)
 - [Example Workflows](#-example-workflows)
   - [Quick Quality Test](#quick-quality-test-40-images)
   - [Multi-Model Comparison](#multi-model-comparison-9-images)
@@ -129,16 +144,22 @@ If you'd rather build the graph yourself:
   - [Browser Compatibility](#browser-compatibility)
 - [JSON Output Format Reference](#json-output-format-reference)
 - [API Integration (Config Builder)](#api-integration-config-builder)
+  - [Run API (headless runs)](#run-api-headless-runs-discord-bot-session-hub-curl)
+  - [Dashboard, Review, Metrics & Sweep Routes](#dashboard-review-metrics--sweep-routes)
 - [File Locations](#file-locations)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
+  - [Dashboard](#dashboard)
+  - [Compare mode](#dashboard-compare-mode-blind-pairwise-review)
+  - [Config Builder](#config-builder)
 - [Distributed Processing](#-distributed-processing)
   - [Setting Up Distribution](#setting-up-distribution)
   - [Master Text Encoding](#master-text-encoding)
   - [Model Sync](#model-sync)
   - [Distribution Troubleshooting](#distribution-troubleshooting)
-- [Upscaling & Post-Processing](#-upscaling--post-processing)
-- [Favorites Export & Workflow Packing](#-favorites-export--workflow-packing)
 - [Notes for AI Development](#-notes-for-ai-development)
+  - [Development / Tests](#development--tests)
+  - [Key Gotchas](#key-gotchas-for-ai-development)
+  - [Server Event Types](#server-event-types)
 - [Changelog](#-changelog)
 - [License](#-license)
 - [Credits](#-credits)
@@ -187,6 +208,12 @@ If you'd rather build the graph yourself:
 * **Configurable Label Mode:** Toggle overlay labels on dashboard cards showing model, sampler, scheduler, steps, CFG, and other parameters directly on each image.
 * **GPU Cooldown:** Automatic pause between generations to prevent thermal throttling. Configurable interval, duration, and optional VRAM clearing.
 * **Image Metrics (optional):** Run Settings checkbox that stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image in the manifest (see [Image Metrics](#image-metrics-optional)).
+* **Workflow Sweep:** sweep any ComfyUI workflow exported as API JSON. Bind any input as an axis, dry run it, then pause, resume or cancel; every image lands in a normal USCG session (see [Workflow Sweep](#workflow-sweep-sweep-any-comfyui-workflow)).
+* **Job Order (Minimize reloads):** reorders the whole job list so each model and LoRA stack loads as few times as possible (see [Job Order & Preview Pass](#job-order--preview-pass-run-settings)).
+* **Preview Pass (generator side):** renders the whole grid cheaply first; reject the losers and only the survivors render at full quality (see [Job Order & Preview Pass](#job-order--preview-pass-run-settings)).
+* **Skip Layer Guidance:** Builder option that wraps ComfyUI's `SkipLayerGuidanceDiTSimple` for DiT models (see [Skip Layer Guidance](#skip-layer-guidance-dit-models)).
+* **16 px latent models:** MOSS-Image, Flux.2 and Krea 2 render at the size you ask for, with the CLIP type picked for the detected family (see [MOSS-Image, Flux.2, Krea 2](#moss-image-flux2-krea-2-16-px-latent-models)).
+* **Examples folder:** [`examples/`](examples/README.md) has one ready workflow per model family.
 
 ### 🌐 Distributed Processing (Multi-Machine)
 * **Multi-Worker Distribution:** Split large grid runs across multiple ComfyUI instances. A master node coordinates job distribution while workers process images in parallel and upload results back.
@@ -232,6 +259,8 @@ If you'd rather build the graph yourself:
 * **Scan External Directory:** Load image sessions from any folder (including other ComfyUI instances) into the dashboard for viewing and filtering. Reads PNG metadata for full config display.
 * **Export Favorites:** Copy all favorited images to a dedicated export folder with optional CivitAI metadata packing for sharing.
 * **Preview Pass support:** preview images carry an amber `PREVIEW` badge, a **Pass** filter row (Preview / Full, shown once previews exist) separates them, and a preview whose cell now has a full image is hidden by default (isolate `Preview` in the Pass row to see them). A bar under the header counts previews and offers **Full pass for survivors (N)**, which switches Preview Pass off in the matching Config Builder and queues the workflow (falls back to instructions if the ComfyUI frontend does not allow it).
+* **Pairwise Review:** blind A/B compare mode (`C` key) with Bradley-Terry ratings and a per-setting scoreboard (see [Pairwise Review](#pairwise-review-blind-ab-compare--scoreboard)).
+* **Standalone Dashboard + Run API:** open the dashboard as a normal web page (phone, second monitor) and start headless runs with `POST /config_tester/run` (see [Standalone Dashboard](#standalone-dashboard-phone--second-monitor) and [Run API](#run-api-headless-runs-discord-bot-session-hub-curl)).
 
 ### ⚡ The "Revise & Generate" Workflow
 * **One-Click Revision:** Click "REVISE" on any image to open a detail view.
@@ -377,6 +406,7 @@ This suite consists of three nodes found under the `sampling/testing` category:
   - Only MOSS-Image, Krea 2 and Qwen-Image encoders batch; every other encoder ignores it.
   - Weighted prompts and `AND` / `CAT` / `AVG()` / `BREAK` prompts are still encoded one at a time.
   - The first batch is self-checked against a single-prompt encode; on any mismatch the run falls back to one-by-one automatically. A CUDA OOM halves the batch and retries.
+  - The pre-encode summary line shows how many prompts were batched.
 
 * **`flush_batch_every`**: Update dashboard every X images (0 = use VAE batch size).
   - `0`: Wait until VAE batch is full
@@ -517,6 +547,8 @@ All configuration data is automatically synchronized with the Ultimate Sampler G
 The Run Settings section of the Builder holds options that apply to the whole run rather than to one config array (overwrite/resume, flush batch size, VAE batch size, model cache, trigger-word mode, ...). One of them:
 
 * **Additional Random Seeds** (`add_random_seeds_to_gens`, 0-100): render this many extra images per config using extra seeds on top of the base seed. Handy for telling "the base model did that" from "the LoRA did that" by checking whether a quirk survives across seeds. The extra seeds are derived from the base seed, so the same base seed always gives the same extras (and resuming an interrupted run works). Contributed by DRuggeri (PR #21).
+
+Covered in their own sections: [Job Order & Preview Pass](#job-order--preview-pass-run-settings), [Image Metrics](#image-metrics-optional), Text Encoder Batch Size ([`te_batch_size`](#performance-settings)).
 
 ### Basic Setup
 
@@ -765,7 +797,7 @@ Set **Model Type = Diffusion Model**, pick the diffusion file (e.g. `moss_image_
 * The CLIP Type list is read from your installed ComfyUI's `CLIPLoader`, so new model families appear without a plugin update. If you leave it at `stable_diffusion` for a diffusion model, the generator picks the CLIP type that matches the detected model family and logs it (MOSS-Image needs `moss_image` to get its chat template; with `stable_diffusion` ComfyUI builds a generic Qwen3.5 encoder).
 * The empty latent follows the model's latent format: 16 px per latent cell for the Flux.2 family, 8 for SD / SDXL / Flux.1. Use sizes that are multiples of 16; a 832x1216 job renders at 832x1216. Earlier releases always used 8, which made 16x models render at double size and run ~10x slower than the stock workflows.
 * Pre-encoding loads the text encoder once per pass instead of once per prompt (ComfyUI's dynamic VRAM loader re-prepares a model on every encode, which is the repeated `Model ... prepared for dynamic VRAM loading` log line). What remains is the encoder itself: the Qwen3.5-9B encoder costs roughly 0.8 s per prompt on a 16 GB card, the same as the stock workflow, so a 60-prompt grid spends about a minute encoding before the first image. SDXL's CLIPs take about 0.15 s per prompt, Krea 2 and Qwen-Image about 0.3 s. The pre-encode summary line reports the measured ms/prompt.
-* Text-encoder batching (`te_batch_size`, default 1 = off) puts several prompts through one encoder forward, which amortises the encoder's fixed per-forward cost. Prompts that can't be batched (weighted, `AND`/`CAT`/`AVG()`/`BREAK`) and encoders other than MOSS-Image / Krea 2 / Qwen-Image keep the per-prompt path. The summary line shows how many prompts were batched.
+* Text-encoder batching (`te_batch_size`, default 1 = off) puts several prompts through one encoder forward, which amortises the encoder's fixed per-forward cost; details in [`te_batch_size`](#performance-settings).
 
 ### Model-Specific Prompts
 
@@ -801,29 +833,6 @@ Both live in the **Run Settings** section of the Config Builder and default to t
 * A cell is identified by a **config fingerprint** (model, LoRA stack, VAE, text encoders, sampler, scheduler, CFG, denoise, seed, raw prompts, full resolution, plus advanced-sampling/SLG/deep-shrink settings; *not* steps). Cells whose seed is re-randomised on every run (`random_before`, extra random seeds) cannot be matched to a preview and simply render again.
 * ETA: preview and full jobs cost roughly 10x apart and the rolling average lags when slow models are grouped together; treat the ETA as approximate under Minimize.
 
-### Workflow Sweep (sweep any ComfyUI workflow)
-
-**Add Workflow Sweep** (next to Add Config Array) turns a config array into a sweep over *your own ComfyUI workflow*. Instead of USCG re-implementing a model family, the workflow you exported runs as-is through ComfyUI's own executor, one prompt per job, and every image lands in a normal USCG session (manifest, dashboard, favorites, filters, export).
-
-1. In ComfyUI export the workflow with **Workflow > Export (API)**. Load that file (or paste it) in the Workflow Sweep section. Editor-format JSON (with `nodes` and `links`) is rejected with a hint.
-2. **Image to collect**: the IMAGE socket that feeds the first Save Image is picked automatically; change it in the dropdown. Only the nodes upstream of that socket run (the workflow's own Save Image / Preview nodes are skipped unless you tick *Also run the workflow's own outputs*).
-3. **Sweep axes**: click a *Suggested* chip or `＋ sweep` next to any input in the node list. Each axis is one input (or several that must share a value, e.g. a seed feeding two nodes) with a list of values; the job count is the product of all axes. Special axes: **Positive / Negative prompt** (values come from the config's Prompts section, with the usual groups and 1-to-1 pairing rule), **LoRA** (bind LoraLoader nodes as slots; `name:0.8`, weight arrays `name:[0.5,1.0]`, folders and `None` work as in standard configs), **Resolution** (`WxH` into two width/height inputs). A linked input can be replaced by a literal with `＋ override link`.
-4. **Dry run** shows the first concrete prompts (template plus your substitutions plus the collector node), the validation result of job 1 and the exact job count, and lets you download a job as API JSON to compare by hand. **Start sweep** starts the run from the Builder; queueing the **Generator** node starts the same sweep and returns the dashboard immediately. **Pause / Resume / Cancel** control it, and a status line follows it.
-
-How it behaves:
-* Jobs are queued two at a time through ComfyUI's normal queue (so you can keep using ComfyUI, and nothing blocks the executor). Axes are ordered so loader values stay adjacent (checkpoint outermost, sampler settings innermost), which lets ComfyUI's cache keep models loaded between jobs. `--cache-none` or very tight RAM reloads models every job.
-* Each job has a fingerprint of the exact substituted workflow. Starting the same sweep again (also after a ComfyUI restart) skips jobs already in the session; *Overwrite existing* re-runs them and replaces the old image.
-* A failed job is recorded and the sweep continues; three failures in a row pause it. Pressing Cancel in ComfyUI during a job, or clearing the queue, pauses the sweep instead of silently finishing; Resume re-runs the affected jobs.
-* Manifest items get the normal fields (model, sampler, scheduler, steps, cfg, seed, denoise, vae, size, prompts) read from the workflow, plus `wf_params` (your bound values), `wf_fingerprint`, `wf_sweep_id`. Sweep items show a **JOB** button instead of REVISE (see *Dashboard for sweeps* below).
-* Each sweep writes `benchmarks/<session>/workflow_sweeps/<sweep_id>.json` (templates, bindings, per-job status) so any executed prompt can be reconstructed.
-* **Re-running the same sweep attaches to it.** Queueing the Generator again (or pressing Start) while the identical sweep is active does not fail and does not queue anything twice: it attaches to the running sweep (console: "Same workflow sweep already running ... attaching") and a paused sweep stays paused (Resume is the Builder's button). "Identical" means the same session name, the same ordered job fingerprints, the same *Start at job* and the same *Overwrite existing*. Anything else gets a clear refusal ("A workflow sweep is already active (session ..., sweep ..., n/m done, state). This run was NOT started. Pause or cancel it ..."; ComfyUI shows it in its error dialog, the route answers 409 with `session_name`). *Add random seeds* are deterministic (derived from the base seed, 0 like the Generator), so the same sweep always produces the same jobs: re-queueing attaches, and a resume after a finished or interrupted run skips the jobs already in the session.
-* **Loading a sweep session in the Builder** (Load Session) restores the Workflow Sweep arrays (workflow, output, bindings, custom prompts) from the `configs_json` that sweep sessions now store in their manifest meta. Sessions made before this change have no saved configs: the Builder shows a notice ("Load the workflow JSON again into a Workflow Sweep array; finished jobs are skipped by fingerprint") and leaves the arrays alone.
-* v1 limits: one image output per job, one sweep at a time, a workflow sweep cannot share a Generator run with standard configs (use two Builders), no upscale/distribution/trigger-word features, and Revise does not apply. **Video outputs are not collected yet** (planned: core `SaveVideo.video` / `CreateVideo` VIDEO sockets and the frames feeding `VHS_VideoCombine.images`, through a `USCGSweepCollectVideo` node).
-
-**Dashboard for sweeps.** Items carry `wf_params` (the bound values, numbers or strings). The **Quick Filter** gets one extra type per *varied* key (`WF cfg`, `WF sampler_name`, ...; picking a value filters and the facet panel lists them), the **Logic Filter** gets a *Workflow params* group of the numeric keys (`wf:KSampler.cfg >= 5`), and the **Labels** panel has a *Workflow params* checkbox that tags each card with its varied values (`cfg:4`). Standard sessions show none of this. The **JOB** button opens a read-only *Workflow job* panel (source, output, sweep id, job number, parameter table) with **Download job prompt (API JSON)** and **Copy job prompt**: `GET /config_tester/sweep/job_prompt?session_name=&sweep_id=&job_index=` rebuilds the prompt exactly as it ran (template + substitutions) minus the USCG collector node, so queueing it in ComfyUI reproduces the image. If the browser blocks the download inside the dashboard iframe, use Copy.
-
----
-
 ### Image Metrics (Optional)
 
 Run Settings has a **Compute Image Metrics** checkbox (default OFF). When it is on, every saved still image (base generations and upscales; videos are skipped) gets a `metrics` object in `manifest.json`, computed from the decoded image at save time (about 1-5 ms per image on the GPU, nothing when the box is unchecked):
@@ -856,6 +865,29 @@ Notes:
 * **In the Dashboard:** once a session has metrics, the Sort popup gains one option per metric (descending, items without the metric sort last, in both the primary and secondary lists), the Logic Filter field list gains a **Metrics** group, and a **Metric range** row adds `>= min` / `<= max` filters in one click (placeholders show the observed range). The label panel has a **Metrics** checkbox that prints `Shp:812 Ent:7.41 Col:41.2 ...` on each card. Logic filters skip items that lack the field, so images without metrics (older items, videos) stay visible; Quick Filter is categorical and does not list metrics, use the Logic Filter for ranges. Sessions without metrics show none of this.
 * **Older sessions:** the cog panel's **IMAGE METRICS** section has **Compute metrics for this session**, a background job (CPU only, no VRAM, about 50 ms per image) that measures every image without metrics, skips videos, shows progress and can be cancelled by clicking the button again. It rewrites only the `metrics` field under the manifest lock, so favorites and notes you change meanwhile survive. Do not run it on a session that is still generating.
 * The setting is session-level (like GPU Cooldown), so it is NOT a per-config field: it lives in `_session_settings.metrics`, not in `_EXPECTED_CONFIG_KEYS` or `expand_configs`.
+
+### Workflow Sweep (sweep any ComfyUI workflow)
+
+**Add Workflow Sweep** (next to Add Config Array) turns a config array into a sweep over *your own ComfyUI workflow*. Instead of USCG re-implementing a model family, the workflow you exported runs as-is through ComfyUI's own executor, one prompt per job, and every image lands in a normal USCG session (manifest, dashboard, favorites, filters, export).
+
+1. In ComfyUI export the workflow with **Workflow > Export (API)**. Load that file (or paste it) in the Workflow Sweep section. Editor-format JSON (with `nodes` and `links`) is rejected with a hint.
+2. **Image to collect**: the IMAGE socket that feeds the first Save Image is picked automatically; change it in the dropdown. Only the nodes upstream of that socket run (the workflow's own Save Image / Preview nodes are skipped unless you tick *Also run the workflow's own outputs*).
+3. **Sweep axes**: click a *Suggested* chip or `＋ sweep` next to any input in the node list. Each axis is one input (or several that must share a value, e.g. a seed feeding two nodes) with a list of values; the job count is the product of all axes. Special axes: **Positive / Negative prompt** (values come from the config's Prompts section, with the usual groups and 1-to-1 pairing rule), **LoRA** (bind LoraLoader nodes as slots; `name:0.8`, weight arrays `name:[0.5,1.0]`, folders and `None` work as in standard configs), **Resolution** (`WxH` into two width/height inputs). A linked input can be replaced by a literal with `＋ override link`.
+4. **Dry run** shows the first concrete prompts (template plus your substitutions plus the collector node), the validation result of job 1 and the exact job count, and lets you download a job as API JSON to compare by hand. **Start sweep** starts the run from the Builder; queueing the **Generator** node starts the same sweep and returns the dashboard immediately. **Pause / Resume / Cancel** control it, and a status line follows it.
+
+How it behaves:
+* Jobs are queued two at a time through ComfyUI's normal queue (so you can keep using ComfyUI, and nothing blocks the executor). Axes are ordered so loader values stay adjacent (checkpoint outermost, sampler settings innermost), which lets ComfyUI's cache keep models loaded between jobs. `--cache-none` or very tight RAM reloads models every job.
+* Each job has a fingerprint of the exact substituted workflow. Starting the same sweep again (also after a ComfyUI restart) skips jobs already in the session; *Overwrite existing* re-runs them and replaces the old image.
+* A failed job is recorded and the sweep continues; three failures in a row pause it. Pressing Cancel in ComfyUI during a job, or clearing the queue, pauses the sweep instead of silently finishing; Resume re-runs the affected jobs.
+* Manifest items get the normal fields (model, sampler, scheduler, steps, cfg, seed, denoise, vae, size, prompts) read from the workflow, plus `wf_params` (your bound values), `wf_fingerprint`, `wf_sweep_id`. Sweep items show a **JOB** button instead of REVISE (see *Dashboard for sweeps* below).
+* Each sweep writes `benchmarks/<session>/workflow_sweeps/<sweep_id>.json` (templates, bindings, per-job status) so any executed prompt can be reconstructed.
+* **Re-running the same sweep attaches to it.** Queueing the Generator again (or pressing Start) while the identical sweep is active does not fail and does not queue anything twice: it attaches to the running sweep (console: "Same workflow sweep already running ... attaching") and a paused sweep stays paused (Resume is the Builder's button). "Identical" means the same session name, the same ordered job fingerprints, the same *Start at job* and the same *Overwrite existing*. Anything else gets a clear refusal ("A workflow sweep is already active (session ..., sweep ..., n/m done, state). This run was NOT started. Pause or cancel it ..."; ComfyUI shows it in its error dialog, the route answers 409 with `session_name`). *Add random seeds* are deterministic (derived from the base seed, 0 like the Generator), so the same sweep always produces the same jobs: re-queueing attaches, and a resume after a finished or interrupted run skips the jobs already in the session.
+* **Loading a sweep session in the Builder** (Load Session) restores the Workflow Sweep arrays (workflow, output, bindings, custom prompts) from the `configs_json` that sweep sessions now store in their manifest meta. Sessions made before this change have no saved configs: the Builder shows a notice ("Load the workflow JSON again into a Workflow Sweep array; finished jobs are skipped by fingerprint") and leaves the arrays alone.
+* v1 limits: one image output per job, one sweep at a time, a workflow sweep cannot share a Generator run with standard configs (use two Builders), no upscale/distribution/trigger-word features, and Revise does not apply. **Video outputs are not collected yet** (planned: core `SaveVideo.video` / `CreateVideo` VIDEO sockets and the frames feeding `VHS_VideoCombine.images`, through a `USCGSweepCollectVideo` node).
+
+**Dashboard for sweeps.** Items carry `wf_params` (the bound values, numbers or strings). The **Quick Filter** gets one extra type per *varied* key (`WF cfg`, `WF sampler_name`, ...; picking a value filters and the facet panel lists them), the **Logic Filter** gets a *Workflow params* group of the numeric keys (`wf:KSampler.cfg >= 5`), and the **Labels** panel has a *Workflow params* checkbox that tags each card with its varied values (`cfg:4`). Standard sessions show none of this. The **JOB** button opens a read-only *Workflow job* panel (source, output, sweep id, job number, parameter table) with **Download job prompt (API JSON)** and **Copy job prompt**: `GET /config_tester/sweep/job_prompt?session_name=&sweep_id=&job_index=` rebuilds the prompt exactly as it ran (template + substitutions) minus the USCG collector node, so queueing it in ComfyUI reproduces the image. If the browser blocks the download inside the dashboard iframe, use Copy.
+
+---
 
 ## 🖥️ Dashboard Interface
 
@@ -926,6 +958,19 @@ Clicking **REVISE** on a card opens the studio view:
 3. **Bottom Right — Adjustable Parameters:** Sampler, Scheduler, Steps, CFG, Denoise, LoRA.
 4. **Bottom:** "Related Variants" reel showing other images with the same seed.
 5. **GENERATE NEW:** Queues the specific config you just edited.
+
+### Pairwise Review (blind A/B compare + scoreboard)
+
+The star is an absolute signal that says little about which *setting* wins. Compare mode records fast two-up votes and rolls them up per setting.
+
+* **Start:** the two-rectangles button in the dashboard header, the `C` key, or the cog panel section **PAIRWISE REVIEW**. Votes go through the current filter and never include rejected items.
+* **Pairing modes:** *Matched* (same prompt and seed, different settings), *Same settings, different seed* (noise-floor check), *One axis at a time* (exactly one of model, LoRA, sampler, scheduler, CFG, steps, denoise, resolution, prompt, upscale differs; optional axis focus) and *Random* (same media type). Pairs prefer items with few votes and never mix images with videos. When every unvoted pair is used up the queue repeats voted pairs and shows a badge.
+* **Blind by default:** only "A" and "B" are shown, placement is randomised per pair. After a vote a short reveal (off / 1 s / 2 s) outlines the winner and shows only the settings that differ. Any key or tap during the reveal advances without voting. Tap or click an image to vote for it. Panes stack on portrait phones.
+* **Ratings:** votes feed a Bradley-Terry model (ghost-player prior, 1500 = average). Sort the grid by **Rating**, or enable the **Rating** field in Label Mode to see `★rating · votes` on voted cards.
+* **Scoreboard:** per axis, win % (ties count half) with 95% Wilson intervals and the mean rating of the items with that value. Only votes where exactly one axis differs are attributed (a hidden difference such as the VAE blocks attribution; the footer lists the most common extra differences). Rows with fewer than 3 pairs read "not enough data". Seed is a noise-floor block: if seeds alone "win" as much as settings do, the other numbers are noise. Copy JSON / Copy CSV export the board.
+* **Storage:** votes live in the session `manifest.json` as a top-level `comparisons` list `[{a, b, winner, ts, mode, blind?}]` (`a`/`b` are item ids, `a` is the left/top item, `winner` is `a`, `b` or `tie`). Old manifests without the field work unchanged. Votes for items that were deleted stay on disk and are ignored. Every manifest writer (generation saves, the remote VAE worker, the legacy `save_manifest` route) keeps the on-disk `comparisons` untouched. A directory re-scan (`scan_directory`) regenerates item ids, so votes of a scanned session are not carried over.
+* **Routes:** `POST /config_tester/save_comparisons` `{session_name, append: [...], remove: ["ts:a:b", ...]}` and `POST /config_tester/clear_comparisons` `{session_name}`. They only touch `comparisons`.
+* **Caveat:** win % across mixed opponents is not a controlled effect size; pair choice is biased by the filter and the low-vote preference. Use it to rank candidates, then confirm with a matched one-axis run.
 
 ### Standalone Dashboard (phone / second monitor)
 
@@ -1327,6 +1372,8 @@ The Config Builder generates JSON in the exact format required by the Ultimate S
 
 For advanced users, the Config Builder exposes several backend endpoints:
 
+Dashboard, review, metrics and sweep routes are listed at the end of this section; the full route table (method, body, purpose) is in [ProjectStructure.md](ProjectStructure.md).
+
 ### `/configbuilder/lookup_triggers` (POST)
 Bulk lookup trigger words for multiple LoRAs.
 
@@ -1424,6 +1471,8 @@ Scan an external directory for image sessions and load them into the dashboard.
 
 ### Distribution API (registered via `distribution_routes.py`)
 
+Provided by the ComfyUI-USCG-Distributed companion plugin.
+
 These endpoints are used internally by the distribution system:
 
 | Method | Route | Purpose |
@@ -1463,6 +1512,25 @@ Response: `{"prompt_id", "number", "session_name", "dashboard_path", "dashboard_
 
 Bot pattern: `POST /run`, post `dashboard_url` to the channel, poll `run_status` every 10-30 s (or pass `client_id` and listen on `/ws?clientId=...` for `ultimate_grid.progress`). `/run` is unauthenticated, the same exposure as ComfyUI's `/prompt`.
 
+### Dashboard, Review, Metrics & Sweep Routes
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/configbuilder/preview` | Body `{state}` (the Builder state); returns `{configs_json}` from the same function the node uses (what the JSON Preview panel shows) |
+| GET | `/config_tester/dashboard` | The Dashboard as a standalone page, optional `?session=` |
+| POST | `/config_tester/save_comparisons` | Append / remove Pairwise Review votes `{session_name, append, remove}` |
+| POST | `/config_tester/clear_comparisons` | Delete every vote of a session `{session_name}` |
+| POST | `/config_tester/compute_metrics` | Start the background metrics job for a session `{session_name, overwrite?}`; returns `{job_id, total_images}` |
+| GET | `/config_tester/metrics_status` | Progress of a metrics job, `?job_id=` |
+| POST | `/config_tester/cancel_metrics` | Cancel a metrics job `{job_id}` |
+| POST | `/config_tester/sweep/parse` | Workflow Sweep: describe an API-format workflow `{api_json}` |
+| POST | `/config_tester/sweep/dry_run` | Workflow Sweep: first concrete prompts and validation of job 1 `{state or configs_json, limit?}`; queues nothing |
+| POST | `/config_tester/sweep/start` | Workflow Sweep: start a sweep `{state or configs_json, node_id?, client_id?}` (409 when one is already active) |
+| GET | `/config_tester/sweep/status` | Workflow Sweep: state, counts and errors, `?sweep_id=` or `?session_name=` |
+| POST | `/config_tester/sweep/pause` | Workflow Sweep: pause `{sweep_id}` |
+| POST | `/config_tester/sweep/resume` | Workflow Sweep: resume `{sweep_id}` |
+| POST | `/config_tester/sweep/cancel` | Workflow Sweep: cancel `{sweep_id}` |
+
 ---
 
 ## File Locations
@@ -1500,19 +1568,6 @@ ComfyUI/output/benchmarks/model-data/
 
 ---
 
-## Pairwise Review (blind A/B compare + scoreboard)
-
-The star is an absolute signal that says little about which *setting* wins. Compare mode records fast two-up votes and rolls them up per setting.
-
-* **Start:** the two-rectangles button in the dashboard header, the `C` key, or the cog panel section **PAIRWISE REVIEW**. Votes go through the current filter and never include rejected items.
-* **Pairing modes:** *Matched* (same prompt and seed, different settings), *Same settings, different seed* (noise-floor check), *One axis at a time* (exactly one of model, LoRA, sampler, scheduler, CFG, steps, denoise, resolution, prompt, upscale differs; optional axis focus) and *Random* (same media type). Pairs prefer items with few votes and never mix images with videos. When every unvoted pair is used up the queue repeats voted pairs and shows a badge.
-* **Blind by default:** only "A" and "B" are shown, placement is randomised per pair. After a vote a short reveal (off / 1 s / 2 s) outlines the winner and shows only the settings that differ. Any key or tap during the reveal advances without voting. Tap or click an image to vote for it. Panes stack on portrait phones.
-* **Ratings:** votes feed a Bradley-Terry model (ghost-player prior, 1500 = average). Sort the grid by **Rating**, or enable the **Rating** field in Label Mode to see `★rating · votes` on voted cards.
-* **Scoreboard:** per axis, win % (ties count half) with 95% Wilson intervals and the mean rating of the items with that value. Only votes where exactly one axis differs are attributed (a hidden difference such as the VAE blocks attribution; the footer lists the most common extra differences). Rows with fewer than 3 pairs read "not enough data". Seed is a noise-floor block: if seeds alone "win" as much as settings do, the other numbers are noise. Copy JSON / Copy CSV export the board.
-* **Storage:** votes live in the session `manifest.json` as a top-level `comparisons` list `[{a, b, winner, ts, mode, blind?}]` (`a`/`b` are item ids, `a` is the left/top item, `winner` is `a`, `b` or `tie`). Old manifests without the field work unchanged. Votes for items that were deleted stay on disk and are ignored. Every manifest writer (generation saves, the remote VAE worker, the legacy `save_manifest` route) keeps the on-disk `comparisons` untouched. A directory re-scan (`scan_directory`) regenerates item ids, so votes of a scanned session are not carried over.
-* **Routes:** `POST /config_tester/save_comparisons` `{session_name, append: [...], remove: ["ts:a:b", ...]}` and `POST /config_tester/clear_comparisons` `{session_name}`. They only touch `comparisons`.
-* **Caveat:** win % across mixed opponents is not a controlled effect size; pair choice is biased by the filter and the low-vote preference. Use it to rank candidates, then confirm with a matched one-axis run.
-
 ## Keyboard Shortcuts
 
 ### Dashboard
@@ -1525,7 +1580,7 @@ The star is an absolute signal that says little about which *setting* wins. Comp
 | `0` | Reset zoom to 1:1 |
 | `F` | Auto-fit first row to viewport width |
 | `Escape` | Close active modal/popup (priority: Revision > Scoreboard > Analytics > Settings > Filters) |
-| `C` | Open Compare mode (blind pairwise review, see below) |
+| `C` | Open Compare mode (blind pairwise review, see [Pairwise Review](#pairwise-review-blind-ab-compare--scoreboard)) |
 
 ### Dashboard: Compare mode (blind pairwise review)
 | Shortcut | Action |
@@ -1623,28 +1678,20 @@ This is a **hybrid application** with three layers:
 ### Development / Tests
 
 ```bash
-# Python unit tests (ComfyUI + torch are stubbed): needs pytest, numpy, pillow
 pip install -r tests/requirements-ci.txt
-python -m pytest tests/ -q -ra --ignore=tests/e2e     # 137 passed, 15 skipped without torch
-
-# With real torch (e.g. ComfyUI's python), the 15 `requires_torch` tests run too.
-# USCG_REQUIRE_TORCH=1 makes them fail instead of skip if torch is missing:
-USCG_REQUIRE_TORCH=1 python -m pytest tests/ -q -ra --ignore=tests/e2e   # 152 passed
-
-# Dashboard SPA browser smoke test (Playwright, Chromium, no ComfyUI needed)
-pip install -r tests/e2e/requirements.txt
-python -m playwright install chromium
-python -m pytest tests/e2e -q -ra
+python -m pytest tests/ -q -ra --ignore=tests/e2e     # Python tests, ComfyUI + torch stubbed
+node --test tests/js/                                 # Dashboard JS unit tests
+python -m pytest tests/e2e -q -ra --browser chromium  # Dashboard SPA smoke test (needs tests/e2e/requirements.txt)
 ```
 
-GitHub Actions (`.github/workflows/tests.yml`) runs four jobs on every push and PR: `pytest-stubs`, `pytest-torch` (CPU torch), `js-syntax` (`node --check` on `web/` and `resources/`, the assembled Dashboard page, and `node --test tests/js/` when that folder exists) and `e2e-dashboard`.
+Full instructions, the CI jobs and the pre-PR checklist: [CONTRIBUTING.md](CONTRIBUTING.md#running-tests).
 Tests live in `tests/` and must not contain network or process-spawning code (no `socket`, `http.server`, `subprocess`, `urllib`): `tests/` ships in the registry zip and is yara-scanned.
 
 ### Key Gotchas for AI Development
 
 1. **Config Builder output is ALWAYS wrapped** — `config_builder_node.py` outputs `{"configs": [...], "_distribution": {...}}`. The `sampler_node.py` MUST unwrap the `"configs"` key before passing to `expand_configs()`. If you add new top-level keys to the config output, update the extraction logic in `sampler_node.py` lines 269-286.
 
-2. **Two independent config-to-JSON implementations** — `convertStateToConfigs()` in `conf-builder-utilities.js` (JS preview) and `generate_config()` in `config_builder_node.py` (Python output) both transform `node.state` into config JSON. **Both must stay in sync** when adding new config fields.
+2. **One config-to-JSON implementation**: `UltimateConfigBuilder.state_to_configs_json` in `config_builder_node.py` is the single source of truth. The Builder preview POSTs the state to `/configbuilder/preview`, which runs the same function; there is no JS converter any more.
 
 3. **Dashboard runs in an iframe** — The dashboard HTML is set via `iframe.srcdoc`. All JS/CSS is inlined (no external requests). Communication between the parent ComfyUI page and the iframe uses `postMessage()`. The `dashboard.js` file bridges server events to iframe messages.
 
@@ -1666,7 +1713,9 @@ Tests live in `tests/` and must not contain network or process-spawning code (no
 
 12. **ComfyUI Registry security** — No `import requests`, no `subprocess`/`eval`/`exec`, no custom file-serving endpoints. Use `urllib.request` for HTTP and ComfyUI's `/view` endpoint for serving files. See `ProjectStructure.md` for full rules.
 
-13. **Job plan and config fingerprint** — `run_generation_loop` walks a flat `job_plan` (`config_utils.build_job_plan`, one entry per job, binding `conf, conf_idx, job_idx, job, w, h, batch_idx`) instead of nested resolution x config loops; `order_job_plan` reorders it for `job_order: minimize_reloads` (stable sort on first-appearance ranks). `check_if_job_completed(..., preview=False)` keeps its positional signature (the distributed companion calls it positionally); the new `preview` flag is keyword-only and previews/full items never match each other. `config_fingerprint()` is the identity of a grid cell (stored as `config_fp` on every new item; preview items add `preview`, `preview_of`, `full_*`; upscaled items add `base_fp`). Bump `FP_VERSION` (and keep the old reader) if you ever change its payload; a golden-value test pins it. The main-loop body still sits under an `if True:` only to keep its indentation (diff size) after flattening. Preview/promotion/job-order features are ignored by the distributed path.
+13. **Job plan and config fingerprint** — `run_generation_loop` walks a flat `job_plan` (`config_utils.build_job_plan`, one entry per job, binding `conf, conf_idx, job_idx, job, w, h, batch_idx`) instead of nested resolution x config loops; `order_job_plan` reorders it for `job_order: minimize_reloads` (stable sort on first-appearance ranks). `check_if_job_completed(..., preview=False)` keeps its positional signature (the distributed companion calls it positionally); the new `preview` flag is keyword-only and previews/full items never match each other. `config_fingerprint()` is the identity of a grid cell (stored as `config_fp` on every new item; preview items add `preview`, `preview_of`, `full_*`; upscaled items add `base_fp`). Bump `FP_VERSION` (and keep the old reader) if you ever change its payload; a golden-value test pins it. Preview/promotion/job-order features are ignored by the distributed path.
+
+14. **More gotchas live in ProjectStructure.md**: the full list (36 gotchas: manifest writers, pinned_clip, sweeps, js_files order, ...) is in ProjectStructure.md, Critical Development Gotchas.
 
 ### File Dependencies (Import Graph)
 
@@ -1683,16 +1732,19 @@ sampler_node.py
     → conditioning_cache.py (ConditioningCache)
     → remote_vae.py (RemoteVAEDecodeWorker)
     → html_generator.py (get_html_template)
-    → distribution_manager.py (DistributionManager)
-    → distribution_worker.py (WorkerThread)
+    → distribution.py (companion facade; the distribution code lives in ComfyUI-USCG-Distributed)
+    → image_metrics.py (optional per-image metrics)
 
 config_builder_node.py
   → lora_utils.py (trigger word lookup)
 
 __init__.py
   → all node classes
-  → distribution_routes.py (distribution API endpoints)
   → html_generator.py (on-demand HTML generation)
+  → run_api.py (POST /config_tester/run helpers)
+  → metrics_runner.py (background metrics job)
+  → workflow_sweep.py, workflow_sweep_runner.py, workflow_sweep_collect.py (Workflow Sweep)
+  → upscale_runner.py (dashboard upscale job)
   → metadata_packer.py (export favorites)
   → directory_scanner.py (scan external directories)
   → manifest_utils.py (save/load manifests)
@@ -1703,7 +1755,10 @@ __init__.py
 | Event Name | Sender | Data | Purpose |
 |---|---|---|---|
 | `ultimate_grid.update` | `generation_orchestrator.py` | `{session_name, node, manifest, meta, new_items}` | New images generated |
-| `ultimate_grid.progress` | `generation_orchestrator.py` | `{session_name, progress_pct, eta_str, ...}` | ETA/progress updates |
+| `ultimate_grid.update_data` | `generation_orchestrator.py`, `upscale_runner.py` | per-item replacement payload | An existing item changed (for example a preview replaced by its full image) |
+| `ultimate_grid.progress` | `generation_orchestrator.py` | `{session_name, progress_pct, eta_str, ...}` | ETA/progress updates. Optional `phase`: `upscaling` (deferred upscales) or `sweep` (Workflow Sweep, which adds `sweep_id, state, errors`) |
+| `ultimate_grid.next_run_seeds` | `generation_orchestrator.py` | `{node, seeds}` | Seeds the next run will use |
+| `ultimate_grid.metrics_progress` | `metrics_runner.py` | `{session_name, job_id, status, completed, total}` | Progress of a "compute metrics for this session" job |
 | `ultimate_grid.distribution_status` | `generation_orchestrator.py` | `{session_name, workers, stats}` | Distribution status |
 
 ### Testing Changes
@@ -1713,6 +1768,18 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 ---
 
 ## 📝 Changelog
+
+### Update 11/4/26: Standalone dashboard, pairwise review, image metrics, preview pass, workflow sweeps
+* 📱 **Standalone Dashboard + Run API:** open the dashboard as a normal web page at `/config_tester/dashboard?session=<name>` (phone, second monitor) with live updates over its own websocket. `POST /config_tester/run` and `GET /config_tester/run_status` start and track headless runs (Discord bot, curl) without any workflow JSON.
+* ⚖️ **Pairwise Review:** blind A/B compare mode (`C` key) with matched, same-settings, one-axis and random pairing, Bradley-Terry ratings (Sort by Rating) and a per-setting scoreboard with 95% intervals. Votes are stored in the session manifest under `comparisons`.
+* 📏 **Image Metrics (optional):** a Run Settings checkbox stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image. Sort, filter and label by them in the Dashboard, or compute them for older sessions from the cog panel.
+* 🧭 **Job Order & Preview Pass:** `Minimize model/LoRA reloads` reorders the whole job list so each model and LoRA stack loads as few times as possible. Preview Pass renders the whole grid cheaply first; reject the losers and only the survivors render at full quality (PREVIEW badge, Pass filter, "Full pass for survivors" button).
+* 🔀 **Workflow Sweep:** sweep any ComfyUI workflow exported as API JSON. Bind any input as an axis (prompts, LoRAs, resolution, seeds, any widget), dry run it, then pause, resume or cancel; every image lands in a normal USCG session.
+* ⚡ **Faster prompt encoding:** the text encoder now loads once per pre-encode pass instead of once per prompt, and the new `te_batch_size` setting encodes several prompts per pass for MOSS-Image, Krea 2 and Qwen-Image (off by default, self-checked, OOM-safe).
+* 🧩 **Skip Layer Guidance:** Builder option that wraps ComfyUI's `SkipLayerGuidanceDiTSimple` for DiT models (MOSS-Image defaults: block 22, 0-50%).
+* 🟦 **MOSS-Image / Flux.2 / Krea 2 fixes:** the empty latent follows the model's latent format (16 px per cell for the Flux.2 family), so these models render at the size you asked for and at stock-workflow speed. The CLIP type is picked for the detected family (`moss_image`).
+* 📂 **Examples:** [`examples/`](examples/README.md) has one ready workflow per model family (SDXL/Illustrious, Anima, Z-Image Turbo, Krea 2, Flux.2 Klein 9B, MOSS-Image).
+* 🧪 **Tests & CI:** GitHub Actions runs the Python tests (stubbed and with real CPU torch), JS syntax checks, JS unit tests and a Playwright smoke test of the Dashboard on every push and PR.
 
 ### Update 11/3/26 — Additional Random Seeds finished, LTX prompt arrays
 * 🌱 **Additional Random Seeds:** Run Settings control (0-100) now has full defaults/migration and tests; extra seeds are deterministic per base seed. Thanks to DRuggeri (PR #21).

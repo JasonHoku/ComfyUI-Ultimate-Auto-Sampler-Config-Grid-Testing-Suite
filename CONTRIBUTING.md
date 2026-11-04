@@ -11,7 +11,7 @@ Before diving in, read these files in the repo root:
 | File | What it covers |
 |---|---|
 | `README.md` | What the project does, how the three nodes connect, and user-facing features |
-| `ProjectStructure.md` | Every file's purpose, all API routes with line numbers, data shapes, communication patterns, dependency graph, and 28 development gotchas |
+| `ProjectStructure.md` | Every file's purpose, all API routes (method, body, purpose), data shapes, communication patterns, dependency graph, and 36 development gotchas |
 | `AI-CONTEXT.md` | Internal dev notes: architecture layers, critical codepaths, field naming rules, config data flow, common tasks |
 
 ---
@@ -46,20 +46,33 @@ pip install -r requirements.txt
 ```bash
 # Python unit tests (ComfyUI + torch are stubbed): needs pytest, numpy, pillow
 pip install -r tests/requirements-ci.txt
-python -m pytest tests/ -q -ra --ignore=tests/e2e     # 137 passed, 15 skipped without torch
+python -m pytest tests/ -q -ra --ignore=tests/e2e     # 499 passed, 16 skipped without torch (measured 11/4/26)
 
-# With real torch (e.g. ComfyUI's python), the 15 `requires_torch` tests run too.
+# With real torch (e.g. ComfyUI's python), the 16 `requires_torch` tests run too.
 # USCG_REQUIRE_TORCH=1 makes them fail instead of skip if torch is missing:
-USCG_REQUIRE_TORCH=1 python -m pytest tests/ -q -ra --ignore=tests/e2e   # 152 passed
+USCG_REQUIRE_TORCH=1 python -m pytest tests/ -q -ra --ignore=tests/e2e
+
+# Dashboard JS unit tests (node:test, no browser)
+node --test tests/js/
 
 # Dashboard SPA browser smoke test (Playwright, Chromium, no ComfyUI needed)
 pip install -r tests/e2e/requirements.txt
 python -m playwright install chromium
-python -m pytest tests/e2e -q -ra
+USCG_REQUIRE_E2E=1 python -m pytest tests/e2e -q -ra --browser chromium
 ```
 
-GitHub Actions (`.github/workflows/tests.yml`) runs four jobs on every push and PR: `pytest-stubs`, `pytest-torch` (CPU torch), `js-syntax` (`node --check` on `web/` and `resources/`, the assembled Dashboard page, and `node --test tests/js/` when that folder exists) and `e2e-dashboard`.
+GitHub Actions (`.github/workflows/tests.yml`) runs four jobs on every push and PR:
+
+| Job id | What it runs |
+|---|---|
+| `pytest-stubs` | the Python tests with ComfyUI and torch stubbed (asserts torch is NOT installed) |
+| `pytest-torch` | the same tests with real CPU torch and `USCG_REQUIRE_TORCH=1` |
+| `js-syntax` | JS syntax checks (see below), the assembled Dashboard page, and `node --test tests/js/` |
+| `e2e-dashboard` | the Playwright smoke test (`USCG_REQUIRE_E2E=1`, Chromium) |
+
 Tests live in `tests/` and must not contain network or process-spawning code (no `socket`, `http.server`, `subprocess`, `urllib`): `tests/` ships in the registry zip and is yara-scanned.
+
+`tests/test_docs_consistency.py` keeps the docs honest: it fails when a route, event, source file or CI job exists in the repo but is missing from `ProjectStructure.md` / this file, when a README anchor link does not resolve, or when the TOC misses a section. Update the doc it names.
 
 PRs that change Python logic should add tests where it's reasonable to do so.
 
@@ -67,29 +80,21 @@ PRs that change Python logic should add tests where it's reasonable to do so.
 
 ## JS syntax check
 
-The Builder UI and Dashboard are plain JavaScript (no build step). You can catch syntax errors quickly with Node:
+The Builder UI and Dashboard are plain JavaScript (no build step). CI runs these checks (the `js-syntax` job); run the same loops locally from the repo root:
 
 ```bash
-cd web/conf_builder
-node --check conf-builder-main.js
-node --check conf-builder-config-management.js
-node --check conf-builder-utilities.js
-node --check conf-builder-ui-components.js
-node --check conf-builder-distribution.js
+# web/**/*.js are ES modules
+for f in $(find web -name '*.js'); do
+  node --input-type=module --check < "$f" || { echo "FAIL $f"; break; }
+done
+
+# resources/*.js are plain scripts
+for f in resources/*.js; do
+  node --check "$f" || { echo "FAIL $f"; break; }
+done
 ```
 
-The dashboard JS files can also be checked the same way:
-
-```bash
-cd resources
-node --check logic_utils.js
-node --check logic_ui.js
-node --check logic_virtual.js
-node --check logic_pipeline.js
-node --check logic_events.js
-node --check logic_init.js
-node --check logic_state.js
-```
+The Dashboard files in `resources/` are inlined into ONE script (see `js_files` in `html_generator.py`), so a duplicate top-level name only shows up in the assembled page. The `js-syntax` job therefore also builds the page with `html_generator.get_html_template()` and syntax-checks every inline script body (the snippet is in `.github/workflows/tests.yml`).
 
 ---
 
@@ -97,7 +102,7 @@ node --check logic_state.js
 
 **The Builder UI is a DOM widget on the Python node.** Its entire state is serialized to a single `lora_config` STRING widget as JSON. Python's `generate_config()` reads only that widget — all other `INPUT_TYPES` entries are vestigial.
 
-**State → configs_json transformation:** All state-to-output transformation logic lives in `state_to_configs_json` (a `@staticmethod` on `UltimateConfigBuilder` in `config_builder_node.py`, around line 524). Both runtime (`generate_config`, line ~837) and the preview endpoint (`POST /configbuilder/preview`) call this single function. **Do not add a JS-side equivalent transformer** — that pattern existed historically (`convertStateToConfigs`) and was a recurring source of drift bugs; it was deliberately removed in favor of the single source of truth in Python.
+**State → configs_json transformation:** All state-to-output transformation logic lives in `state_to_configs_json` (a `@staticmethod` on `UltimateConfigBuilder` in `config_builder_node.py`). Both runtime (`generate_config`) and the preview endpoint (`POST /configbuilder/preview`) call this single function. **Do not add a JS-side equivalent transformer** — that pattern existed historically (`convertStateToConfigs`) and was a recurring source of drift bugs; it was deliberately removed in favor of the single source of truth in Python.
 
 When adding a new state field that should appear in `configs_json`:
 1. Add the field to `state_to_configs_json` in `config_builder_node.py`. Make sure tests in `tests/test_state_to_configs_json.py` cover the new field.
@@ -134,8 +139,9 @@ When adding a new state field that should appear in `configs_json`:
 
 Before submitting:
 
-- [ ] `python -m pytest tests/ -v` passes
-- [ ] JS syntax checks pass (`node --check` on changed files)
+- [ ] `python -m pytest tests/ -q --ignore=tests/e2e` passes (and `node --test tests/js/`)
+- [ ] JS syntax checks pass (the two loops above, plus the assembled-page check for `resources/` changes)
+- [ ] New routes, events or source files are added to `ProjectStructure.md` (`tests/test_docs_consistency.py` checks this)
 - [ ] No regressions in existing features
 - [ ] For new config fields: `state_to_configs_json` updated in Python, default state and migration backfill added in `conf-builder-main.js`, and UI read/write added in `conf-builder-config-management.js`
 - [ ] For user-facing features: `README.md` updated

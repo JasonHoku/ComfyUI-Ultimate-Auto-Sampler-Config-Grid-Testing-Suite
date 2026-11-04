@@ -30,75 +30,85 @@ Reference: https://blog.comfy.org/p/comfyui-2025-jan-security-update
 
 ```text
 ComfyUI-Ultimate-Sampler-Grid/
-├── __init__.py                  # Server Routes & Node Mappings (933 lines)
-├── sampler_node.py              # Main "Sampler Grid" Node (314 lines)
+├── __init__.py                  # Server Routes & Node Mappings (1597 lines)
+├── sampler_node.py              # Main "Sampler Grid" Node (401 lines)
 ├── dashboard_node.py            # "Dashboard Viewer" Node (68 lines)
-├── config_builder_node.py       # "Config Builder" Node + API endpoints (1167 lines)
+├── config_builder_node.py       # "Config Builder" Node + API endpoints + state_to_configs_json (1578 lines)
 ├── json_text_node.py            # "Smart JSON" Node (60 lines)
 │
-├── generation_orchestrator.py   # The "Conductor" (Loop Logic, 2281 lines)
-├── image_generation.py          # KSampler & VAE Wrappers (748 lines)
-├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters (ADAPTERS registry: node ids/signatures pinned to pack shas, loader defaults + `prefer`, `scale`, `max_batch`, `vram_mb`; `adapter_status()` reports `problem`)
-├── metrics_runner.py            # Background job: compute metrics for an existing session (CPU, manifest lock)
-├── model_loader.py              # Checkpoint/LoRA/VAE/GGUF Loading Logic (805 lines)
-├── model_cache.py               # 3-Tier Model Caching System (900 lines)
-├── remote_vae.py                # Remote VAE Offloading (340 lines)
+├── generation_orchestrator.py   # The "Conductor" (Loop Logic, job plan, preview pass, 3693 lines)
+├── image_generation.py          # KSampler & VAE Wrappers (1321 lines)
+├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters (ADAPTERS registry: node ids/signatures pinned to pack shas, loader defaults + `prefer`, `scale`, `max_batch`, `vram_mb`; `adapter_status()` reports `problem`) (668 lines)
+├── metrics_runner.py            # Background job: compute metrics for an existing session (CPU, manifest lock) (167 lines)
+├── model_loader.py              # Checkpoint/LoRA/VAE/GGUF Loading Logic, latent geometry, CLIP type (907 lines)
+├── model_cache.py               # 3-Tier Model Caching System (935 lines)
+├── remote_vae.py                # Remote VAE decode worker + facade for the RemoteVAE companion (314 lines)
+├── florence2_hires.py           # Florence2 Hi-Res Fix: targeted-region inpaint, soft dependency (899 lines)
+├── ltx_video_generation.py      # LTX 2.3 video pipeline + _call_node helper for V3/V1 nodes (716 lines)
 │
-├── batch_encoding.py            # Batch CLIP Encoding with Combinator Support (378 lines)
+├── batch_encoding.py            # Batch CLIP Encoding, Combinators, pinned_clip, Text-Encoder Batching (878 lines)
 ├── conditioning_cache.py        # Disk-based Conditioning Cache (372 lines)
-├── lora_utils.py                # LoRA Searching & Validation (481 lines)
-├── trigger_words.py             # CivitAI Trigger Word Fetching & Prompt Assembly (377 lines)
-├── config_utils.py              # Config Parsing, Expansion & Cartesian Products (674 lines)
-├── directory_scanner.py         # External Directory Session Scanner (463 lines)
+├── lora_utils.py                # LoRA Searching & Validation (468 lines)
+├── trigger_words.py             # Trigger Word Prompt Assembly (377 lines)
+├── config_utils.py              # Config Parsing, Expansion, Cartesian Products, job plan + fingerprints (1108 lines)
+├── directory_scanner.py         # External Directory Session Scanner (609 lines)
 ├── metadata_packer.py           # PNG/WebP Metadata Embedding for Exports (561 lines)
-├── manifest_utils.py            # Manifest Read/Write/Merge Helpers (120 lines)
-├── network_utils.py             # ALL outbound network requests (CivitAI, HuggingFace VAE, Distribution LAN) (280 lines)
-├── upscale_runner.py            # Dashboard async upscaling background thread (371 lines)
-├── workflow_sweep.py            # Workflow Sweep core: parse API workflow, bindings -> jobs, prompt substitution, fingerprints (pure, no torch/server)
-├── workflow_sweep_runner.py     # Workflow Sweep runner: ComfyBridge (in-process post_prompt mirror), windowed feeder thread, pause/resume/cancel, route helpers
-├── workflow_sweep_collect.py    # USCGSweepCollect output node: saves each job's image + manifest item into the USCG session
-├── html_generator.py            # Reads /resources/ to build the Dashboard HTML (57 lines)
-├── run_api.py                   # Pure helpers for POST /config_tester/run + run_status (no server imports)
-│
-├── distribution_manager.py      # Distributed Job Queue Coordinator/Master (634 lines)
-├── distribution_worker.py       # Worker Thread for Remote Processing (813 lines)
-├── distribution_routes.py       # Distribution REST API Endpoints (640 lines)
+├── manifest_utils.py            # Manifest Read/Write/Merge Helpers, comparisons (316 lines)
+├── upscale_runner.py            # Dashboard async upscaling background thread (642 lines)
+├── civitai.py                   # Facade for the ComfyUI-USCG-CivitAI companion, no network code here (40 lines)
+├── distribution.py              # Facade for the ComfyUI-USCG-Distributed companion, no network code here (107 lines)
+├── workflow_sweep.py            # Workflow Sweep core: parse API workflow, bindings -> jobs, prompt substitution, fingerprints (pure, no torch/server) (969 lines)
+├── workflow_sweep_runner.py     # Workflow Sweep runner: ComfyBridge (in-process post_prompt mirror), windowed feeder thread, pause/resume/cancel, route helpers (912 lines)
+├── workflow_sweep_collect.py    # USCGSweepCollect output node: saves each job's image + manifest item into the USCG session (140 lines)
+├── html_generator.py            # Reads /resources/ to build the Dashboard HTML (66 lines)
+├── run_api.py                   # Pure helpers for POST /config_tester/run + run_status, no server imports (144 lines)
+├── conftest.py                  # Registry import stub: lets pytest import this package without ComfyUI (213 lines)
+├── pytest.ini                   # --import-mode=importlib, testpaths, markers
 │
 ├── web/                         # [ComfyUI Integration Layer]
-│   ├── dashboard.js             # Registers Dashboard Node & Message Handling (432 lines)
+│   ├── dashboard.js             # Registers Dashboard Node & Message Handling (489 lines)
 │   ├── smart_json_text.js       # Registers JSON Node & Syntax Highlighting (239 lines)
+│   ├── sampler_help_note.js     # Help note on the Sampler Grid node (48 lines)
 │   └── conf_builder/            # [Config Builder UI Modules]
-│       ├── conf-builder-main.js           # Main entry, widget registration (608 lines)
-│       ├── conf-builder-ui-components.js  # UI rendering (dropdowns, sliders, cards) (944 lines)
-│       ├── conf-builder-config-management.js # Save/Load/Duplicate config logic (4975 lines)
-│       ├── conf-builder-utilities.js      # State-to-JSON conversion, iteration counting (958 lines)
-│       └── conf-builder-distribution.js   # Distribution settings UI (workers, toggles) (474 lines)
+│       ├── conf-builder-main.js           # Main entry, widget registration, default state + migrations (779 lines)
+│       ├── conf-builder-ui-components.js  # UI rendering (dropdowns, sliders, cards) (972 lines)
+│       ├── conf-builder-config-management.js # Save/Load/Duplicate config logic, all Builder rendering (7736 lines)
+│       ├── conf-builder-utilities.js      # Model-list cache, iteration counting, LoRA string helpers (866 lines)
+│       ├── conf-builder-distribution.js   # Distribution settings UI (workers, toggles) (620 lines)
+│       ├── conf-builder-workflow-sweep.js # Workflow Sweep UI (load API workflow, axes, dry run, start/pause/cancel) (744 lines)
+│       └── conf-builder-readme.md         # Notes on the Builder module split (134 lines)
 │
-├── resources/                   # [The Dashboard SPA Core]
-│   ├── template.html            # HTML Skeleton for the generated report (662 lines)
-│   ├── report.css               # Styling (Infinite Canvas, Cards, Modals) (1642 lines)
-│   ├── logic_init.js            # Bootstrapper (Load JSON, Init State) (104 lines)
-│   ├── logic_standalone.js      # Standalone-page mode: own websocket, run-API GENERATE NEW, openStandalone() (loaded last)
-│   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (104 lines)
-│   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (510 lines)
-│   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable)
+├── resources/                   # [The Dashboard SPA Core] (listed in html_generator.js_files order)
+│   ├── template.html            # HTML Skeleton for the generated report (1005 lines)
+│   ├── report.css               # Styling (Infinite Canvas, Cards, Modals) (2062 lines)
+│   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (149 lines)
+│   ├── logic_utils.js           # Helpers (Export, Scan, Session loading) (1073 lines)
+│   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable) (538 lines)
 │   ├── logic_wfparams.js        # Workflow Sweep wf_params helpers (keys, numeric detection, match, short labels); Quick/Logic Filter + label overlay use them (pure, node-testable)
-│   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters
-│   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (925 lines)
-│   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (1780 lines)
-│   ├── logic_upscale_modal.js   # Dashboard upscale modal (inline config, presets, async upscale) (380 lines)
-│   ├── logic_events.js          # Interaction Handler (Hotkeys, API calls) (91 lines)
-│   └── logic_utils.js           # Helpers (Export, Scan, Session loading) (599 lines)
+│   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (2907 lines)
+│   ├── logic_upscale_modal.js   # Dashboard upscale modal (inline config, presets, async upscale) (1163 lines)
+│   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (1092 lines)
+│   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (831 lines)
+│   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters (824 lines)
+│   ├── logic_events.js          # Interaction Handler (Hotkeys, API calls) (101 lines)
+│   ├── logic_init.js            # Bootstrapper (Load JSON, Init State) (112 lines)
+│   └── logic_standalone.js      # Standalone-page mode: own websocket, run-API GENERATE NEW, openStandalone() (loaded last, 170 lines)
 │
+├── tests/                       # pytest suite (conftest stubs ComfyUI + torch, fixtures/ holds API-workflow samples)
+├── tests/e2e/                   # Playwright smoke test of the Dashboard SPA (own requirements.txt)
+├── tests/js/                    # node:test unit tests for pure Dashboard logic
 ├── examples/                    # Ready-to-load workflows per model family (+ README with the files each needs)
+├── .github/workflows/           # tests.yml (CI: pytest stubbed + torch, JS syntax, e2e), publish.yml
 ├── docs/plans/                  # Design docs and implementation plans
 ├── pyproject.toml               # Package metadata (36 lines)
-├── requirements.txt             # Python deps — diffusers, piexif
+├── requirements.txt             # Python deps: diffusers, piexif
 ├── .gitignore
 ├── README.md
 ├── Roadmap.md
 └── SamplrConfig-Basic-Workflow.json  # Example workflow for quick start
 ```
+
+Distribution, CivitAI and Remote-VAE network code lives in the companion plugins (ComfyUI-USCG-Distributed, -CivitAI, -RemoteVAE); `distribution.py` and `civitai.py` are thin facades.
 
 **Output Directory Structure (Generated at Runtime):**
 ```text
@@ -171,7 +181,7 @@ ComfyUI/output/
 
 ### **Node Class Mappings**
 
-Defined in `__init__.py` at line 920:
+Defined at the end of `__init__.py`:
 
 | Internal Name | Python Class | Purpose |
 |---|---|---|
@@ -179,6 +189,7 @@ Defined in `__init__.py` at line 920:
 | `UltimateGridDashboard` | `SamplerConfigDashboardViewer` | Dashboard viewer — renders iframe with results |
 | `UltimateConfigBuilder` | `UltimateConfigBuilder` | Visual config builder — outputs `configs_json` string |
 | `SmartJSONText` | `SmartJSONTextNode` | JSON text widget with syntax highlighting |
+| `USCGSweepCollect` | `USCGSweepCollect` | Workflow Sweep output node (`workflow_sweep_collect.py`): saves each job's image + manifest item into the USCG session |
 
 `WEB_DIRECTORY = "./web"` — tells ComfyUI to serve `web/` files at `/extensions/`.
 
@@ -186,54 +197,68 @@ Defined in `__init__.py` at line 920:
 
 ### **API Routes Reference**
 
-All routes registered via `PromptServer.instance.routes`.
+All routes registered via `PromptServer.instance.routes`. One row per route this package registers; `tests/test_docs_consistency.py` fails when a registered route is missing here.
 
 **Config Builder APIs** (registered in `__init__.py` and `config_builder_node.py`):
 
-| Method | Route | Handler File | Line | Purpose |
+| Method | Route | File | Body / query | Purpose |
 |---|---|---|---|---|
-| GET | `/configbuilder/list_configs` | `__init__.py` | 46 | List saved config preset filenames |
-| POST | `/configbuilder/save_config` | `__init__.py` | 58 | Save config preset `{name, data}` |
-| POST | `/configbuilder/load_config` | `__init__.py` | 108 | Load config preset `{name}` |
-| GET | `/configbuilder/custom_resolutions` | `__init__.py` | 86 | Get custom resolution presets |
-| POST | `/configbuilder/custom_resolutions` | `__init__.py` | 97 | Save custom resolution presets |
-| POST | `/configbuilder/lookup_triggers` | `config_builder_node.py` | 742 | Bulk LoRA trigger word lookup `{loras: [...]}` |
-| POST | `/configbuilder/lookup_lora_metadata` | `config_builder_node.py` | 768 | Full CivitAI metadata for LoRA `{lora_name}` |
-| POST | `/configbuilder/lookup_model_metadata` | `config_builder_node.py` | 916 | Full CivitAI metadata for model `{model_name, model_type}` |
-| GET | `/configbuilder/model_lists` | `config_builder_node.py` | 1029 | All model/sampler/scheduler/VAE/upscale lists |
-| POST | `/config_tester/compute_metrics` | `__init__.py` | - | Start the background metrics job for a session (body: `{session_name, overwrite?}`) |
-| GET | `/config_tester/metrics_status` | `__init__.py` | - | Job progress (`?job_id=`) |
-| POST | `/config_tester/cancel_metrics` | `__init__.py` | - | Cancel a metrics job (body: `{job_id}`) |
-| GET | `/configbuilder/metrics_info` | `config_builder_node.py` | - | Built-in metric names + optional scorer-pack install status (Run Settings hint) |
-| POST | `/configbuilder/refresh_models` | `config_builder_node.py` | 1093 | Signal frontend cache clear |
-| GET | `/configbuilder/get_lora_triggers` | `config_builder_node.py` | 1115 | Get triggers for single LoRA |
-| POST | `/configbuilder/save_lora_triggers` | `config_builder_node.py` | 1138 | Save edited triggers for LoRA |
+| GET | `/configbuilder/list_configs` | `__init__.py` | none | List saved config preset filenames (JSON array) |
+| POST | `/configbuilder/save_config` | `__init__.py` | `{name, data}` | Save a config preset |
+| POST | `/configbuilder/load_config` | `__init__.py` | `{name}` | Load a config preset |
+| GET | `/configbuilder/custom_resolutions` | `__init__.py` | none | Get custom resolution presets |
+| POST | `/configbuilder/custom_resolutions` | `__init__.py` | JSON body, stored as sent | Save custom resolution presets |
+| GET | `/configbuilder/upscale_presets` | `__init__.py` | none | Upscale pipeline presets (`{"presets": []}` when none), shared by Builder and Dashboard |
+| POST | `/configbuilder/upscale_presets` | `__init__.py` | JSON body, stored as sent (400 when empty) | Save upscale pipeline presets |
+| GET | `/configbuilder/config_section_presets` | `__init__.py` | none | Config array presets (`{"presets": []}` when none) |
+| POST | `/configbuilder/config_section_presets` | `__init__.py` | JSON body, stored as sent (400 when empty) | Save config array presets |
+| GET | `/configbuilder/section_presets` | `__init__.py` | `?section=` one of `models`, `loras`, `prompts` (400 otherwise) | Presets for one Builder section |
+| POST | `/configbuilder/section_presets` | `__init__.py` | `?section=` as above, JSON body stored as sent | Save presets for one Builder section |
+| POST | `/configbuilder/preview` | `config_builder_node.py` | `{state}` (the Builder state; 400 when missing) | Runs `state_to_configs_json(state)`, returns `{configs_json}`; what the JSON Preview panel shows |
+| POST | `/configbuilder/lookup_triggers` | `config_builder_node.py` | `{loras: [...]}` | Bulk LoRA trigger word lookup |
+| POST | `/configbuilder/lookup_lora_metadata` | `config_builder_node.py` | `{lora_name, force_refresh?}` | Full CivitAI metadata for a LoRA (via the companion facade) |
+| POST | `/configbuilder/lookup_model_metadata` | `config_builder_node.py` | `{model_name, model_type? (default checkpoint), force_refresh?}` | Full CivitAI metadata for a model |
+| GET | `/configbuilder/model_lists` | `config_builder_node.py` | none | All model/sampler/scheduler/VAE/upscale lists |
+| GET | `/configbuilder/model_counts` | `config_builder_node.py` | none | File counts per model category (fast, no listing) |
+| GET | `/configbuilder/metrics_info` | `config_builder_node.py` | none | Built-in metric names + optional scorer-pack install status (Run Settings hint) |
+| POST | `/configbuilder/refresh_models` | `config_builder_node.py` | none | Signal frontend cache clear |
+| GET | `/configbuilder/get_lora_triggers` | `config_builder_node.py` | `?lora_name=` | Get triggers for a single LoRA |
+| POST | `/configbuilder/save_lora_triggers` | `config_builder_node.py` | `{lora_name, triggers}` | Save edited triggers for a LoRA |
 
 **Dashboard/Tester APIs** (registered in `__init__.py`):
 
-| Method | Route | Line | Purpose |
-|---|---|---|---|
-| POST | `/config_tester/delete_session` | 142 | Delete session folder `{session_name}` |
-| GET | `/config_tester/list_sessions` | 174 | List all sessions with metadata (name, count, thumbnail, mtime) |
-| POST | `/config_tester/save_changes` | 234 | Delta save — only changed items `{session_name, changed_items}` |
-| POST | `/config_tester/save_comparisons` | - | Pairwise-review votes `{session_name, append, remove}`; only touches manifest `comparisons` |
-| POST | `/config_tester/clear_comparisons` | - | Delete all votes of a session `{session_name}` |
-| POST | `/config_tester/save_manifest` | 308 | Full merge save `{session_name, manifest}` |
-| POST | `/config_tester/get_session_html` | 390 | Generate dashboard HTML on-demand `{session_name, node_id}` |
-| GET | `/config_tester/dashboard` | - | Dashboard SPA as a top-level page, optional `?session=` (standalone mode, `USCG_STANDALONE`, own websocket via `resources/logic_standalone.js`) |
-| POST | `/config_tester/run` | - | Headless run: `{configs_json \| config_name, session_name?, overwrite_existing?, force? (default true), front?, client_id?}` -> builds Generator+Dashboard prompt, enqueues in-process like `/prompt`. Helpers in `run_api.py` |
-| GET | `/config_tester/run_status` | - | `?prompt_id=` -> `pending/running/success/error` + session/dashboard_url/item_count |
-| POST | `/config_tester/export_favorites` | 435 | Export favorited images with options (metadata, workflow, organize) |
-| POST | `/config_tester/delete_non_favorites` | 662 | Delete all non-favorited images from session |
-| POST | `/config_tester/scan_directory` | 746 | Scan external dir, create symlinks, generate manifest |
-| POST | `/config_tester/sweep/parse` | - | Workflow Sweep: describe an API-format workflow `{api_json}` (nodes, outputs, image sources, suggested bindings) |
-| POST | `/config_tester/sweep/dry_run` | - | Workflow Sweep: first N concrete prompts + validation of job 1 `{state or configs_json, limit}`; queues nothing |
-| POST | `/config_tester/sweep/start` | - | Workflow Sweep: start a sweep `{state or configs_json, node_id?}` (400 invalid; 200 `attached:true` when the IDENTICAL sweep is already active; 409 `{error, sweep_id, session_name}` for a different one) |
-| GET | `/config_tester/sweep/job_prompt` | - | Workflow Sweep: `?session_name=&sweep_id=&job_index=` -> `{prompt, params, fingerprint, ...}`, the job's API prompt without the collector (ids only, no paths; 400 bad id/index, 404 unknown) |
-| GET | `/config_tester/sweep/status` | - | Workflow Sweep: `?sweep_id=` or `?session_name=` (state, counts, ETA, last errors) |
-| POST | `/config_tester/sweep/pause`, `/resume`, `/cancel` | - | Workflow Sweep controls `{sweep_id}` |
+| Method | Route | File | Body / query | Purpose |
+|---|---|---|---|---|
+| POST | `/config_tester/delete_session` | `__init__.py` | `{session_name}` | Delete a session folder |
+| GET | `/config_tester/list_sessions` | `__init__.py` | none | List all sessions with metadata (name, count, thumbnail, mtime) |
+| POST | `/config_tester/save_changes` | `__init__.py` | `{session_name, changed_items}` | Delta save: only the changed items |
+| POST | `/config_tester/save_comparisons` | `__init__.py` | `{session_name, append: [...], remove: ["ts:a:b", ...]}` | Pairwise-review votes; only touches manifest `comparisons` |
+| POST | `/config_tester/clear_comparisons` | `__init__.py` | `{session_name}` | Delete all votes of a session |
+| POST | `/config_tester/save_manifest` | `__init__.py` | `{session_name, manifest}` | Full merge save (keeps server-side `meta` and `comparisons`) |
+| POST | `/config_tester/get_session_html` | `__init__.py` | `{session_name, node_id}` | Generate the dashboard HTML on demand (empty manifest for an unknown session, not a 404) |
+| GET | `/config_tester/dashboard` | `__init__.py` | `?session=` (optional) | Dashboard SPA as a top-level page (standalone mode, `USCG_STANDALONE`, own websocket via `resources/logic_standalone.js`) |
+| POST | `/config_tester/run` | `__init__.py` | `{configs_json or config_name, session_name?, overwrite_existing?, force? (default true), front?, client_id?}` | Headless run: builds the Generator+Dashboard prompt and enqueues it in-process like `/prompt`. Helpers in `run_api.py` |
+| GET | `/config_tester/run_status` | `__init__.py` | `?prompt_id=` | `pending`, `running`, `success` or `error` + session / dashboard_url / item_count |
+| POST | `/config_tester/export_favorites` | `__init__.py` | `{session_name, pack_metadata?, organize_by_prompt?, organize_by_lora?, export_prompt_txt?, copy_manifest? (default true), pack_workflow?, pack_nodes_workflow?, workflow_data?, nodes_workflows?}` | Export favorited images with options (metadata, workflow, organize) |
+| POST | `/config_tester/delete_non_favorites` | `__init__.py` | `{session_name}` | Delete all non-favorited images from a session |
+| POST | `/config_tester/delete_rejected` | `__init__.py` | `{session_name}` | Delete all rejected images from a session (rejected preview fingerprints are remembered in `meta.rejected_preview_fps`) |
+| POST | `/config_tester/scan_directory` | `__init__.py` | `{directory_path, session_name}` | Scan an external dir, create symlinks, generate a manifest |
+| POST | `/config_tester/upscale_images` | `__init__.py` | `{session_name, image_ids, upscale_config: {pipelines: [...]}, all_favorited?}` | Start an async dashboard upscale job; returns `{job_id, total_images}` |
+| GET | `/config_tester/upscale_status` | `__init__.py` | `?job_id=` | Progress of an upscale job |
+| POST | `/config_tester/cancel_upscale` | `__init__.py` | `{job_id}` | Cancel an upscale job; returns `{cancelled}` |
+| POST | `/config_tester/compute_metrics` | `__init__.py` | `{session_name, overwrite?}` | Start the background metrics job for a session; returns `{job_id, total_images}` |
+| GET | `/config_tester/metrics_status` | `__init__.py` | `?job_id=` | Metrics job progress |
+| POST | `/config_tester/cancel_metrics` | `__init__.py` | `{job_id}` | Cancel a metrics job; returns `{cancelled}` |
+| POST | `/config_tester/sweep/parse` | `__init__.py` | `{api_json}` | Workflow Sweep: describe an API-format workflow (nodes, outputs, image sources, suggested bindings) |
+| POST | `/config_tester/sweep/dry_run` | `__init__.py` | `{state or configs_json, limit?}` | Workflow Sweep: first N concrete prompts + validation of job 1; queues nothing |
+| GET | `/config_tester/sweep/job_prompt` | `__init__.py` | `?session_name=&sweep_id=&job_index=` | Workflow Sweep: `{prompt, params, fingerprint, output, ...}`, the job's API prompt exactly as it ran (template + substitutions) minus the USCG collector node; ids only, no paths (400 bad id/index, 404 unknown) |
+| POST | `/config_tester/sweep/start` | `__init__.py` | `{state or configs_json, node_id?, client_id?}` | Workflow Sweep: start a sweep `{state or configs_json, node_id?}` (400 invalid; 200 `attached:true` when the IDENTICAL sweep is already active; 409 `{error, sweep_id, session_name}` for a different one) |
+| GET | `/config_tester/sweep/status` | `__init__.py` | `?sweep_id=` or `?session_name=` | Workflow Sweep: state, counts, ETA, last errors (404 for an unknown sweep) |
+| POST | `/config_tester/sweep/pause` | `__init__.py` | `{sweep_id}` | Workflow Sweep: pause (409 when not possible) |
+| POST | `/config_tester/sweep/resume` | `__init__.py` | `{sweep_id}` | Workflow Sweep: resume (409 when not possible) |
+| POST | `/config_tester/sweep/cancel` | `__init__.py` | `{sweep_id}` | Workflow Sweep: cancel (409 when not possible) |
 
-**Distribution APIs** (registered in `distribution_routes.py`):
+**Companion plugin routes** (registered by ComfyUI-USCG-Distributed, not by this package):
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -358,21 +383,7 @@ All routes registered via `PromptServer.instance.routes`.
 
 ### **2b. The Backend: Distribution System**
 
-* **`distribution_manager.py`** (634 lines)
-  * **Class:** `DistributionManager` — thread-safe distributed job queue on master
-  * **Job states:** PENDING → CLAIMED → COMPLETED/FAILED
-  * `populate_jobs()`, `claim_job(worker_id)`, `complete_job(job_id)`, `get_stats()`, `set_encoded_conditionings()`, `get_encoded_conditionings_for_job()`
-  * Thread-safe with `RLock`, timeout handling (default 600s), `MAX_FAIL_COUNT = 3`
-
-* **`distribution_worker.py`** (813 lines)
-  * **Class:** `WorkerThread(threading.Thread)` — daemon thread on remote instances
-  * Polls `/uscg-distribution/claim_job` every 2s, processes locally, uploads results
-  * Caches model/CLIP/VAE between jobs, supports model sync from master
-  * Exits after 30 empty polls or 503 response
-
-* **`distribution_routes.py`** (640 lines)
-  * Registers `/uscg-distribution/*` endpoints on PromptServer
-  * Global state: `_distribution_manager` (master), `_worker_thread` (worker)
+The distribution code (job queue, worker thread, `/uscg-distribution/*` routes, model sync) lives in the ComfyUI-USCG-Distributed companion plugin, not in this package. `distribution.py` is a thin facade: it detects whether the companion is installed (`is_distribution_available()`) and forwards `create_manager()`, `notify_workers_to_start()`, `stop_all_workers()` and `get_master_url()` to it, raising a clear install hint when it is missing. `generation_orchestrator.py` imports only the facade. The companion calls `check_if_job_completed()` positionally, so that signature must not change (new flags are keyword-only).
 
 ---
 
@@ -380,7 +391,7 @@ All routes registered via `PromptServer.instance.routes`.
 
 * **`dashboard.js`** (432 lines)
   * Registers `UltimateGridDashboard` node
-  * Listens for `ultimate_grid.update`, `ultimate_grid.progress`, `ultimate_grid.distribution_status`
+  * Listens for `ultimate_grid.update`, `ultimate_grid.progress`, `ultimate_grid.distribution_status` (the only three `api.addEventListener("ultimate_grid.*")` calls in `web/`; the standalone page in `resources/logic_standalone.js` also handles `ultimate_grid.update_data`)
   * Forwards events to matching iframe via `postMessage()`
   * **Auto-loads on node creation** with 500ms delay via `forceLoadSession()`
   * **Widgets:** "RELOAD / SHOW SESSION" button, "DELETE SESSION" button
@@ -394,7 +405,7 @@ All routes registered via `PromptServer.instance.routes`.
   * **Node methods:** `saveState()`, `renderUI()`, `loadSession()`, `saveConfigToBackend()`, `loadConfigFromBackend()`, `triggerAutoSave()` (2s debounce)
 
 * **`conf-builder-utilities.js`** (958 lines)
-  * `convertStateToConfigs()` (line 497) — JS-side config conversion (MUST stay in sync with Python `generate_config()`)
+  * `convertStateToConfigs()` was removed: the Builder preview POSTs the state to `/configbuilder/preview`, which runs Python's `state_to_configs_json` (no JS converter any more)
   * `getIterationCount()` (line 457) — calculates total Cartesian product count
   * `parseLoraString()` / `buildLoraString()` — LoRA string format parsing
   * `refreshAllConfigBuilders()`, `clearAllCaches()`
@@ -645,7 +656,7 @@ iframe postMessage({type: 'toggle_fullscreen', node_id})
   → dashboard.js listener → toggle .dashboard-fullscreen class
 ```
 
-**Distribution Job Flow (Master ↔ Worker):**
+**Distribution Job Flow (Master ↔ Worker)** (the manager and worker named here live in the ComfyUI-USCG-Distributed companion):
 ```
 Master:
   1. generation_orchestrator → DistributionManager.populate_jobs()
@@ -687,7 +698,7 @@ The upscaling system allows testing multiple upscale configurations per generate
 ```
 
 **Data Flow:**
-1. JS `convertStateToConfigs()` embeds upscaling in `_session_settings`
+1. Python `state_to_configs_json()` embeds upscaling in `_session_settings` (the JS preview gets the same output from `/configbuilder/preview`)
 2. Python `config_builder_node.py` line 706-715 embeds into output JSON
 3. `sampler_node.py` line 277 extracts `session_settings`
 4. `generation_orchestrator.py` line 1096-1204 processes after each generation
@@ -744,16 +755,19 @@ sampler_node.py
     → conditioning_cache.py (ConditioningCache)
     → remote_vae.py (RemoteVAEDecodeWorker)
     → html_generator.py (get_html_template)
-    → distribution_manager.py (DistributionManager)
-    → distribution_worker.py (WorkerThread)
+    → distribution.py (facade for the ComfyUI-USCG-Distributed companion)
+    → image_metrics.py (optional per-image metrics)
 
 config_builder_node.py
   → lora_utils.py (trigger word lookup, CivitAI API)
 
 __init__.py
   → all node classes (sampler, dashboard, config_builder, json_text)
-  → distribution_routes.py (distribution API endpoints)
   → html_generator.py (on-demand HTML generation)
+  → run_api.py (POST /config_tester/run helpers)
+  → metrics_runner.py (background metrics job)
+  → workflow_sweep.py, workflow_sweep_runner.py, workflow_sweep_collect.py (Workflow Sweep)
+  → upscale_runner.py (dashboard upscale job)
   → metadata_packer.py (export favorites)
   → directory_scanner.py (scan external directories)
   → manifest_utils.py (save/load manifests — note: NOT directly imported, uses inline logic)
@@ -765,8 +779,11 @@ __init__.py
 
 | Event Name | Sender | Data Fields | Purpose |
 |---|---|---|---|
-| `ultimate_grid.update` | `generation_orchestrator.py` / `image_generation.py` | `session_name, node, manifest, meta, new_items` | New images generated |
-| `ultimate_grid.progress` | `generation_orchestrator.py` | `session_name, node, progress_pct, eta_str, current_job, total_jobs, avg_duration, last_duration, finish_time` | ETA/progress bar. Optional `phase`: `upscaling` (deferred upscales) or `sweep` (Workflow Sweep; also `sweep_id, state, errors`; label "Sweep job") |
+| `ultimate_grid.update` | `generation_orchestrator.py` / `image_generation.py` / `remote_vae.py` / `workflow_sweep_collect.py` | `session_name, node, manifest, meta, new_items` | New images generated |
+| `ultimate_grid.update_data` | `generation_orchestrator.py`, `upscale_runner.py` | `session_name, new_items` (+ `node` from the orchestrator) | Per-item replacement: the listed items replace the cards with the same id (deferred upscales, dashboard upscales) |
+| `ultimate_grid.progress` | `generation_orchestrator.py`, `upscale_runner.py`, `workflow_sweep_runner.py` | `session_name, node, progress_pct, eta_str, current_job, total_jobs, avg_duration, last_duration, finish_time` | ETA/progress bar. Optional `phase`: `upscaling` (deferred and dashboard upscales) or `sweep` (Workflow Sweep, label "Sweep job"). The sweep payload is `{node, session_name, phase: "sweep", sweep_id, state, errors, current_job, total_jobs, progress_pct, eta_str, finish_time, avg_duration, last_duration}` plus, on completion, `complete, total_elapsed, total_generated` |
+| `ultimate_grid.next_run_seeds` | `generation_orchestrator.py` | `node, seeds` | Per-config seeds the NEXT run should use after a `random_after` / `increment_after` / `decrement_after` full-run seed behavior, as `{config_index: seed}` (no listener in this package) |
+| `ultimate_grid.metrics_progress` | `metrics_runner.py` | `session_name, job_id, status, completed, total` | Progress of a "compute metrics for this session" job (no listener in this package; the SPA polls `/config_tester/metrics_status`) |
 | `ultimate_grid.distribution_status` | `generation_orchestrator.py` | `session_name, workers, stats` | Distribution worker status |
 
 ---
@@ -793,15 +810,13 @@ __init__.py
 
 > **GOLDEN RULE: DO NOT REMOVE ANY CODE. DO NOT REMOVE ANY COMMENTS. ONLY CHANGE WHAT IS NECESSARY.**
 
-1. **Dual Data Path** — Frontend `convertStateToConfigs()` (in `conf-builder-utilities.js` line 497) and Python `generate_config()` (in `config_builder_node.py` line 465) are **independent implementations** that both transform `node.state` into config JSON. Both must stay in sync when adding new config fields or the UI preview will mismatch the actual output.
+1. **Single Data Path**: `state_to_configs_json(state)` in `config_builder_node.py` is the only state-to-configs implementation; the JS preview calls `/configbuilder/preview`, which runs the same function. Do not add a JS-side converter. Adding a Builder/config field means ALL of: default in `conf-builder-main.js` new-state AND in its three migration blocks; default in the new-config-array object in `conf-builder-config-management.js`; UI control in the right render function; emission in `config_builder_node.state_to_configs_json`; key in `_EXPECTED_CONFIG_KEYS`; pass-through in `config_utils.expand_configs`; consumer in the orchestrator / `generate_image`; README bullet; unit tests. Bump `LS_CACHE_VERSION` in `conf-builder-utilities.js` only if the cached model-list shape changes.
 
-2. **Widget Bridge** — The `lora_config` widget (STRING type) holds the **entire** node state as serialized JSON. Python `generate_config()` ignores all other widget params and reads only `lora_config`. The `samplers`, `schedulers`, `steps`, `cfg` widgets in `INPUT_TYPES` are vestigial (kept for ComfyUI schema compliance only).
+2. **Widget Bridge** — The `lora_config` widget (STRING type) holds the **entire** node state as serialized JSON. Python `generate_config()` (which wraps `state_to_configs_json`) ignores all other widget params and reads only `lora_config`. The `samplers`, `schedulers`, `steps`, `cfg` widgets in `INPUT_TYPES` are vestigial (kept for ComfyUI schema compliance only).
 
 3. **onNodeCreated Must Be Synchronous** — In `conf-builder-main.js` line 51, `onNodeCreated` MUST remain synchronous. Async initialization runs inside a fire-and-forget `(async () => { ... })()` IIFE. Making `onNodeCreated` itself async breaks widget registration.
 
 4. **Resources Are Inlined** — `html_generator.py` reads all `/resources/` files and bakes them into one HTML string. Zero external HTTP requests. Changes to dashboard JS/CSS require re-generating the HTML (re-run the sampler node or call `/config_tester/get_session_html`).
-
-> **Workflow Sweep never blocks the executor.** `USCGSweepCollect` and the Generator in workflow mode only start/record work; the runner feeds sweep prompts through `PromptServer.instance.prompt_queue` from its own thread (an in-process mirror of `server.py post_prompt`, loop-bound calls via `ComfyBridge.run_on_loop`, never from the loop thread, no lock held across it). A node that waited on a prompt it queued would deadlock ComfyUI's single executor thread. The expansion/substitution core (`workflow_sweep.py`) is pure; only `ComfyBridge` touches ComfyUI, so tests use a fake bridge.
 
 5. **Manifest Merge on Save** — `manifest_utils.py` `save_manifest()` calls `merge_manifest_user_changes()` which reloads from disk before saving. This preserves user favorites/rejected/notes that changed concurrently while generation was running. Also, `flush_batch_with_vae()` (image_generation.py line 657) does its own disk sync.
 
@@ -845,7 +860,7 @@ __init__.py
 
 25. **Model Discovery Pattern** — `folder_paths.get_filename_list("key")` returns available models. API endpoint `/configbuilder/model_lists` returns all lists. JS side: `conf-builder-utilities.js` `getModelLists()` fetches and stores in global vars. `conf-builder-main.js` passes to renderers as `modelLists` object.
 
-26. **Bypass States Are UI-Only** — `vae_bypass_states` and `te_bypass_states` control filtering in `convertStateToConfigs()` but should NOT appear in config output. They're internal UI state persisted only by `node.saveState()`. `lora_bypass_states` and `model_bypass_states` DO appear in output for smart-skip matching.
+26. **Bypass States Are UI-Only** — `vae_bypass_states` and `te_bypass_states` control filtering in `state_to_configs_json()` but should NOT appear in config output. They're internal UI state persisted only by `node.saveState()`. `lora_bypass_states` and `model_bypass_states` DO appear in output for smart-skip matching.
 
 27. **Manifest Save from Dashboard** — Two save mechanisms exist:
     - `save_changes` (line 234 in `__init__.py`): Delta save — only changed items by ID. Fast. Used for individual star/reject.
@@ -855,6 +870,20 @@ __init__.py
 
 29. **Image Metrics Run Context** - `image_metrics.begin_run(spec)` (wrapped around `run_generation_loop` in `sampler_node.py`) returns a token and `end_run(token)` closes only that context, so a second run or the dashboard upscale thread can never clobber it. Generation-side hooks read the active context (`decode_latent_with_vae(..., metrics_sink=)`, `flush_batch_with_vae`, orchestrator upscale inserts via `image_metrics.finalize`); the dashboard upscale thread (`upscale_runner.py`) must NOT read generation-run state, so it passes an explicit spec derived from the source item (`spec_from_item`). Every place that copies a source item into an upscaled entry excludes `"metrics"` (never inherit); the new entry is re-measured. `metrics` is session-level (`_session_settings.metrics`), not a per-config key.
 
+30. **Workflow Sweep never blocks the executor.** `USCGSweepCollect` and the Generator in workflow mode only start/record work; the runner feeds sweep prompts through `PromptServer.instance.prompt_queue` from its own thread (an in-process mirror of `server.py post_prompt`, loop-bound calls via `ComfyBridge.run_on_loop`, never from the loop thread, no lock held across it). A node that waited on a prompt it queued would deadlock ComfyUI's single executor thread. The expansion/substitution core (`workflow_sweep.py`) is pure; only `ComfyBridge` touches ComfyUI, so tests use a fake bridge.
+
+31. **pytest package-name trap**: pytest runs with `--import-mode=importlib` and a root `pytest.ini`. A parent folder named `integration`, `metrics` etc. (no hyphen) is imported as a package and the stub conftest breaks. Worktree folder names need a hyphen; never add `tests/__init__.py`.
+
+32. **Manifest writers preserve disk state**: every writer (generation saves, the remote VAE worker, the `save_manifest` route) keeps the on-disk `comparisons` (`manifest_utils.preserve_disk_comparisons`) and the per-item `metrics` written by `metrics_runner` (an item's on-disk `metrics` survives when the in-memory copy has none, in `manifest_utils.merge_manifest_user_changes`). Only `update_manifest_comparisons` writes votes; only `metrics_runner` rewrites `metrics` in place.
+
+33. **Flat job plan + `config_fingerprint`**: `run_generation_loop` walks a flat `job_plan` (`config_utils.build_job_plan`, one entry per job, binding `conf, conf_idx, job_idx, job, w, h, batch_idx`) instead of nested resolution x config loops; `order_job_plan` reorders it for `job_order: minimize_reloads` (stable sort on first-appearance ranks). `check_if_job_completed(..., preview=False)` keeps its positional signature (the distributed companion calls it positionally); the `preview` flag is keyword-only and previews/full items never match each other. `config_fingerprint()` is the identity of a grid cell (stored as `config_fp` on every new item; preview items add `preview`, `preview_of`, `full_*`; upscaled items add `base_fp`). Bump `FP_VERSION` (currently `"fp1"`, and keep the old reader) if you ever change its payload; a golden-value test pins it. Preview/promotion/job-order features are ignored by the distributed path.
+
+34. **`pinned_clip`**: every loop that encodes more than one prompt runs inside `batch_encoding.pinned_clip(clip, sample_texts)` (the orchestrator's pre-encode groups, the per-job encode and the deferred-upscale re-encode). Nesting is safe.
+
+35. **Dynamic-VRAM re-prepare**: on ComfyUI 0.4x (comfy_aimdo) `load_models_gpu` re-runs `ModelPatcherDynamic.load()` on every encode; the repeated "prepared for dynamic VRAM loading" log line is the symptom. TE batching (`te_batch_size`) self-checks batch 1 against a single encode and halves on OOM; non-batchable prompts keep the per-prompt path.
+
+36. **`html_generator.js_files` order is load-bearing** (one shared script scope): `logic_ratings.js` (pure) before `logic_ui.js`, `logic_compare.js` after `logic_pipeline.js`, `logic_standalone.js` LAST (top-level-page overrides). CI assembles the page and syntax-checks it.
+
 ---
 
 ### **Testing Changes**
@@ -863,7 +892,7 @@ __init__.py
 - **`web/` JS files:** Refresh browser (Ctrl+F5) — served via `/extensions/` with cache-busting
 - **`resources/` JS/CSS/HTML files:** Dashboard HTML must be regenerated — re-run the sampler node or call `/config_tester/get_session_html`
 - **Config Builder state fields:** Also update migration checks in `conf-builder-main.js` `onConfigure`
-- **New config fields:** Update BOTH `convertStateToConfigs()` in JS AND `generate_config()` in Python
+- **New config fields:** `state_to_configs_json()` in Python is the only converter (the JS preview calls `/configbuilder/preview`); then follow the checklist in gotcha 1
 
 ---
 
@@ -874,7 +903,7 @@ __init__.py
 | File | Key Functions | Line Numbers |
 |---|---|---|
 | `sampler_node.py` | `run_tests()`, `find_existing_match()`, `get_latent_channels()`, `IS_CHANGED()` | 252, 201, 169, 103 |
-| `config_builder_node.py` | `generate_config()`, `process_lora_array()`, `get_available_sessions()`, `expand_lora_folders()` | 465, 424, 360, 370 |
+| `config_builder_node.py` | `state_to_configs_json()`, `generate_config()`, `preview_endpoint()`, `process_lora_array()`, `get_available_sessions()`, `expand_lora_folders()` | - |
 | `generation_orchestrator.py` | `run_generation_loop()`, `check_if_job_completed()`, `setup_session_directories()`, `_preencode_all_conditionings()`, `_conditioning_to_serializable()`, `_run_distributed_generation()` | -, -, 43, -, -, - |
 | `image_generation.py` | `generate_image()`, `create_image_metadata()`, `flush_batch_with_vae()`, `upscale_image()`, `decode_latent_with_vae()`, `calculate_eta()` | 16, 483, 605, 265, -, 540 |
 | `batch_encoding.py` | `encode_prompt_with_combinators()`, `batch_encode_prompts()` | |
@@ -885,15 +914,19 @@ __init__.py
 | `manifest_utils.py` | `load_existing_manifest()`, `save_manifest()`, `merge_manifest_user_changes()` | |
 | `metadata_packer.py` | `pack_metadata_into_image()`, `extract_metadata_from_image()`, `calculate_file_hash()` | 181, -, - |
 | `directory_scanner.py` | `scan_directory_for_images()`, `parse_a1111_parameters()` | |
-| `distribution_manager.py` | `DistributionManager.populate_jobs()`, `.claim_job()`, `.complete_job()`, `.set_encoded_conditionings()` | |
-| `distribution_worker.py` | `WorkerThread.run()`, `._process_job()`, `._download_model_from_master()` | |
+| `distribution.py` | `is_distribution_available()`, `create_manager()`, `notify_workers_to_start()`, `stop_all_workers()`, `get_master_url()` (facade; the manager and worker live in the companion) | |
+| `run_api.py` | `build_run_prompt()`, `normalize_configs_payload()`, `resolve_saved_config()`, `summarize_history()`, `RunTracker` | |
+| `image_metrics.py` | `compute_metrics_numpy()`, `compute_metrics_torch()`, `begin_run()`, `end_run()`, `finalize()`, `adapter_status()` | |
+| `metrics_runner.py` | `start_metrics_job()`, `get_metrics_status()`, `cancel_metrics_job()` | |
+| `workflow_sweep.py` | `parse_api_workflow()`, `suggest_bindings()`, `parse_for_ui()` (pure; no torch or server imports) | |
+| `workflow_sweep_runner.py` | `dry_run()`, `api_start()`, `start_sweep()`, `get_status()`, `pause()`, `resume()`, `cancel()`, `ComfyBridge` | |
 
 **JavaScript (by file):**
 
 | File | Key Functions |
 |---|---|
 | `conf-builder-main.js` | `ensureModulesLoaded()`, `node.saveState()`, `node.renderUI()`, `node.loadSession()`, `node.triggerAutoSave()` |
-| `conf-builder-utilities.js` | `convertStateToConfigs()`, `getIterationCount()`, `parseLoraString()`, `buildLoraString()`, `refreshAllConfigBuilders()`, `getModelLists()` |
+| `conf-builder-utilities.js` | `getIterationCount()`, `parseLoraString()`, `buildLoraString()`, `refreshAllConfigBuilders()`, `getModelLists()` |
 | `conf-builder-config-management.js` | `renderUI()`, `updatePreview()`, `createConfigArrayElement()`, `createModelElement()`, `renderUpscalingSection()` |
 | `conf-builder-ui-components.js` | `createSearchableSelect()`, `createSlider()`, `getStyles()` |
 | `conf-builder-distribution.js` | `renderDistributionSection()`, `renderDistributionSettingsSection()` |
