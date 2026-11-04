@@ -1554,6 +1554,7 @@ function openM(id) {
 
     // Update navigation counter
     _updateModalCounter();
+    _syncModalFavBtn(d);
 }
 
 // Favorite the item shown in the lightbox (1-9 keys and the phone action bar).
@@ -1583,8 +1584,17 @@ function toggleModalFavorite() {
     if (counterEl) {
         counterEl.title = item.favorited ? 'Favorited' : 'Not favorited';
     }
-    const favActionBtn = document.getElementById('modal-fav-btn');
-    if (favActionBtn) favActionBtn.innerText = item.favorited ? '★ Favorited' : '☆ Favorite';
+    _syncModalFavBtn(item);
+}
+
+// Phone action bar Favorite button: icon + label live in spans (never write innerText on the button).
+function _syncModalFavBtn(item) {
+    const btn = document.getElementById('modal-fav-btn');
+    if (!btn || !item) return;
+    const ico = btn.querySelector('.mab-ico'), lbl = btn.querySelector('.mab-lbl');
+    if (ico) ico.textContent = item.favorited ? '★' : '☆';
+    if (lbl) lbl.textContent = item.favorited ? 'Favorited' : 'Favorite';
+    btn.classList.toggle('favorited', !!item.favorited);
 }
 
 // Lightbox prev/next by delta through the filtered/sorted set (phone action bar).

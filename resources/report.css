@@ -1812,7 +1812,20 @@ body {
         cursor: pointer;
         padding: 0 4px;
     }
-    #modal { overflow-y: auto; padding-bottom: 72px; }
+    /* phone lightbox: stacked layout (preview on top, form below, bar pinned) */
+    #modal { padding: 8px 8px 0; overflow-y: auto; overscroll-behavior: contain; }  /* the sticky action bar is the last child */
+    #modal .modal-close-x { position: fixed; }
+    #modal .modal-main { flex: 0 0 auto; flex-direction: column; height: auto; gap: 10px; }
+    #modal .preview { flex: none; height: auto; flex-direction: column; align-items: center; min-height: 160px; }
+    #modal .preview img, #modal .preview video { width: auto; height: auto; max-width: 100%; max-height: 60vh; max-height: 60svh; }
+    #modal .controls { flex: none; overflow: visible; padding: 12px; scroll-margin-top: 8px; }
+    #modal .controls input, #modal .controls textarea { font-size: 16px !important; min-height: 40px; box-sizing: border-box; width: 100%; }
+    #modal .reel-wrap { flex-shrink: 0; }
+    #modal-action-bar { gap: 4px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); }
+    #modal-action-bar button { min-width: 0; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 2px; padding: 4px 2px; font-size: 18px; line-height: 1; }
+    #modal-action-bar .mab-lbl { font-size: 10px; white-space: nowrap; }
+    #modal-action-bar button.favorited { color: #e0c040; border-color: #e0c040; }
 }
 
 @media (max-width: 600px) {
@@ -1838,7 +1851,20 @@ body {
         cursor: pointer;
         padding: 0 4px;
     }
-    body.uscg-standalone #modal { overflow-y: auto; padding-bottom: 72px; }
+    /* phone lightbox: stacked layout (same rules as the coarse block) */
+    body.uscg-standalone #modal { padding: 8px 8px 0; overflow-y: auto; overscroll-behavior: contain; }  /* the sticky action bar is the last child */
+    body.uscg-standalone #modal .modal-close-x { position: fixed; }
+    body.uscg-standalone #modal .modal-main { flex: 0 0 auto; flex-direction: column; height: auto; gap: 10px; }
+    body.uscg-standalone #modal .preview { flex: none; height: auto; flex-direction: column; align-items: center; min-height: 160px; }
+    body.uscg-standalone #modal .preview img, #modal .preview video { width: auto; height: auto; max-width: 100%; max-height: 60vh; max-height: 60svh; }
+    body.uscg-standalone #modal .controls { flex: none; overflow: visible; padding: 12px; scroll-margin-top: 8px; }
+    body.uscg-standalone #modal .controls input, body.uscg-standalone #modal .controls textarea { font-size: 16px !important; min-height: 40px; box-sizing: border-box; width: 100%; }
+    body.uscg-standalone #modal .reel-wrap { flex-shrink: 0; }
+    body.uscg-standalone #modal-action-bar { gap: 4px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); }
+    body.uscg-standalone #modal-action-bar button { min-width: 0; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 2px; padding: 4px 2px; font-size: 18px; line-height: 1; }
+    body.uscg-standalone #modal-action-bar .mab-lbl { font-size: 10px; white-space: nowrap; }
+    body.uscg-standalone #modal-action-bar button.favorited { color: #e0c040; border-color: #e0c040; }
 
     body.uscg-standalone .session-card { width: calc(50% - 6px) !important; }
     body.uscg-standalone #session-landing { padding: 16px 12px !important; }

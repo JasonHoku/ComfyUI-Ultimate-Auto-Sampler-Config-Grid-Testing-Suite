@@ -897,11 +897,12 @@
         </div>
         <!-- Phone action bar (hidden by CSS unless coarse pointer / standalone on a narrow screen) -->
         <div id="modal-action-bar">
-            <button onclick="modalNav(-1)" title="Previous">◀ Prev</button>
-            <button id="modal-fav-btn" onclick="toggleModalFavorite()" title="Favorite">☆ Favorite</button>
-            <button onclick="rejectModalItem()" title="Reject">✕ Reject</button>
-            <button onclick="var c=document.querySelector('#modal .controls'); if(c) c.scrollIntoView({behavior:'smooth'});" title="Revise parameters">✎ Revise</button>
-            <button onclick="modalNav(1)" title="Next">Next ▶</button>
+            <button onclick="modalNav(-1)" title="Previous"><span class="mab-ico">◀</span><span class="mab-lbl">Prev</span></button>
+            <button id="modal-fav-btn" onclick="toggleModalFavorite()" title="Favorite"><span class="mab-ico">☆</span><span class="mab-lbl">Favorite</span></button>
+            <button onclick="rejectModalItem()" title="Reject"><span class="mab-ico">✕</span><span class="mab-lbl">Reject</span></button>
+            <button id="modal-compare-btn" onclick="openCompareMode()" title="Compare pairs"><span class="mab-ico">&#8644;</span><span class="mab-lbl">Compare</span></button>
+            <button id="modal-revise-btn" onclick="var c=document.querySelector('#modal .controls'); if(c) c.scrollIntoView({behavior:'smooth'});" title="Revise parameters"><span class="mab-ico">✎</span><span class="mab-lbl">Revise</span></button>
+            <button onclick="modalNav(1)" title="Next"><span class="mab-ico">▶</span><span class="mab-lbl">Next</span></button>
         </div>
     </div>
 
