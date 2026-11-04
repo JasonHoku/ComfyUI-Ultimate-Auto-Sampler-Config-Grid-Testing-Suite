@@ -189,3 +189,119 @@ def test_package_registers_collector_node_and_sweep_routes():
     assert pkg.NODE_DISPLAY_NAME_MAPPINGS["USCGSweepCollect"] == "USCG Sweep Collect"
     for fn in ("sweep_parse", "sweep_dry_run", "sweep_start", "sweep_status", "sweep_pause", "sweep_resume", "sweep_cancel"):
         assert callable(getattr(pkg, fn)), fn
+
+
+# --------------------------------------------------------------------------- USCGSweepCollectVideo
+
+class FakeVideo:
+    """Quacks like comfy_api VideoInput: get_components / get_dimensions / get_frame_count / save_to."""
+
+    def __init__(self, frames=8, h=16, w=24, fps=8, kwargs_ok=True):
+        from fractions import Fraction
+        self.frames, self.h, self.w, self.fps = frames, h, w, Fraction(fps)
+        self.kwargs_ok = kwargs_ok
+        self.saved = []
+
+    def get_components(self):
+        class C:
+            pass
+        c = C()
+        c.images = images(self.frames, self.h, self.w)
+        c.frame_rate = self.fps
+        return c
+
+    def get_dimensions(self):
+        return self.w, self.h
+
+    def get_frame_count(self):
+        return self.frames
+
+    def get_frame_rate(self):
+        return self.fps
+
+    def save_to(self, path, **kwargs):
+        if kwargs and not self.kwargs_ok:
+            raise TypeError("old comfy: no kwargs")
+        self.saved.append((path, kwargs))
+        with open(path, "wb") as f:
+            f.write(b"\x00\x00\x00\x18ftypmp42fakevideo")
+
+
+def test_video_node_definition():
+    cls = collect_mod.USCGSweepCollectVideo
+    spec = cls.INPUT_TYPES()
+    assert spec["required"]["video"] == ("VIDEO",) and "session_name" in spec["required"]
+    assert spec["hidden"] == {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"}
+    assert cls.RETURN_TYPES == () and cls.OUTPUT_NODE is True and cls.FUNCTION == "collect"
+    assert cls.IS_CHANGED() != cls.IS_CHANGED()
+    assert collect_mod.NODE_CLASS_MAPPINGS["USCGSweepCollectVideo"] is cls
+    assert collect_mod.NODE_DISPLAY_NAME_MAPPINGS["USCGSweepCollectVideo"] == "USCG Sweep Collect Video"
+
+
+def test_video_collect_saves_mp4_poster_and_ltx_shaped_item(env):
+    video = FakeVideo(frames=8, fps=8)
+    out = collect_mod.USCGSweepCollectVideo().collect(video, "vsession", job_json(), prompt={"1": {"class_type": "X"}})
+    base = env / "benchmarks" / "vsession"
+    manifest = json.loads((base / "manifest.json").read_text())
+    assert len(manifest["items"]) == 1
+    item = manifest["items"][0]
+    assert item["media_type"] == "video" and item["model_type"] == "workflow"
+    assert item["file"].startswith("/view?filename=vid_") and item["file"].endswith(
+        ".mp4&type=output&subfolder=benchmarks/vsession/images")
+    mp4 = base / "images" / f"vid_{item['id']}.mp4"
+    assert mp4.read_bytes().startswith(b"\x00\x00\x00\x18ftyp")
+    assert item["image_path"] == item["video_path"] == str(mp4)
+    preview = base / "images" / f"vid_{item['id']}.preview.png"
+    assert item["preview_path"] == str(preview) and Image.open(preview).size == (24, 16)
+    assert item["poster"] == f"/view?filename=vid_{item['id']}.preview.png&type=output&subfolder=benchmarks/vsession/images"
+    assert item["frames"] == 8 and item["frame_rate"] == 8 and item["duration_seconds"] == 1.0
+    assert item["width"] == 24 and item["height"] == 16
+    assert item["wf_sweep_id"] == "sw1" and item["wf_job_index"] == 0 and item["gen_index"] == 7
+    assert item["seed"] == 3 and item["favorited"] is False and item["rejected"] is False
+    # core save_to is called with mp4 + the workflow as metadata
+    (path, kwargs), = video.saved
+    assert path == str(mp4) and str(kwargs["format"]).lower().endswith("mp4") and kwargs["codec"] == "auto"
+    assert kwargs["metadata"] == {"prompt": {"1": {"class_type": "X"}}}
+    assert out["ui"]["images"] == [{"filename": mp4.name, "subfolder": "benchmarks/vsession/images", "type": "output"}]
+    assert out["ui"]["animated"] == (True,)
+
+
+def test_video_collect_fractional_fps_and_old_comfy_save_fallback(env):
+    video = FakeVideo(frames=12, fps=12, kwargs_ok=False)
+    collect_mod.USCGSweepCollectVideo().collect(video, "vold", job_json(), prompt=None)
+    item = json.loads((env / "benchmarks" / "vold" / "manifest.json").read_text())["items"][0]
+    assert item["frame_rate"] == 12 and item["duration_seconds"] == 1.0
+    assert video.saved[0][1] == {}                       # fell back to save_to(path)
+    video = FakeVideo(frames=10, fps=0)
+    video.get_frame_rate = lambda: 7.5
+    collect_mod.USCGSweepCollectVideo().collect(video, "vold", job_json(job_index=1))
+    item = json.loads((env / "benchmarks" / "vold" / "manifest.json").read_text())["items"][0]
+    assert item["frame_rate"] == 7.5 and item["duration_seconds"] == 1.33
+
+
+def test_video_collect_sanitises_session_and_stays_in_benchmarks(env):
+    collect_mod.USCGSweepCollectVideo().collect(FakeVideo(), "../../escape/..\\x", job_json())
+    assert (env / "benchmarks" / "escapex" / "manifest.json").exists()
+    written = [p for p in env.rglob("*") if p.is_file()]
+    assert written and all(str(p).startswith(str(env / "benchmarks")) for p in written)
+
+
+def test_video_collect_notifies_runner_and_replaces_old_item(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "on_collected", lambda sid, idx, items: calls.append((sid, idx, items)))
+    collect_mod.USCGSweepCollectVideo().collect(FakeVideo(), "vrep", job_json())
+    manifest = json.loads((env / "benchmarks" / "vrep" / "manifest.json").read_text())
+    first = manifest["items"][0]
+    assert calls and calls[0][0] == "sw1" and calls[0][2][0]["id"] == first["id"]
+    old_mp4 = env / "benchmarks" / "vrep" / "images" / f"vid_{first['id']}.mp4"
+    assert old_mp4.exists()
+    collect_mod.USCGSweepCollectVideo().collect(FakeVideo(), "vrep", job_json(replace_item_ids=[first["id"]]))
+    items = json.loads((env / "benchmarks" / "vrep" / "manifest.json").read_text())["items"]
+    assert len(items) == 1 and items[0]["id"] != first["id"]
+    assert not old_mp4.exists()                          # the previous mp4 is deleted with its item
+
+
+def test_video_collect_without_a_sweep_and_with_garbage_job_json(env):
+    collect_mod.USCGSweepCollectVideo().collect(FakeVideo(), "vman", "not json")
+    item = json.loads((env / "benchmarks" / "vman" / "manifest.json").read_text())["items"][0]
+    assert item["media_type"] == "video" and "wf_sweep_id" not in item
