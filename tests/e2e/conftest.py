@@ -152,3 +152,9 @@ def dashboard(page):
     expect(page.locator("#grid .card:visible")).to_have_count(N_ITEMS)
     yield d
     assert d.pageerrors == []
+
+
+@pytest.fixture
+def dashboard_kit():
+    """Raw pieces for tests that need a custom page around the dashboard (e.g. an iframe wrapper)."""
+    return {"ORIGIN": ORIGIN, "Dashboard": Dashboard, "make_manifest": make_manifest}

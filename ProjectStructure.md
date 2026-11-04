@@ -82,6 +82,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (104 lines)
 │   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (510 lines)
 │   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable)
+│   ├── logic_dragdrop.js        # Revise-modal image drag/send helpers (issue #22): uscgImageRef, asset-info + uri-list + DownloadURL carriers, annotated `[output]` path (no DOM, node-testable)
 │   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (925 lines)
 │   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (1780 lines)
@@ -297,7 +298,7 @@ All routes registered via `PromptServer.instance.routes`.
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id)` — reads all `/resources/` files, inlines into `template.html`
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_dragdrop.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests — everything inlined
 
@@ -901,5 +902,6 @@ __init__.py
 | `logic_virtual.js` | `renderDOM()`, `updateVisibleItems()`, `calculateVisibleRange()`, `autoFitZoom()`, `goToImage()` |
 | `logic_pipeline.js` | `updateDataPipeline()`, `executePipeline()`, `processNewData()`, `incrementalFilter()` |
 | `logic_ratings.js` | `computeBradleyTerry()`, `buildPairSource()`, `nextPair()`, `axisDiff()`, `computeScoreboard()` (pure; tests in `tests/js/ratings.test.js`, run `node --test tests/js/*.test.js`) |
+| `logic_dragdrop.js` | `uscgImageRef()`, `uscgImageAssetInfo()`, `uscgAnnotatedPath()`, `uscgFillDragData()`, `USCG_DRAG_UPLOAD` (pure; tests in `tests/js/dragdrop.test.js`). Used by `logic_ui.js` (`dragstart` on `#m-img`, `sendModalToLoadImage()`). Parent bridge: iframe posts `uscg_send_to_load_image` {url, filename, subfolder, imageType, upload, node_id}, `web/dashboard.js` fills the selected/only/new LoadImage and answers `uscg_send_to_load_image_result` {ok, message} |
 | `logic_compare.js` | `openCompareMode()`, `cmpVoteSide()`, `cmpUndo()`, `openScoreboard()`, `getItemRating()`, `compareRatings()`, `onComparisonsReplaced()` |
 | `logic_events.js` | Message handler for `progress_update`, `update_data`, `distribution_status` |
