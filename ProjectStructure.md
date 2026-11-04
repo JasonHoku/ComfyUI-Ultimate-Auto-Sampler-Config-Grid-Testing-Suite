@@ -664,13 +664,16 @@ iframe postMessage({type: 'toggle_fullscreen', node_id})
 **Distribution Job Flow (Master ↔ Worker)** (the manager and worker named here live in the ComfyUI-USCG-Distributed companion):
 ```
 Master:
-  1. generation_orchestrator → DistributionManager.populate_jobs()
+  1. generation_orchestrator → _distributed_plan_entries() (job order, skips, preview promotion, fingerprints, survivor seeds)
+     → DistributionManager.populate_from_plan(entries, run_extras)   [old companion: populate_jobs(), job order/preview ignored]
+     each entry's extra = {stamp, render?, seed?}; the companion sends it to workers as job["uscg"] (never inside config)
   2. [Optional] _preencode_all_conditionings() → manager.set_encoded_conditionings()
   3. POST /uscg-distribution/register_worker on each worker
   4. Workers poll GET /uscg-distribution/claim_job
   5. manager._job_to_dict() attaches encoded_positive/encoded_negative if available
   6. Worker processes job → POST /uscg-distribution/submit_result (multipart: metadata + image)
-  7. Master saves image + updates manifest
+  7. Master saves image + updates manifest; the companion applies the entry's stamp (config_fp, preview fields) and sets item.dist_worker
+  8. After collection: _distributed_metrics_pass() scores worker images (scorer adapters; builtins only when the worker sent none)
 ```
 
 **Distribution Status Updates (Server → Dashboard iframe):**
