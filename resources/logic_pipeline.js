@@ -25,6 +25,10 @@ function refreshIndices() {
  * Returns null if the field is missing or not parseable as a number.
  */
 function _extractFieldValue(item, field) {
+    if (typeof field === 'string' && field.startsWith('metric:')) {
+        const mv = item.metrics ? item.metrics[field.slice(7)] : undefined;
+        return (typeof mv === 'number' && isFinite(mv)) ? mv : null;
+    }
     if (field === 'lora_strength') {
         // Parse first lora's model strength from "name:0.5:0.7" format
         const lora = item.lora;
@@ -164,6 +168,43 @@ function getFilterKey() {
     return parts.join('|');
 }
 
+// --- METRIC KEY DISCOVERY (optional per-image metrics) ---
+var _metricKeysCache = { arr: null, len: -1, keys: [] };
+
+/** Union of item.metrics keys over activeData, built-ins first. Cached per (array, length), so live inserts refresh it. */
+function getMetricKeys() {
+    if (!activeData) return [];
+    if (_metricKeysCache.arr === activeData && _metricKeysCache.len === activeData.length) return _metricKeysCache.keys;
+    const seen = new Set();
+    for (let i = 0; i < activeData.length; i++) {
+        const m = activeData[i] && activeData[i].metrics;
+        if (m && typeof m === 'object') {
+            for (const k in m) seen.add(k);
+        }
+    }
+    const keys = METRIC_BUILTIN_ORDER.filter(k => seen.has(k))
+        .concat(Array.from(seen).filter(k => !METRIC_BUILTIN_ORDER.includes(k)).sort());
+    _metricKeysCache = { arr: activeData, len: activeData.length, keys };
+    return keys;
+}
+
+function metricLabel(k) {
+    if (METRIC_LABELS[k]) return METRIC_LABELS[k];
+    return String(k).replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/** Static sort options plus one descending option per metric present in the data. */
+function getSortOptionsList() {
+    return sortOptionsList.concat(getMetricKeys().map(k => ({ id: 'metric:' + k, label: metricLabel(k) + ' \u2193' })));
+}
+
+function _sortLabelFor(id) {
+    const hit = getSortOptionsList().find(x => x.id === id);
+    if (hit) return hit.label;
+    if (typeof id === 'string' && id.startsWith('metric:')) return metricLabel(id.slice(7)) + ' \u2193';
+    return undefined;
+}
+
 // --- 3. SORT UI LOGIC ---
 
 function initSortUI() {
@@ -199,7 +240,7 @@ function initSortUI() {
             container.appendChild(div);
         }
 
-        sortOptionsList.forEach(opt => {
+        getSortOptionsList().forEach(opt => {
             const div = document.createElement('div');
             div.className = 'sort-option';
             div.textContent = opt.label;
@@ -230,8 +271,8 @@ function initSortUI() {
     renderOptions(sList, true);
     
     // Update the main button label
-    const primLabel = sortOptionsList.find(x => x.id === currentSort)?.label || 'Oldest';
-    const secLabel = sortOptionsList.find(x => x.id === currentSecondarySort)?.label;
+    const primLabel = _sortLabelFor(currentSort) || 'Oldest';
+    const secLabel = _sortLabelFor(currentSecondarySort);
     
     const btnLbl = document.getElementById('sort-primary-label');
     if(btnLbl) {
@@ -292,6 +333,18 @@ function setSecondarySort(id) {
 
 // Unified Comparison Helper
 function compareItems(a, b, sortKey) {
+    if (typeof sortKey === 'string' && sortKey.startsWith('metric:')) {
+        // Metric sort: descending; items without the metric sort LAST (never NaN), ties fall through.
+        const k = sortKey.slice(7);
+        const av = a.metrics ? a.metrics[k] : undefined;
+        const bv = b.metrics ? b.metrics[k] : undefined;
+        const aOk = typeof av === 'number' && isFinite(av);
+        const bOk = typeof bv === 'number' && isFinite(bv);
+        if (aOk && bOk) return bv - av;
+        if (aOk) return -1;
+        if (bOk) return 1;
+        return 0;
+    }
     switch (sortKey) {
         case 'newest': return (b.gen_index ?? b.id) - (a.gen_index ?? a.id);
         case 'oldest': return (a.gen_index ?? a.id) - (b.gen_index ?? b.id);
@@ -427,6 +480,7 @@ let pipelineAbortId = 0;
 
 function executePipeline() {
     const startTime = performance.now();
+    if (typeof populateMetricFilterUI === 'function') populateMetricFilterUI();
     const currentFilterKey = getFilterKey();
     const filtersChanged = currentFilterKey !== lastFilterKey;
 
@@ -627,7 +681,8 @@ function loadSortPreference() {
     
     const validSortOptions = sortOptionsList.map(o => o.id);
 
-    if (savedSort && validSortOptions.includes(savedSort)) {
+    // A saved metric sort is accepted even before data loads (an unknown metric behaves as "all missing")
+    if (savedSort && (validSortOptions.includes(savedSort) || savedSort.startsWith('metric:'))) {
         currentSort = savedSort;
     }
     

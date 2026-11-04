@@ -57,6 +57,18 @@ const sortOptionsList = [
     { id: 'size', label: 'Size' }
 ];
 
+// Optional per-image metrics (item.metrics = {sharpness, entropy, ...}); see image_metrics.py.
+// Built-ins come first in this order, unknown keys (scorer packs) follow alphabetically.
+const METRIC_BUILTIN_ORDER = ['sharpness', 'entropy', 'colorfulness', 'contrast', 'luma', 'saturation'];
+const METRIC_LABELS = {
+    sharpness: 'Sharpness', entropy: 'Entropy', colorfulness: 'Colorful',
+    contrast: 'Contrast', luma: 'Luma', saturation: 'Saturation', aesthetic: 'Aesthetic'
+};
+const METRIC_SHORT = {
+    sharpness: 'Shp', entropy: 'Ent', colorfulness: 'Col',
+    contrast: 'Ctr', luma: 'Lum', saturation: 'Sat', aesthetic: 'Aes'
+};
+
 // --- SEARCH FILTER STATE ---
 // Array of search filter objects: { type: 'model', term: 'mountain' }
 
@@ -122,7 +134,8 @@ var labelMode = labelMode || {
         upscaleHiresSteps: false,
         upscaleTiling: false,
         hiresPromptBehavior: false,
-        hiresPromptText: false
+        hiresPromptText: false,
+        metrics: false
     }
 };
 

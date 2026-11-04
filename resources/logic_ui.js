@@ -295,6 +295,22 @@ function buildLabelOverlay(d) {
         }
     }
 
+    if (labelMode.fields.metrics && d.metrics && typeof d.metrics === 'object') {
+        const sig3 = (v) => {
+            const n = Number(v);
+            if (!isFinite(n)) return null;
+            return String(parseFloat(n.toPrecision(3)));
+        };
+        const mkeys = (typeof getMetricKeys === 'function') ? getMetricKeys() : Object.keys(d.metrics);
+        for (const k of mkeys) {
+            if (!(k in d.metrics)) continue;
+            const v = sig3(d.metrics[k]);
+            if (v === null) continue;
+            const short = METRIC_SHORT[k] || metricLabel(k).slice(0, 3);
+            tags.push(`<span class="label-tag label-metric" title="${metricLabel(k)}: ${d.metrics[k]}">${short}:${v}</span>`);
+        }
+    }
+
     if (tags.length === 0) return '';
     return `<div class="label-overlay">${tags.join('')}</div>`;
 }
@@ -320,7 +336,7 @@ function toggleLabelMode(enabled) {
 function updateLabelFields() {
     const fields = ['model', 'lora', 'prompt', 'sampler', 'scheduler', 'cfg', 'steps', 'seed', 'denoise', 'upscale',
                      'upscaleMode', 'upscaleModel', 'upscaleRatio', 'upscaleDenoise', 'upscaleResizeMethod', 'upscaleHiresSteps', 'upscaleTiling',
-                     'hiresPromptBehavior', 'hiresPromptText'];
+                     'hiresPromptBehavior', 'hiresPromptText', 'metrics'];
     fields.forEach(f => {
         const cb = document.getElementById(`label-field-${f}`);
         if (cb) labelMode.fields[f] = cb.checked;
@@ -388,7 +404,7 @@ function loadLabelPreferences() {
 
     const fields = ['model', 'lora', 'prompt', 'sampler', 'scheduler', 'cfg', 'steps', 'seed', 'denoise', 'upscale',
                      'upscaleMode', 'upscaleModel', 'upscaleRatio', 'upscaleDenoise', 'upscaleResizeMethod', 'upscaleHiresSteps', 'upscaleTiling',
-                     'hiresPromptBehavior', 'hiresPromptText'];
+                     'hiresPromptBehavior', 'hiresPromptText', 'metrics'];
     fields.forEach(f => {
         const cb = document.getElementById(`label-field-${f}`);
         if (cb) cb.checked = labelMode.fields[f] || false;
@@ -1914,6 +1930,86 @@ function addLogicFilter() {
     console.log(`[Logic Filter] Added: ${field} ${op} ${value}`);
 }
 
+// --- Metric fields in the Logic Filter (populated from the data; hidden when no item has metrics) ---
+var _metricUiSig = null;
+
+function populateMetricFilterUI() {
+    if (typeof getMetricKeys !== 'function') return;
+    const keys = getMetricKeys();
+    const sig = keys.join(',');
+    if (sig === _metricUiSig) return;
+    _metricUiSig = sig;
+
+    const sel = document.getElementById('logic-filter-field');
+    if (sel) {
+        const prev = sel.value;
+        const old = document.getElementById('logic-filter-metric-group');
+        if (old) old.remove();
+        if (keys.length) {
+            const group = document.createElement('optgroup');
+            group.id = 'logic-filter-metric-group';
+            group.label = 'Metrics';
+            keys.forEach(k => {
+                const o = document.createElement('option');
+                o.value = 'metric:' + k;
+                o.textContent = metricLabel(k);
+                group.appendChild(o);
+            });
+            sel.appendChild(group);
+        }
+        sel.value = prev;
+    }
+
+    const row = document.getElementById('metric-range-row');
+    const rsel = document.getElementById('metric-range-field');
+    if (row && rsel) {
+        const prev = rsel.value;
+        rsel.innerHTML = '';
+        keys.forEach(k => {
+            const o = document.createElement('option');
+            o.value = k;
+            o.textContent = metricLabel(k);
+            rsel.appendChild(o);
+        });
+        if (keys.includes(prev)) rsel.value = prev;
+        row.style.display = keys.length ? 'flex' : 'none';
+        updateMetricRangeHints();
+    }
+}
+
+// Placeholders show the observed range of the selected metric
+function updateMetricRangeHints() {
+    const rsel = document.getElementById('metric-range-field');
+    const minI = document.getElementById('metric-range-min');
+    const maxI = document.getElementById('metric-range-max');
+    if (!rsel || !minI || !maxI || !rsel.value) return;
+    let lo = Infinity, hi = -Infinity;
+    for (const it of activeData) {
+        const v = it && it.metrics ? it.metrics[rsel.value] : undefined;
+        if (typeof v === 'number' && isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    }
+    minI.placeholder = isFinite(lo) ? 'min ' + parseFloat(lo.toPrecision(3)) : 'min';
+    maxI.placeholder = isFinite(hi) ? 'max ' + parseFloat(hi.toPrecision(3)) : 'max';
+}
+
+// "Metric range" ADD: pushes up to two logic filters (>= min, <= max)
+function addMetricRange() {
+    const rsel = document.getElementById('metric-range-field');
+    const minI = document.getElementById('metric-range-min');
+    const maxI = document.getElementById('metric-range-max');
+    if (!rsel || !minI || !maxI || !rsel.value) return;
+    const field = 'metric:' + rsel.value;
+    const lo = minI.value.trim() === '' ? null : parseFloat(minI.value);
+    const hi = maxI.value.trim() === '' ? null : parseFloat(maxI.value);
+    if ((lo === null || isNaN(lo)) && (hi === null || isNaN(hi))) { alert('Enter a min and/or max'); return; }
+    if (lo !== null && !isNaN(lo)) logicFilters.push({ field, op: '>=', value: lo });
+    if (hi !== null && !isNaN(hi)) logicFilters.push({ field, op: '<=', value: hi });
+    minI.value = '';
+    maxI.value = '';
+    renderLogicFilters();
+    updateDataPipeline();
+}
+
 // Remove a logic filter by index
 function removeLogicFilter(index) {
     if (index >= 0 && index < logicFilters.length) {
@@ -1959,7 +2055,8 @@ function renderLogicFilters() {
         const tag = document.createElement('div');
         tag.className = 'search-filter-tag';
 
-        const label = fieldLabels[filter.field] || filter.field;
+        const label = fieldLabels[filter.field] ||
+            (typeof filter.field === 'string' && filter.field.startsWith('metric:') ? metricLabel(filter.field.slice(7)) : filter.field);
         tag.innerHTML = `
             <span class="filter-type" style="background: #1a4a2a; color: #4ecf7a;">${label}</span>
             <span class="filter-term">${filter.op} ${filter.value}</span>
