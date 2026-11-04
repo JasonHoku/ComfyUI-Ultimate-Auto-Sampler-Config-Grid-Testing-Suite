@@ -701,6 +701,12 @@ def expand_configs(raw_configs, pos_prompts, neg_prompts, denoise_values, seed, 
                 "deep_shrink_downscale_after_skip": entry.get("deep_shrink_downscale_after_skip", True),
                 "deep_shrink_downscale_method": entry.get("deep_shrink_downscale_method", "bicubic"),
                 "deep_shrink_upscale_method": entry.get("deep_shrink_upscale_method", "bicubic"),
+                # Skip Layer Guidance (SkipLayerGuidanceDiTSimple) — on/off per entry, like Deep Shrink
+                "use_slg": bool(entry.get("use_slg", False)),
+                "slg_double_layers": str(entry.get("slg_double_layers", "") or ""),
+                "slg_single_layers": str(entry.get("slg_single_layers", "22") or ""),
+                "slg_start_percent": float(entry.get("slg_start_percent", 0.0)),
+                "slg_end_percent": float(entry.get("slg_end_percent", 0.5)),
                 "resolution": combo[19],  # (w, h) tuple or None
                 # Per-entry seed override (Revise modal sets this explicitly).
                 # Builder UI does NOT emit entry["seed"] — it uses the node-level

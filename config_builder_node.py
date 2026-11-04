@@ -174,6 +174,50 @@ def load_and_save_tags(lora_name, force_fetch=False, auto_fetch=True):
         return []
 
 
+# CLIP types. The static lists are the fallback (ComfyUI's CLIPLoader /
+# DualCLIPLoader as of mid-2026); get_clip_type_lists() reads the live lists
+# from the installed ComfyUI's loader nodes so a new model family (MOSS-Image
+# was missing here for weeks) is selectable without a plugin release.
+_FALLBACK_CLIP_TYPES = [
+    "stable_diffusion", "stable_cascade", "sd3", "stable_audio",
+    "mochi", "ltxv", "pixart", "cosmos", "lumina2", "wan",
+    "hidream", "chroma", "ace", "flux", "flux2", "krea2", "moss_image",
+]
+_FALLBACK_DUAL_CLIP_TYPES = [
+    "sdxl", "sd3", "flux", "flux2", "hunyuan_video", "hidream",
+    "hunyuan_image", "hunyuan_video_15",
+]
+
+
+def _loader_type_options(node_name):
+    """The `type` combo options of a ComfyUI loader node, or [] if unavailable."""
+    try:
+        import nodes as comfy_nodes
+        node_cls = getattr(comfy_nodes, "NODE_CLASS_MAPPINGS", {}).get(node_name)
+        options = node_cls.INPUT_TYPES()["required"]["type"][0]
+        return [str(t) for t in options]
+    except Exception:
+        return []
+
+
+def get_clip_type_lists():
+    """
+    (clip_types, dual_clip_types) for the Builder UI's CLIP Type dropdown.
+
+    Fallback order first, then anything the running ComfyUI's CLIPLoader /
+    DualCLIPLoader offer that the fallback does not know yet.
+    """
+    clip_types = list(_FALLBACK_CLIP_TYPES)
+    for t in _loader_type_options("CLIPLoader"):
+        if t not in clip_types:
+            clip_types.append(t)
+    dual_clip_types = list(_FALLBACK_DUAL_CLIP_TYPES)
+    for t in _loader_type_options("DualCLIPLoader"):
+        if t not in dual_clip_types:
+            dual_clip_types.append(t)
+    return clip_types, dual_clip_types
+
+
 class UltimateConfigBuilder:
     """
     Config builder with complete HTML UI.
@@ -770,6 +814,18 @@ class UltimateConfigBuilder:
                 config["deep_shrink_downscale_method"] = str(config_array.get("deep_shrink_downscale_method", "bicubic"))
                 config["deep_shrink_upscale_method"] = str(config_array.get("deep_shrink_upscale_method", "bicubic"))
 
+            # Skip Layer Guidance (SkipLayerGuidanceDiTSimple) — the uncond pass
+            # skips the listed DiT blocks for part of the schedule. The official
+            # MOSS-Image workflow ships it on single block 22 for 0-50%.
+            # Only emit detail params when the toggle is on (same as Deep Shrink).
+            use_slg = config_array.get("use_slg", False)
+            config["use_slg"] = bool(use_slg)
+            if use_slg:
+                config["slg_double_layers"] = str(config_array.get("slg_double_layers", "") or "")
+                config["slg_single_layers"] = str(config_array.get("slg_single_layers", "22") or "")
+                config["slg_start_percent"] = float(config_array.get("slg_start_percent", 0.0))
+                config["slg_end_percent"] = float(config_array.get("slg_end_percent", 0.5))
+
             # ==== PROMPT HANDLING ====
             # Priority: per-config > global > node inputs (omitted = use node inputs)
             use_custom = config_array.get("use_custom_prompts", False)
@@ -802,7 +858,7 @@ class UltimateConfigBuilder:
                 "model", "model_type", "lora", "vae",
                 "model_sampling_override", "use_advanced_sampling", "use_flux_guidance",
                 "model_prompt_prefix", "model_prompt_suffix", "attention_mode",
-                "use_deep_shrink",
+                "use_deep_shrink", "use_slg",
             }
             missing = _EXPECTED_CONFIG_KEYS - set(config.keys())
             if missing:
@@ -1270,16 +1326,8 @@ async def get_model_lists_endpoint(request):
         except (KeyError, Exception):
             clip_gguf = []
 
-        # CLIPType options (matching ComfyUI's CLIPLoader and DualCLIPLoader)
-        clip_types = [
-            "stable_diffusion", "stable_cascade", "sd3", "stable_audio",
-            "mochi", "ltxv", "pixart", "cosmos", "lumina2", "wan",
-            "hidream", "chroma", "ace", "flux", "flux2", "krea2"
-        ]
-        dual_clip_types = [
-            "sdxl", "sd3", "flux", "flux2", "hunyuan_video", "hidream",
-            "hunyuan_image", "hunyuan_video_15"
-        ]
+        # CLIPType options: static fallback + whatever this ComfyUI's loaders offer
+        clip_types, dual_clip_types = get_clip_type_lists()
 
         # Upscale model list
         try:

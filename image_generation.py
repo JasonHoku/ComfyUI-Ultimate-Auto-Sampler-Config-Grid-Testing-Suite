@@ -54,6 +54,73 @@ import numpy as np
 from PIL import Image
 
 
+def _latent_ratio(patched_model):
+    """Pixels per latent cell for this model (8 for SD/SDXL/Flux.1, 16 for the Flux.2 family)."""
+    from .model_loader import get_latent_downscale_ratio
+    return get_latent_downscale_ratio(patched_model)
+
+
+def _vae_spatial_compression(vae):
+    """Pixels per latent cell for a VAE (what VAEDecodeTiled divides tile_size by); 8 if unknown."""
+    try:
+        ratio = vae.spacial_compression_decode()
+        if isinstance(ratio, int) and ratio > 0:
+            return ratio
+    except Exception:
+        pass
+    return 8
+
+
+def _vae_temporal_compression(vae):
+    """Frames per latent frame for a video VAE; 8 (the historical divisor here) if unknown."""
+    try:
+        ratio = vae.temporal_compression_decode()
+        if isinstance(ratio, int) and ratio > 0:
+            return ratio
+    except Exception:
+        pass
+    return 8
+
+
+def _apply_model_patch_node(node_id, model, label=None, **kwargs):
+    """
+    Run a ComfyUI model-patching node (MODEL in -> MODEL out) by its node id and
+    return the patched model, or the input model if the node is missing/fails.
+
+    Looked up via nodes.NODE_CLASS_MAPPINGS per project convention. Current
+    ComfyUI ships these as V3 io.ComfyNode subclasses (classmethod execute()
+    returning io.NodeOutput whose positional outputs live in .args); older
+    builds used V1 instance methods named by FUNCTION. Same dispatch as the
+    inline Deep Shrink block in generate_image and ltx_video_generation._call_node.
+    """
+    node_cls = nodes.NODE_CLASS_MAPPINGS.get(node_id)
+    if node_cls is None:
+        print(f"[GridTester] ⚠️ {node_id} node not available in this ComfyUI build — skipped")
+        return model
+    try:
+        result = None
+        try:
+            from comfy_api.latest import io as _io
+            if isinstance(node_cls, type) and issubclass(node_cls, _io.ComfyNode):
+                result = node_cls.execute(model=model, **kwargs)
+        except (ImportError, TypeError):
+            pass
+        if result is None:
+            fn_name = getattr(node_cls, "FUNCTION", "patch")
+            result = getattr(node_cls(), fn_name)(model=model, **kwargs)
+        if hasattr(result, "args") and isinstance(getattr(result, "args"), tuple):
+            patched = result.args[0]   # V3 NodeOutput
+        elif isinstance(result, (tuple, list)):
+            patched = result[0]        # V1 tuple
+        else:
+            patched = result           # bare model
+        print(f"[GridTester] 🔧 Applied {label or node_id}")
+        return patched
+    except Exception as e:
+        print(f"[GridTester] ⚠️ Failed to apply {node_id}: {e}")
+        return model
+
+
 # NOTE: torch.inference_mode() decorator — see module docstring above for why
 # this is REQUIRED on all out-of-graph inference entry points. Removing it
 # will reintroduce the same 6× VRAM blowup we fixed in May 2026.
@@ -86,6 +153,11 @@ def generate_image(
     deep_shrink_downscale_after_skip=True,
     deep_shrink_downscale_method="bicubic",
     deep_shrink_upscale_method="bicubic",
+    use_slg=False,
+    slg_double_layers="",
+    slg_single_layers="22",
+    slg_start_percent=0.0,
+    slg_end_percent=0.5,
     width=1024,
     height=1024
 ):
@@ -121,6 +193,11 @@ def generate_image(
         deep_shrink_downscale_after_skip: Whether to downscale after skip (default True)
         deep_shrink_downscale_method: Downscale interpolation method (default "bicubic")
         deep_shrink_upscale_method: Upscale interpolation method (default "bicubic")
+        use_slg: Whether to apply Skip Layer Guidance (SkipLayerGuidanceDiTSimple)
+        slg_double_layers: Comma-separated double-block indices the uncond pass skips ("" = none)
+        slg_single_layers: Comma-separated single-block indices the uncond pass skips (MOSS-Image template: "22")
+        slg_start_percent: Sampling percent where the skip starts (default 0.0)
+        slg_end_percent: Sampling percent where the skip ends (default 0.5)
         width: Image width (used by Flux model sampling and Flux2Scheduler)
         height: Image height (used by Flux model sampling and Flux2Scheduler)
 
@@ -251,6 +328,27 @@ def generate_image(
                 print("[GridTester] ⚠️ PatchModelAddDownscale node not available in this ComfyUI build — Deep Shrink skipped")
         except Exception as e:
             print(f"[GridTester] ⚠️ Failed to apply Deep Shrink: {e}")
+
+    # === Skip Layer Guidance (SkipLayerGuidanceDiTSimple) ===
+    # DiT models only: between start/end percent the uncond (negative) pass
+    # skips the listed transformer blocks, which sharpens structure. The
+    # official MOSS-Image workflow ships this on single block 22 for the first
+    # half of sampling. Wraps comfy_extras/nodes_slg.py; the node clones the
+    # model, so the LoRA-patched model handed in is left untouched.
+    if use_slg:
+        double_s = str(slg_double_layers or "").strip()
+        single_s = str(slg_single_layers or "").strip()
+        if not double_s and not single_s:
+            print("[GridTester] ⚠️ Skip Layer Guidance enabled but no layers listed — skipped")
+        else:
+            patched_model = _apply_model_patch_node(
+                "SkipLayerGuidanceDiTSimple", patched_model,
+                label=f"SkipLayerGuidanceDiTSimple: double=[{double_s}] single=[{single_s}] range={float(slg_start_percent)}-{float(slg_end_percent)}",
+                double_layers=double_s,
+                single_layers=single_s,
+                start_percent=float(slg_start_percent),
+                end_percent=float(slg_end_percent),
+            )
 
     # === Flux Guidance ===
     # Modify positive conditioning with guidance value (used by Flux 1 models)
@@ -411,16 +509,18 @@ def tiled_hires_sample(latent_input, patched_model, config, positive_conditionin
     import torch
 
     samples = latent_input["samples"]
-    # Convert pixel dimensions to latent space (8x smaller)
+    # Convert pixel dimensions to latent space (8 px per cell for SD/SDXL/Flux.1,
+    # 16 for the Flux.2 family incl. MOSS-Image; read from the model's latent format)
     # Handle both 4D [B, C, H, W] and 5D [B, C, T, H, W] latent formats (video VAEs add temporal dim)
+    ratio = _latent_ratio(patched_model)
     if samples.ndim == 5:
         lat_h, lat_w = samples.shape[3], samples.shape[4]
     else:
         lat_h, lat_w = samples.shape[2], samples.shape[3]
-    tw = tile_width // 8
-    th = tile_height // 8
-    pad = tile_padding // 8
-    blur = max(1, mask_blur // 8)  # Blur in latent space
+    tw = max(1, tile_width // ratio)
+    th = max(1, tile_height // ratio)
+    pad = tile_padding // ratio
+    blur = max(1, mask_blur // ratio)  # Blur in latent space
 
     # Calculate tile grid
     def calc_tiles(total, tile_size, padding, uniform):
@@ -576,9 +676,10 @@ def upscale_image(result_latent, vae, patched_model, upscaling_config, config, p
         # Upscale latent in latent space → re-sample with denoise
         import comfy.utils
         latent_samples = result_latent["samples"]
-        # Latent space is 8x smaller than pixel space
+        # Latent cells per pixel come from the model's latent format (8 or 16)
+        ratio = _latent_ratio(patched_model)
         upscaled_latent = comfy.utils.common_upscale(
-            latent_samples, new_w // 8, new_h // 8, resize_method, "disabled"
+            latent_samples, new_w // ratio, new_h // ratio, resize_method, "disabled"
         )
 
         if hires_tiled_sampling:
@@ -611,12 +712,12 @@ def upscale_image(result_latent, vae, patched_model, upscaling_config, config, p
         if tiled_vae:
             from comfy_extras.nodes_post_processing import ImageScaleToTotalPixels
             vae.first_stage_model.tile_sample_min_size = tile_size
-            vae.first_stage_model.tile_latent_min_size = tile_size // 8
+            vae.first_stage_model.tile_latent_min_size = tile_size // _vae_spatial_compression(vae)
             vae.first_stage_model.tile_overlap_factor = tile_overlap / tile_size if tile_size > 0 else 0.125
             if hasattr(vae.first_stage_model, 'tile_sample_min_size_temporal'):
                 vae.first_stage_model.tile_sample_min_size_temporal = temporal_size
             if hasattr(vae.first_stage_model, 'tile_latent_min_size_temporal'):
-                vae.first_stage_model.tile_latent_min_size_temporal = temporal_size // 8
+                vae.first_stage_model.tile_latent_min_size_temporal = temporal_size // _vae_temporal_compression(vae)
             if hasattr(vae.first_stage_model, 'tile_overlap_factor_temporal'):
                 vae.first_stage_model.tile_overlap_factor_temporal = temporal_overlap / temporal_size if temporal_size > 0 else 0.125
         pil_image = decode_latent_with_vae(vae, result_latent["samples"])
@@ -657,12 +758,12 @@ def upscale_image(result_latent, vae, patched_model, upscaling_config, config, p
         # Use tiled VAE decode if enabled
         if tiled_vae:
             vae.first_stage_model.tile_sample_min_size = tile_size
-            vae.first_stage_model.tile_latent_min_size = tile_size // 8
+            vae.first_stage_model.tile_latent_min_size = tile_size // _vae_spatial_compression(vae)
             vae.first_stage_model.tile_overlap_factor = tile_overlap / tile_size if tile_size > 0 else 0.125
             if hasattr(vae.first_stage_model, 'tile_sample_min_size_temporal'):
                 vae.first_stage_model.tile_sample_min_size_temporal = temporal_size
             if hasattr(vae.first_stage_model, 'tile_latent_min_size_temporal'):
-                vae.first_stage_model.tile_latent_min_size_temporal = temporal_size // 8
+                vae.first_stage_model.tile_latent_min_size_temporal = temporal_size // _vae_temporal_compression(vae)
             if hasattr(vae.first_stage_model, 'tile_overlap_factor_temporal'):
                 vae.first_stage_model.tile_overlap_factor_temporal = temporal_overlap / temporal_size if temporal_size > 0 else 0.125
         pil_image = decode_latent_with_vae(vae, result_latent["samples"])

@@ -110,6 +110,8 @@ _GEN_ORCH_DEPS = {
         "load_loras": lambda *a, **kw: None,
         "cleanup_model_references": lambda *a, **kw: None,
         "get_latent_channels": lambda *a, **kw: 4,
+        "get_latent_downscale_ratio": lambda *a, **kw: 8,
+        "make_empty_latent": lambda *a, **kw: {"samples": None},
         "load_loras_for_preencoding": lambda *a, **kw: None,
         "print_incompatible_loras_summary": lambda *a, **kw: None,
         "load_diffusion_model_and_clip": lambda *a, **kw: (None, None),

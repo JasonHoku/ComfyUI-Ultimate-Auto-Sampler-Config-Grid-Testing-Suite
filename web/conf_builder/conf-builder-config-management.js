@@ -3761,6 +3761,85 @@ export function renderExtraModelSamplingSection(node, div, configArray, arrayIdx
         innerWrapper.appendChild(group4);
     }
 
+    // ========== SUB-GROUP 5: Skip Layer Guidance (SkipLayerGuidanceDiTSimple) ==========
+    const group5 = document.createElement("div");
+    group5.style.cssText = "border-left: 3px solid #ffaa00; padding-left: 8px;";
+
+    const group5Header = document.createElement("div");
+    group5Header.style.cssText = "font-size: 11px; font-weight: bold; margin-bottom: 4px; color: #ffaa00;";
+    group5Header.textContent = "SKIP LAYER GUIDANCE (SkipLayerGuidanceDiTSimple)";
+    group5.appendChild(group5Header);
+
+    const group5Info = document.createElement("div");
+    group5Info.style.cssText = "font-size: 10px; color: #888; font-style: italic; margin-bottom: 6px;";
+    group5Info.textContent = "DiT models only (MOSS-Image, Flux.2, SD3...). Between Start % and End % the negative (uncond) pass skips the listed transformer blocks, which sharpens structure. The official MOSS-Image workflow ships this on single block 22 for the first half of sampling. Applies to every image in this config array.";
+    group5.appendChild(group5Info);
+
+    const slgToggleRow = document.createElement("div");
+    slgToggleRow.style.cssText = "display: flex; gap: 6px; align-items: center; margin-bottom: 6px;";
+    const slgToggleLabel = document.createElement("label");
+    slgToggleLabel.style.cssText = "display: flex; align-items: center; gap: 6px; cursor: pointer;";
+    const slgToggleCheck = document.createElement("input");
+    slgToggleCheck.type = "checkbox";
+    slgToggleCheck.checked = configArray.use_slg || false;
+    slgToggleCheck.style.cssText = "cursor: pointer;";
+    slgToggleLabel.appendChild(slgToggleCheck);
+    const slgToggleText = document.createElement("span");
+    slgToggleText.textContent = "Enable Skip Layer Guidance";
+    slgToggleText.style.cssText = "color: #ccc; font-size: 11px;";
+    slgToggleLabel.appendChild(slgToggleText);
+    slgToggleRow.appendChild(slgToggleLabel);
+    group5.appendChild(slgToggleRow);
+
+    const slgOpts = document.createElement("div");
+    slgOpts.style.cssText = "margin-left: 12px;";
+    slgOpts.style.display = configArray.use_slg ? "block" : "none";
+
+    // double_layers (comma-separated block indices; blank = none)
+    const slgDoubleInput = document.createElement("input");
+    slgDoubleInput.type = "text"; slgDoubleInput.className = "cb-input";
+    slgDoubleInput.style.cssText = "width: 120px;";
+    slgDoubleInput.placeholder = "e.g. 7, 8, 9";
+    slgDoubleInput.value = configArray.slg_double_layers ?? "";
+    slgDoubleInput.onchange = () => { configArray.slg_double_layers = slgDoubleInput.value.trim(); node.saveState(); };
+    slgOpts.appendChild(_dsRow("Double Layers:", slgDoubleInput, "(blank = none; MOSS-Image has no double blocks)"));
+
+    // single_layers
+    const slgSingleInput = document.createElement("input");
+    slgSingleInput.type = "text"; slgSingleInput.className = "cb-input";
+    slgSingleInput.style.cssText = "width: 120px;";
+    slgSingleInput.placeholder = "22";
+    slgSingleInput.value = configArray.slg_single_layers ?? "22";
+    slgSingleInput.onchange = () => { configArray.slg_single_layers = slgSingleInput.value.trim(); node.saveState(); };
+    slgOpts.appendChild(_dsRow("Single Layers:", slgSingleInput, "(MOSS-Image template: 22; ComfyUI default: 7, 8, 9)"));
+
+    // start_percent
+    const slgStartInput = document.createElement("input");
+    slgStartInput.type = "number"; slgStartInput.className = "cb-input";
+    slgStartInput.style.cssText = "width: 80px;"; slgStartInput.min = "0.0"; slgStartInput.max = "1.0"; slgStartInput.step = "0.05";
+    slgStartInput.value = configArray.slg_start_percent ?? 0.0;
+    slgStartInput.onchange = () => { configArray.slg_start_percent = parseFloat(slgStartInput.value); if (isNaN(configArray.slg_start_percent)) configArray.slg_start_percent = 0.0; node.saveState(); };
+    slgOpts.appendChild(_dsRow("Start %:", slgStartInput, "(default: 0.0 = beginning)"));
+
+    // end_percent
+    const slgEndInput = document.createElement("input");
+    slgEndInput.type = "number"; slgEndInput.className = "cb-input";
+    slgEndInput.style.cssText = "width: 80px;"; slgEndInput.min = "0.0"; slgEndInput.max = "1.0"; slgEndInput.step = "0.05";
+    slgEndInput.value = configArray.slg_end_percent ?? 0.5;
+    slgEndInput.onchange = () => { configArray.slg_end_percent = parseFloat(slgEndInput.value); if (isNaN(configArray.slg_end_percent)) configArray.slg_end_percent = 0.5; node.saveState(); };
+    slgOpts.appendChild(_dsRow("End %:", slgEndInput, "(default: 0.5 = first half of sampling)"));
+
+    slgToggleCheck.onchange = () => {
+        configArray.use_slg = slgToggleCheck.checked;
+        slgOpts.style.display = slgToggleCheck.checked ? "block" : "none";
+        node.saveState();
+    };
+
+    group5.appendChild(slgOpts);
+    if (!isLTXConfigArray(configArray)) {
+        innerWrapper.appendChild(group5);
+    }
+
     contentContainer.appendChild(innerWrapper);
     sectionGrid.appendChild(contentContainer);
     div.appendChild(sectionGrid);
@@ -7273,7 +7352,13 @@ export async function renderUI(node, availableLoras, modelLists, loraFolders, av
             deep_shrink_end_percent: 0.35,
             deep_shrink_downscale_after_skip: true,
             deep_shrink_downscale_method: "bicubic",
-            deep_shrink_upscale_method: "bicubic"
+            deep_shrink_upscale_method: "bicubic",
+            // Skip Layer Guidance (SkipLayerGuidanceDiTSimple)
+            use_slg: false,
+            slg_double_layers: "",
+            slg_single_layers: "22",
+            slg_start_percent: 0.0,
+            slg_end_percent: 0.5
         });
         node.saveState();
         node.renderUI();

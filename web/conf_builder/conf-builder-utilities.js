@@ -41,7 +41,7 @@ const LS_CACHE_KEY = "uscg_model_cache";
 const LS_COUNTS_KEY = "uscg_model_counts";
 // Bump this whenever the cache shape changes (new field added, structure tweaked).
 // Mismatched versions force a fresh fetch instead of restoring incomplete data.
-const LS_CACHE_VERSION = 2;
+const LS_CACHE_VERSION = 3; // v3: clip_types list now comes from ComfyUI's loaders (adds moss_image etc.)
 
 function _saveToLocalStorage() {
     try {

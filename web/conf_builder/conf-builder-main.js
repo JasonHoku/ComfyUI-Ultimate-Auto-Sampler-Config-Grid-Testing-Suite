@@ -156,7 +156,13 @@ app.registerExtension({
                         deep_shrink_end_percent: 0.35,
                         deep_shrink_downscale_after_skip: true,
                         deep_shrink_downscale_method: "bicubic",
-                        deep_shrink_upscale_method: "bicubic"
+                        deep_shrink_upscale_method: "bicubic",
+                        // Skip Layer Guidance (SkipLayerGuidanceDiTSimple)
+                        use_slg: false,
+                        slg_double_layers: "",
+                        slg_single_layers: "22",
+                        slg_start_percent: 0.0,
+                        slg_end_percent: 0.5
                     }],
                     upscaling: {
                         enabled: false,
@@ -300,6 +306,11 @@ app.registerExtension({
                                     if (arr.deep_shrink_downscale_after_skip === undefined) arr.deep_shrink_downscale_after_skip = true;
                                     if (arr.deep_shrink_downscale_method === undefined) arr.deep_shrink_downscale_method = "bicubic";
                                     if (arr.deep_shrink_upscale_method === undefined) arr.deep_shrink_upscale_method = "bicubic";
+                                    if (arr.use_slg === undefined) arr.use_slg = false;
+                                    if (arr.slg_double_layers === undefined) arr.slg_double_layers = "";
+                                    if (arr.slg_single_layers === undefined) arr.slg_single_layers = "22";
+                                    if (arr.slg_start_percent === undefined) arr.slg_start_percent = 0.0;
+                                    if (arr.slg_end_percent === undefined) arr.slg_end_percent = 0.5;
                                 });
                             }
 
@@ -445,6 +456,11 @@ app.registerExtension({
                                     if (arr.deep_shrink_downscale_after_skip === undefined) arr.deep_shrink_downscale_after_skip = true;
                                     if (arr.deep_shrink_downscale_method === undefined) arr.deep_shrink_downscale_method = "bicubic";
                                     if (arr.deep_shrink_upscale_method === undefined) arr.deep_shrink_upscale_method = "bicubic";
+                                    if (arr.use_slg === undefined) arr.use_slg = false;
+                                    if (arr.slg_double_layers === undefined) arr.slg_double_layers = "";
+                                    if (arr.slg_single_layers === undefined) arr.slg_single_layers = "22";
+                                    if (arr.slg_start_percent === undefined) arr.slg_start_percent = 0.0;
+                                    if (arr.slg_end_percent === undefined) arr.slg_end_percent = 0.5;
                                 });
 
                                 this.state.config_arrays = loadedArrays;
@@ -616,6 +632,11 @@ app.registerExtension({
                                 if (arr.deep_shrink_downscale_after_skip === undefined) arr.deep_shrink_downscale_after_skip = true;
                                 if (arr.deep_shrink_downscale_method === undefined) arr.deep_shrink_downscale_method = "bicubic";
                                 if (arr.deep_shrink_upscale_method === undefined) arr.deep_shrink_upscale_method = "bicubic";
+                                if (arr.use_slg === undefined) arr.use_slg = false;
+                                if (arr.slg_double_layers === undefined) arr.slg_double_layers = "";
+                                if (arr.slg_single_layers === undefined) arr.slg_single_layers = "22";
+                                if (arr.slg_start_percent === undefined) arr.slg_start_percent = 0.0;
+                                if (arr.slg_end_percent === undefined) arr.slg_end_percent = 0.5;
                             });
                         } else if (existing.lora_config) {
                             this.state = this.migrateOldFormat(existing);

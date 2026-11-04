@@ -340,6 +340,50 @@ def resolve_text_encoder_path(filename):
     raise FileNotFoundError(f"Text encoder not found: {filename}")
 
 
+def resolve_clip_type(clip_type_str, loaded_model=None):
+    """
+    Map a Builder ``clip_type`` string onto ``comfy.sd.CLIPType``.
+
+    Returns ``(CLIPType member, effective clip_type string)``. Two things the
+    old bare ``getattr(..., STABLE_DIFFUSION)`` fallback hid:
+
+    - An unknown string silently became STABLE_DIFFUSION. It now warns.
+    - A model family that needs a specific CLIPType to get the right tokenizer
+      template was loaded with the generic encoder whenever the user left
+      clip_type at its default. MOSS-Image is the motivating case: with
+      ``stable_diffusion`` ComfyUI builds a plain Qwen3.5 encoder, with
+      ``moss_image`` it builds the MOSS one (chat template + open <think>
+      block), and the two condition the model differently. So when clip_type
+      is the default and the name of ComfyUI's detected model-config class is
+      itself a CLIPType member (MOSSImage -> MOSS_IMAGE, Flux2 -> FLUX2,
+      Krea2 -> KREA2, Chroma -> CHROMA, ...), that member is used and logged.
+      An explicit non-default clip_type always wins.
+    """
+    requested = str(clip_type_str or "stable_diffusion").strip() or "stable_diffusion"
+    clip_type = getattr(comfy.sd.CLIPType, requested.upper(), None)
+    if clip_type is None:
+        print(f"[GridTester] ⚠️ Unknown clip_type '{requested}' (not a comfy.sd.CLIPType in this ComfyUI) - "
+              f"falling back to stable_diffusion")
+        requested = "stable_diffusion"
+        clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
+
+    if requested == "stable_diffusion" and loaded_model is not None:
+        family = None
+        try:
+            family = type(loaded_model.model.model_config).__name__
+        except Exception:
+            pass
+        if family:
+            wanted = family.upper().replace("_", "")
+            members = getattr(comfy.sd.CLIPType, "__members__", {})
+            for name, member in members.items():
+                if name.replace("_", "") == wanted and name != "STABLE_DIFFUSION":
+                    print(f"[GridTester] 🧭 clip_type left at default but the model is {family} -> "
+                          f"using clip_type '{name.lower()}' (set clip_type explicitly to override)")
+                    return member, name.lower()
+    return clip_type, requested
+
+
 def load_diffusion_model_and_clip(
     model_name,
     model_type,
@@ -458,7 +502,7 @@ def load_diffusion_model_and_clip(
         clip_start = time.time()
         print(f"[GridTester] 💿 LOADING TEXT ENCODERS: {text_encoder_paths}")
 
-        clip_type = getattr(comfy.sd.CLIPType, clip_type_str.upper(), comfy.sd.CLIPType.STABLE_DIFFUSION)
+        clip_type, clip_type_str = resolve_clip_type(clip_type_str, loaded_model)
         resolved_paths = [resolve_text_encoder_path(p) for p in text_encoder_paths]
         is_any_gguf = any(p.endswith(".gguf") for p in text_encoder_paths)
 
@@ -740,6 +784,64 @@ def get_latent_channels(model, optional_latent):
     
     # Default to 4 for SD1.5/SDXL
     return 4
+
+
+def get_latent_downscale_ratio(model):
+    """
+    Pixels per latent cell along each spatial axis for this model's latent format.
+
+    SD1.x / SDXL / Flux.1 VAEs compress 8x (one latent cell = 8x8 pixels); the
+    Flux.2 latent family (Flux.2, MOSS-Image, Krea 2, ...) compresses 16x with
+    128 channels. ComfyUI exposes this as ``latent_format.spacial_downscale_ratio``
+    (sic) and its own Empty*Latent nodes divide by it; USCG used to hardcode 8.
+
+    Getting this wrong is silent and very expensive: ``h // 8`` on a 16x model
+    yields a latent with 4x the cells, so the DiT samples 4x the tokens (attention
+    cost grows faster than that) and the VAE decodes an image 2x the requested
+    size in each dimension. That was the "MOSS-Image is ~10x slower than the
+    official template" bug (2026-11): 832x1216 jobs came out as 1664x2432.
+
+    Falls back to 8 when the model exposes no latent format.
+    """
+    try:
+        inner = model.model
+        latent_format = getattr(inner, "latent_format", None)
+        if latent_format is None and hasattr(inner, "model_config"):
+            latent_format = getattr(inner.model_config, "latent_format", None)
+        ratio = getattr(latent_format, "spacial_downscale_ratio", None)
+        if isinstance(ratio, int) and ratio > 0:
+            return ratio
+    except Exception:
+        pass
+    return 8
+
+
+def empty_latent_shape(latent_channels, width, height, downscale_ratio=8, batch_size=1):
+    """[B, C, H, W] for an empty latent at the given pixel size (floor division, like ComfyUI)."""
+    ratio = int(downscale_ratio) if downscale_ratio else 8
+    return [batch_size, latent_channels, height // ratio, width // ratio]
+
+
+def make_empty_latent(latent_channels, width, height, downscale_ratio=8, batch_size=1):
+    """
+    Build the ``{"samples": zeros}`` latent dict for a WxH job.
+
+    Warns once per odd size when the pixel dimensions are not multiples of the
+    model's downscale ratio: the latent is floored, so the image comes out
+    slightly smaller than requested (ComfyUI's own empty-latent nodes behave the
+    same way, their width/height widgets just step by the ratio).
+    """
+    ratio = int(downscale_ratio) if downscale_ratio else 8
+    if (width % ratio) or (height % ratio):
+        key = (width, height, ratio)
+        if key not in _ODD_SIZE_WARNED:
+            _ODD_SIZE_WARNED.add(key)
+            print(f"[GridTester] ⚠️ {width}x{height} is not a multiple of this model's latent ratio ({ratio}px per cell) - "
+                  f"output will be {(width // ratio) * ratio}x{(height // ratio) * ratio}")
+    return {"samples": torch.zeros(empty_latent_shape(latent_channels, width, height, ratio, batch_size))}
+
+
+_ODD_SIZE_WARNED = set()
 
 
 def load_loras_for_preencoding(base_model, base_clip, lora_string):

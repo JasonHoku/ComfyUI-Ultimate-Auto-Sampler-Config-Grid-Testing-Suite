@@ -20,7 +20,7 @@ from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators
 from .manifest_utils import load_existing_manifest, save_manifest
 from .model_loader import (
     load_checkpoint, load_loras, cleanup_model_references,
-    get_latent_channels, load_loras_for_preencoding,
+    get_latent_channels, get_latent_downscale_ratio, make_empty_latent, load_loras_for_preencoding,
     print_incompatible_loras_summary, load_diffusion_model_and_clip,
     load_vae_by_name
 )
@@ -1171,14 +1171,17 @@ def run_generation_loop(
         else:
             cached_lora_cache_key = None
         latent_channels = get_latent_channels(loaded_model, optional_latent)
+        latent_ratio = get_latent_downscale_ratio(loaded_model)
     elif len(unique_model_keys) > 1:
         print(f"[GridTester] ⚠️ Multiple models detected ({len(unique_model_keys)} different models) - pre-encoding DISABLED")
         cond_cache = None
         latent_channels = 4
+        latent_ratio = 8  # refreshed per model at the model-switch site below
     else:
         print(f"[GridTester] ℹ️ Using optional conditioning, skipping pre-encoding")
         cond_cache = None
         latent_channels = 4
+        latent_ratio = 8
     
     # ==== FULL RUN SEED BEHAVIOR (PRE-RUN) ====
     # Apply "random_before" full run seed behavior: randomize seed before the entire session
@@ -1470,6 +1473,7 @@ def run_generation_loop(
                 cached_lora_key = None
                 cached_lora_cache_key = None
                 latent_channels = get_latent_channels(loaded_model, optional_latent)
+                latent_ratio = get_latent_downscale_ratio(loaded_model)
                 model_switched = True
             else:
                 model_switched = False
@@ -1757,7 +1761,10 @@ def run_generation_loop(
             if job["latent"] is not None:
                 latent_in = {"samples": job["latent"]["samples"].clone()}
             else:
-                latent_in = {"samples": torch.zeros([1, latent_channels, h // 8, w // 8])}
+                # Pixels-per-cell comes from the model's latent format (8 for SD/SDXL/Flux.1,
+                # 16 for the Flux.2 family incl. MOSS-Image). Hardcoding 8 here made 16x
+                # models render at 2x size and ~10x slower.
+                latent_in = make_empty_latent(latent_channels, w, h, latent_ratio)
             
             result_latent = None
             try:
@@ -1796,6 +1803,11 @@ def run_generation_loop(
                     deep_shrink_downscale_after_skip=conf.get("deep_shrink_downscale_after_skip", True),
                     deep_shrink_downscale_method=conf.get("deep_shrink_downscale_method", "bicubic"),
                     deep_shrink_upscale_method=conf.get("deep_shrink_upscale_method", "bicubic"),
+                    use_slg=conf.get("use_slg", False),
+                    slg_double_layers=conf.get("slg_double_layers", ""),
+                    slg_single_layers=conf.get("slg_single_layers", "22"),
+                    slg_start_percent=conf.get("slg_start_percent", 0.0),
+                    slg_end_percent=conf.get("slg_end_percent", 0.5),
                     width=w,
                     height=h
                 )
@@ -3140,10 +3152,11 @@ def _run_distributed_generation(
 
             # --- Create Latent ---
             latent_channels = get_latent_channels(loaded_model, optional_latent)
+            latent_ratio = get_latent_downscale_ratio(loaded_model)
             if optional_latent is not None:
                 latent_in = {"samples": optional_latent["samples"].clone()}
             else:
-                latent_in = {"samples": torch.zeros([1, latent_channels, h // 8, w // 8])}
+                latent_in = make_empty_latent(latent_channels, w, h, latent_ratio)
 
             # --- Generate Image ---
             try:
@@ -3180,6 +3193,11 @@ def _run_distributed_generation(
                     deep_shrink_downscale_after_skip=conf.get("deep_shrink_downscale_after_skip", True),
                     deep_shrink_downscale_method=conf.get("deep_shrink_downscale_method", "bicubic"),
                     deep_shrink_upscale_method=conf.get("deep_shrink_upscale_method", "bicubic"),
+                    use_slg=conf.get("use_slg", False),
+                    slg_double_layers=conf.get("slg_double_layers", ""),
+                    slg_single_layers=conf.get("slg_single_layers", "22"),
+                    slg_start_percent=conf.get("slg_start_percent", 0.0),
+                    slg_end_percent=conf.get("slg_end_percent", 0.5),
                     width=w,
                     height=h
                 )
