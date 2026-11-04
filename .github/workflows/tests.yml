@@ -26,7 +26,7 @@ jobs:
       - run: pip install -r tests/requirements-ci.txt
       - name: Assert torch is NOT installed (this leg tests the stub path)
         run: python -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('torch') is not None)"
-      # expect: 499 passed, 16 skipped (the requires_torch tests), measured 11/4/26
+      # expect: 554 passed, 17 skipped (the requires_torch tests + the real-torch image test), measured 11/4/26 after wave 2
       - run: python -m pytest tests/ -q -ra --ignore=tests/e2e
 
   pytest-torch:
@@ -46,7 +46,7 @@ jobs:
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r tests/requirements-ci.txt
       - run: python -c "import torch; print(torch.__version__); assert hasattr(torch, 'inference_mode')"
-      # expect: 515 passed, 0 skipped (the stub leg's passed + skipped; the torch leg itself is not measured locally)
+      # expect: 571 passed, 0 skipped (the stub leg's passed + skipped; the torch leg itself is not measured locally)
       - run: python -m pytest tests/ -q -ra --ignore=tests/e2e
 
   js-syntax:
