@@ -5,6 +5,14 @@
  */
 
 function toggleFullscreen() {
+    if (USCG_STANDALONE) {
+        // Top-level page: use the browser Fullscreen API (iOS Safari has no element fullscreen; harmless no-op there).
+        try {
+            if (document.fullscreenElement) document.exitFullscreen();
+            else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+        } catch (e) { /* unsupported */ }
+        return;
+    }
     // Send current session name so fullscreen reload uses the right session
     var currentSession = document.getElementById('session-input')?.value || '';
     window.parent.postMessage({ type: 'toggle_fullscreen', node_id: TARGET_NODE_ID, session_name: currentSession }, '*');
@@ -152,6 +160,13 @@ async function loadSession() {
         if (landing) landing.style.display = 'none';
         if (viewport) viewport.style.display = 'block';
 
+        // Standalone page: keep the URL on the session being shown so F5 / reload-after-delete stay on it.
+        if (USCG_STANDALONE) {
+            window._uscgLoadedSession = sess;
+            try { history.replaceState(null, '', '?session=' + encodeURIComponent(sess)); } catch (e) { /* ignore */ }
+            document.title = 'USCG - ' + sess;
+        }
+
         console.log('[Load] ✅ Session loaded successfully');
 
 
@@ -287,6 +302,7 @@ async function fetchAndShowSessions() {
             cardsContainer.innerHTML = '';
             sessions.forEach(s => {
                 const card = document.createElement('div');
+                card.className = 'session-card';
                 card.style.cssText = 'width: 180px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, transform 0.15s;';
                 card.onmouseenter = () => { card.style.borderColor = '#0af'; card.style.transform = 'translateY(-2px)'; };
                 card.onmouseleave = () => { card.style.borderColor = '#444'; card.style.transform = 'none'; };
@@ -782,6 +798,14 @@ async function triggerGen(btn) {
     const jsonStr = JSON.stringify(configOutput, null, 2);
 
     console.log("[Revise] Sending config to UltimateSamplerGrid:", config);
+
+    // No ComfyUI graph to drive (standalone page, or no parent app): queue through the run API instead.
+    let hasParentApp = false;
+    try { hasParentApp = !!(window.parent && window.parent.app); } catch (e) { /* cross-origin parent */ }
+    if (USCG_STANDALONE || !hasParentApp) {
+        await uscgRunViaApi(btn, configOutput);
+        return;
+    }
 
     try {
         const app = window.parent.app;

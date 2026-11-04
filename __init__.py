@@ -7,6 +7,9 @@ import os
 import urllib.parse
 import folder_paths
 import shutil
+import uuid
+import time
+import inspect
 from .sampler_node import SamplerGridTester
 from .dashboard_node import SamplerConfigDashboardViewer
 from .html_generator import get_html_template
@@ -14,6 +17,10 @@ from .config_builder_node import UltimateConfigBuilder
 from .json_text_node import SmartJSONTextNode
 from .metadata_packer import pack_metadata_into_image
 from .directory_scanner import scan_directory_for_images
+from .run_api import (
+    RunTracker, sanitize_session_name_strict, normalize_configs_payload, apply_run_overrides,
+    build_run_prompt, resolve_saved_config, saved_config_to_configs_obj, summarize_history, find_in_queue,
+)
 import sys
 
 # Register a sys.modules alias for cross-companion imports.
@@ -538,6 +545,212 @@ async def get_session_html(request):
 
     except Exception as e:
         return web.Response(status=500, text=str(e))
+
+# =============================================================================
+# API: STANDALONE DASHBOARD PAGE + HEADLESS RUN API
+# =============================================================================
+_run_tracker = RunTracker()
+
+@server.PromptServer.instance.routes.get("/config_tester/dashboard")
+async def standalone_dashboard(request):
+    """
+    Serve the dashboard SPA as a top-level page (phone / second-monitor friendly).
+    Optional ?session=<name>; without it the SPA shows its session landing cards.
+    """
+    try:
+        session_name = sanitize_session_name_strict(request.query.get("session", ""))
+        headers = {"Cache-Control": "no-store"}
+        empty_manifest = {"items": [], "meta": {"model": "", "positive": "", "negative": ""}, "session_name": ""}
+
+        if not session_name:
+            html = get_html_template("", empty_manifest, "standalone", standalone=True)
+            return web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+
+        base_dir = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name)
+        if not _is_path_within(base_dir, _get_benchmarks_base()):
+            return web.Response(status=403, text="Forbidden: path outside benchmarks directory")
+
+        manifest_path = os.path.join(base_dir, "manifest.json")
+        if not os.path.exists(manifest_path):
+            # Unknown session: landing page (picker); the title stays empty so the SPA does not
+            # pretend a session is loaded.
+            html = get_html_template("", empty_manifest, "standalone", standalone=True)
+            return web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        html = get_html_template(session_name, manifest, "standalone", standalone=True)
+        return web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
+    except Exception as e:
+        print(f"[GridTester] ❌ /dashboard failed: {e}")
+        return web.Response(status=500, text=str(e))
+
+
+@server.PromptServer.instance.routes.post("/config_tester/run")
+async def run_headless(request):
+    """
+    Queue a USCG run without the ComfyUI graph editor (Discord bot / session hub / curl).
+    Builds the 2-node prompt (Generator -> Dashboard) and enqueues it the way
+    PromptServer's own POST /prompt handler does (in-process, no HTTP self-call).
+    Body: {configs_json?: object|string|list, config_name?: str, session_name?: str,
+           overwrite_existing?: bool, force?: bool (default true), front?: bool, client_id?: str}
+    force=false lets ComfyUI's node cache short-circuit an identical request.
+    """
+    try:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Request body must be JSON"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "Request body must be a JSON object"}, status=400)
+
+        has_inline = body.get("configs_json") not in (None, "")
+        has_named = bool(body.get("config_name"))
+        if has_inline == has_named:
+            return web.json_response({"error": "Provide exactly one of 'configs_json' or 'config_name'"}, status=400)
+
+        try:
+            if has_named:
+                try:
+                    cfg_path = resolve_saved_config(CONFIGS_DIR, body["config_name"])
+                except FileNotFoundError:
+                    return web.json_response({"error": f"Config '{body['config_name']}' not found"}, status=404)
+                except PermissionError:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                obj = normalize_configs_payload(
+                    saved_config_to_configs_obj(saved, UltimateConfigBuilder.state_to_configs_json))
+            else:
+                obj = normalize_configs_payload(body["configs_json"])
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+        force = body.get("force", True)
+        force = True if force is None else bool(force)
+        overwrite = body.get("overwrite_existing")
+        obj, session_name = apply_run_overrides(
+            obj,
+            session_name=body.get("session_name") or None,
+            overwrite_existing=overwrite if overwrite is None else bool(overwrite),
+            nonce=uuid.uuid4().hex if force else None,
+        )
+        if not session_name:
+            return web.json_response({"error": "session_name is empty after sanitising (allowed: letters, digits, _ and -)"}, status=400)
+
+        configs_str = json.dumps(obj, indent=2, ensure_ascii=False)
+        prompt = build_run_prompt(configs_str, session_name)
+
+        client_id = body.get("client_id")
+        client_id = str(client_id) if client_id else None
+        front = bool(body.get("front", False))
+
+        import execution  # ComfyUI core; imported lazily so this package still loads without it
+        # --- enqueue: mirrors PromptServer.post_prompt (ComfyUI 0.42.5, server.py) ---
+        ps = server.PromptServer.instance
+        json_data = {"prompt": prompt}
+        if client_id:
+            json_data["client_id"] = client_id
+        if front:
+            json_data["front"] = True
+        json_data = ps.trigger_on_prompt(json_data)  # same hook third-party on_prompt handlers use
+        if not isinstance(json_data, dict) or "prompt" not in json_data:
+            return web.json_response({"error": "An on_prompt handler rejected the run"}, status=400)
+        prompt = json_data["prompt"]
+        if "number" in json_data:
+            number = float(json_data["number"])
+        else:
+            number = ps.number
+            if json_data.get("front"):
+                number = -number
+            ps.number += 1
+
+        prompt_id = str(uuid.uuid4())
+        if hasattr(ps, "node_replace_manager"):
+            ps.node_replace_manager.apply_replacements(prompt)
+
+        # 0.42.5: async validate_prompt(prompt_id, prompt, partial_execution_list). Older builds
+        # take (prompt) or (prompt_id, prompt) and may be sync.
+        n_params = len(inspect.signature(execution.validate_prompt).parameters)
+        if n_params >= 3:
+            valid = execution.validate_prompt(prompt_id, prompt, None)
+        elif n_params == 2:
+            valid = execution.validate_prompt(prompt_id, prompt)
+        else:
+            valid = execution.validate_prompt(prompt)
+        if inspect.isawaitable(valid):
+            valid = await valid
+        if not valid[0]:
+            print(f"[GridTester] ⚠️ /run rejected by ComfyUI validation: {valid[1]}")
+            return web.json_response({"error": valid[1], "node_errors": valid[3]}, status=400)
+
+        extra_data = {}
+        if client_id:
+            extra_data["client_id"] = client_id
+        extra_data["create_time"] = int(time.time() * 1000)  # milliseconds, like post_prompt
+        item = (number, prompt_id, prompt, extra_data, valid[2])
+        if hasattr(execution, "SENSITIVE_EXTRA_DATA_KEYS"):
+            item = item + ({},)  # trailing `sensitive` dict (empty: nothing sensitive to strip)
+        ps.prompt_queue.put(item)
+
+        _run_tracker.add(prompt_id, session_name)
+        dashboard_path = "/config_tester/dashboard?session=" + urllib.parse.quote(session_name)
+        print(f"[GridTester] 🚀 /run queued {prompt_id} session={session_name}")
+        return web.json_response({
+            "prompt_id": prompt_id,
+            "number": number,
+            "session_name": session_name,
+            "dashboard_path": dashboard_path,
+            "dashboard_url": f"{request.scheme}://{request.host}{dashboard_path}",
+            "node_errors": valid[3],
+        })
+    except Exception as e:
+        print(f"[GridTester] ❌ /run failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/config_tester/run_status")
+async def run_status(request):
+    """State of a run queued through /config_tester/run: pending | running | success | error | unknown."""
+    try:
+        prompt_id = request.query.get("prompt_id", "")
+        if not prompt_id:
+            return web.json_response({"error": "Missing prompt_id"}, status=400)
+        pq = server.PromptServer.instance.prompt_queue
+        getter = getattr(pq, "get_current_queue_volatile", None) or pq.get_current_queue
+        running, pending = getter()
+        result = {"prompt_id": prompt_id, "queue_remaining": len(running) + len(pending)}
+
+        hist = pq.get_history(prompt_id=prompt_id).get(prompt_id)
+        found = find_in_queue(running, pending, prompt_id)
+        if found:
+            result["state"] = found[0]
+            if found[0] == "pending":
+                result["queue_position"] = found[1]
+        elif hist is not None:
+            summary = summarize_history(hist)
+            result["status"] = summary
+            result["state"] = "error" if summary["status"] == "error" else "success"
+        else:
+            result["state"] = "unknown"
+            return web.json_response(result, status=404)
+
+        session_name = _run_tracker.get(prompt_id)
+        if session_name:
+            dashboard_path = "/config_tester/dashboard?session=" + urllib.parse.quote(session_name)
+            result["session_name"] = session_name
+            result["dashboard_url"] = f"{request.scheme}://{request.host}{dashboard_path}"
+            manifest_path = os.path.join(folder_paths.get_output_directory(), "benchmarks", session_name, "manifest.json")
+            if _is_path_within(manifest_path, _get_benchmarks_base()) and os.path.exists(manifest_path):
+                try:
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        result["item_count"] = len(json.load(f).get("items", []))
+                except Exception:
+                    pass
+        return web.json_response(result)
+    except Exception as e:
+        print(f"[GridTester] ❌ /run_status failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
 
 # =============================================================================
 # API: EXPORT FAVORITES

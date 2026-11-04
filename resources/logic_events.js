@@ -9,7 +9,8 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         e.stopPropagation();
-        window.parent.postMessage({ type: 'forward_ctrl_s' }, '*');
+        // Standalone page: nothing to forward to (edits already auto-save), just keep the browser's Save dialog away.
+        if (!USCG_STANDALONE) window.parent.postMessage({ type: 'forward_ctrl_s' }, '*');
     }
 });
 

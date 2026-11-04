@@ -2,6 +2,7 @@
 <html>
 
 <head>
+    <title>USCG - __TITLE__</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         /* INJECTED CSS */
@@ -72,6 +73,7 @@
             </button>
         </div>
 
+        <button class="fs-btn" id="open-standalone-btn" onclick="openStandalone()" title="Open standalone dashboard (new tab, phone-friendly URL)">↗</button>
         <button class="fs-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">⛶</button>
     </div>
 
@@ -688,12 +690,12 @@
         <button class="modal-close-x" onclick="closeM()" title="Close (Esc)">&times;</button>
         <!-- Lightbox navigation bar -->
         <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,0.6); border-bottom: 1px solid #333; flex-shrink: 0;">
-            <button onclick="(function(){ var idx = processedData.findIndex(function(x){return x.id===window.currentModalId;}); if(idx>0) openM(processedData[idx-1].id); })()" title="Previous image (← or Shift+Space)"
+            <button class="modal-nav-btn" onclick="(function(){ var idx = processedData.findIndex(function(x){return x.id===window.currentModalId;}); if(idx>0) openM(processedData[idx-1].id); })()" title="Previous image (← or Shift+Space)"
                 style="background: #222; border: 1px solid #444; color: #ccc; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 14px;">◀</button>
             <span id="modal-nav-counter" style="font-size: 11px; color: #777; min-width: 60px; text-align: center;"></span>
-            <button onclick="(function(){ var idx = processedData.findIndex(function(x){return x.id===window.currentModalId;}); if(idx < processedData.length-1) openM(processedData[idx+1].id); })()" title="Next image (→ or Space)"
+            <button class="modal-nav-btn" onclick="(function(){ var idx = processedData.findIndex(function(x){return x.id===window.currentModalId;}); if(idx < processedData.length-1) openM(processedData[idx+1].id); })()" title="Next image (→ or Space)"
                 style="background: #222; border: 1px solid #444; color: #ccc; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 14px;">▶</button>
-            <span style="font-size: 9px; color: #444; margin-left: 8px;">← → Space navigate &nbsp;|&nbsp; 1-9 favorite</span>
+            <span class="modal-kbd-hint" style="font-size: 9px; color: #444; margin-left: 8px;">← → Space navigate &nbsp;|&nbsp; 1-9 favorite</span>
         </div>
         <div class="modal-main">
             <div class="preview"><img id="m-img" src=""></div>
@@ -733,11 +735,21 @@
             <div style="font-size:10px; font-weight:bold; color:#666;">RELATED VARIANTS</div>
             <div class="reel" id="reel"></div>
         </div>
+        <!-- Phone action bar (hidden by CSS unless coarse pointer / standalone on a narrow screen) -->
+        <div id="modal-action-bar">
+            <button onclick="modalNav(-1)" title="Previous">◀ Prev</button>
+            <button id="modal-fav-btn" onclick="toggleModalFavorite()" title="Favorite">☆ Favorite</button>
+            <button onclick="rejectModalItem()" title="Reject">✕ Reject</button>
+            <button onclick="var c=document.querySelector('#modal .controls'); if(c) c.scrollIntoView({behavior:'smooth'});" title="Revise parameters">✎ Revise</button>
+            <button onclick="modalNav(1)" title="Next">Next ▶</button>
+        </div>
     </div>
 
     <script>
         // INJECTED DATA
         const TARGET_NODE_ID = "__NODE_ID__";
+        // true when served by /config_tester/dashboard, or whenever this page is not inside a frame
+        const USCG_STANDALONE = __STANDALONE_FLAG__ || (window.parent === window);
         let fullManifest = __JSON_DATA__;
 
         // INJECTED LOGIC

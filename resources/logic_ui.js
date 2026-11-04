@@ -1493,25 +1493,7 @@ function openM(id) {
                     e.code >= 'Digit1' && e.code <= 'Digit9') {
                     e.preventDefault();
                     e.stopPropagation();
-                    const item = activeData ? activeData.find(x => x.id === currentId) : null;
-                    if (item) {
-                        item.favorited = !item.favorited;
-                        if (typeof markItemChanged === 'function') markItemChanged(item);
-                        if (typeof scheduleJSONUpdate === 'function') scheduleJSONUpdate();
-                        // Visual feedback on the modal image
-                        const mImg = document.getElementById('m-img');
-                        if (mImg) {
-                            const color = item.favorited ? '#00cc44' : '#cc4444';
-                            mImg.style.transition = 'box-shadow 0.3s';
-                            mImg.style.boxShadow = `0 0 30px ${color}`;
-                            setTimeout(() => { mImg.style.boxShadow = ''; }, 400);
-                        }
-                        // Update the navigation counter tooltip if displayed
-                        const counterEl = document.getElementById('modal-nav-counter');
-                        if (counterEl) {
-                            counterEl.title = item.favorited ? 'Favorited' : 'Not favorited';
-                        }
-                    }
+                    toggleModalFavorite();
                 }
                 break;
         }
@@ -1520,6 +1502,61 @@ function openM(id) {
 
     // Update navigation counter
     _updateModalCounter();
+}
+
+// Favorite the item shown in the lightbox (1-9 keys and the phone action bar).
+function toggleModalFavorite() {
+    const item = activeData ? activeData.find(x => x.id === window.currentModalId) : null;
+    if (!item) return;
+    item.favorited = !item.favorited;
+    if (typeof markItemChanged === 'function') markItemChanged(item);
+    if (typeof scheduleJSONUpdate === 'function') scheduleJSONUpdate();
+    // Keep the rendered card's star in sync when the card is in the DOM
+    const card = (typeof nodeMap !== 'undefined' && nodeMap) ? nodeMap.get(item.id) : null;
+    const favBtn = card ? card.querySelector('.favorite-btn') : null;
+    if (favBtn) {
+        favBtn.classList.toggle('favorited', item.favorited);
+        favBtn.innerText = item.favorited ? '★' : '☆';
+    }
+    // Visual feedback on the modal image
+    const mImg = document.getElementById('m-img');
+    if (mImg) {
+        const color = item.favorited ? '#00cc44' : '#cc4444';
+        mImg.style.transition = 'box-shadow 0.3s';
+        mImg.style.boxShadow = `0 0 30px ${color}`;
+        setTimeout(() => { mImg.style.boxShadow = ''; }, 400);
+    }
+    // Update the navigation counter tooltip if displayed
+    const counterEl = document.getElementById('modal-nav-counter');
+    if (counterEl) {
+        counterEl.title = item.favorited ? 'Favorited' : 'Not favorited';
+    }
+    const favActionBtn = document.getElementById('modal-fav-btn');
+    if (favActionBtn) favActionBtn.innerText = item.favorited ? '★ Favorited' : '☆ Favorite';
+}
+
+// Lightbox prev/next by delta through the filtered/sorted set (phone action bar).
+function modalNav(delta) {
+    if (!processedData) return;
+    const idx = processedData.findIndex(x => x.id === window.currentModalId);
+    const target = processedData[idx + delta];
+    if (idx !== -1 && target) openM(target.id);
+}
+
+// Reject the lightbox item, then move on to the neighbour (or close when it was the last one).
+function rejectModalItem() {
+    const item = activeData ? activeData.find(x => x.id === window.currentModalId) : null;
+    if (!item) return;
+    item.rejected = true;
+    if (typeof markItemChanged === 'function') markItemChanged(item);
+    const idx = processedData ? processedData.findIndex(x => x.id === item.id) : -1;
+    const next = idx !== -1 ? (processedData[idx + 1] || processedData[idx - 1]) : null;
+    // Re-run the pipeline after the neighbour is chosen: it drops the rejected item from the grid.
+    setTimeout(() => {
+        if (typeof updateDataPipeline === 'function') updateDataPipeline();
+        if (typeof scheduleJSONUpdate === 'function') scheduleJSONUpdate();
+    }, 100);
+    if (next && next.id !== item.id) openM(next.id); else closeM();
 }
 
 // Update the modal nav counter display
