@@ -17,10 +17,12 @@ def get_html_template(title, manifest_data, node_id):
     js_files = [
         "logic_state.js",    # Global variables
         "logic_utils.js",    # API & Helper functions
+        "logic_ratings.js",  # Pairwise review: pure logic (normalisers, Bradley-Terry, pairing, scoreboard)
         "logic_ui.js",       # DOM Creation, Modals, JSON Bars
         "logic_upscale_modal.js",  # Upscale Modal (preset management, async upscale)
         "logic_virtual.js",  # The Virtual Scroll Engine & Viewport
         "logic_pipeline.js", # Sorting & Filtering Logic
+        "logic_compare.js",  # Pairwise review: compare overlay, votes, scoreboard modal
         "logic_events.js",   # Event Listeners (Message, Keyboard)
         "logic_init.js"      # Initialization
     ]

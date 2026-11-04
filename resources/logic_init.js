@@ -50,6 +50,11 @@ function init() {
             loadLabelPreferences();
         }
 
+        // Pairwise review settings (cog panel) + vote sync
+        if (typeof initCompareUI === 'function') {
+            initCompareUI();
+        }
+
         // Start
         refreshIndices();
 

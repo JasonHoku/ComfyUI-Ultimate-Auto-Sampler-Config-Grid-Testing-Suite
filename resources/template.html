@@ -45,6 +45,13 @@
             </div>
         </div>
 
+        <button class="fs-btn" id="compare-open-btn" onclick="openCompareMode()" title="Compare (C)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="8" height="16" rx="1.5"></rect>
+                <rect x="14" y="4" width="8" height="16" rx="1.5"></rect>
+            </svg>
+        </button>
+
         <button class="fs-btn" onclick="loadSession()" title="Reload Session (R)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="23 4 23 10 17 10"></polyline>
@@ -215,6 +222,10 @@
                             <input type="checkbox" id="label-field-hiresPromptText" onchange="updateLabelFields()" style="width: 12px; height: 12px; cursor: pointer;">
                             <label for="label-field-hiresPromptText" style="font-size: 10px; color: #d06080; cursor: pointer; user-select: none;">HiRes Prompt Text</label>
                         </div>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="checkbox" id="label-field-rating" onchange="updateLabelFields()" style="width: 12px; height: 12px; cursor: pointer;">
+                            <label for="label-field-rating" style="font-size: 10px; color: #e0c040; cursor: pointer; user-select: none;" title="Pairwise rating and vote count (voted cards only)">Rating</label>
+                        </div>
                     </div>
                     <div style="margin-top: 8px; display: flex; align-items: center; gap: 6px;">
                         <input type="checkbox" id="label-unique-only" checked
@@ -324,6 +335,71 @@
                 <div id="delete-status" style="margin-top: 4px; font-size: 10px; color: #666; min-height: 16px;"></div>
             </div>
 
+            <!-- Pairwise review (blind A/B compare + scoreboard) -->
+            <div class="cog-panel-section">
+                <div class="cog-panel-section-title">PAIRWISE REVIEW</div>
+                <div style="font-size: 9px; color: #666; margin-bottom: 8px;">
+                    Blind two-up compare. Votes are saved in the session manifest and rolled up per setting.
+                </div>
+                <button class="session-action-btn"
+                    style="background: #e0a020; color: #000; width: 100%; font-size: 11px; padding: 10px; margin-bottom: 6px;"
+                    onclick="openCompareMode()" title="Start comparing pairs (C)">
+                    START COMPARE (C)
+                </button>
+                <button class="session-action-btn"
+                    style="background: #3e8ed0; width: 100%; font-size: 11px; padding: 10px; margin-bottom: 8px;"
+                    onclick="openScoreboard()" title="Win rates per setting from all votes">
+                    SCOREBOARD
+                </button>
+                <div class="cmp-setting-row">
+                    <label for="cmp-mode">Pairing</label>
+                    <select id="cmp-mode" onchange="cmpSettingsChanged()">
+                        <option value="matched">Matched (same prompt + seed)</option>
+                        <option value="seed">Same settings, different seed</option>
+                        <option value="one_axis">One axis at a time</option>
+                        <option value="random">Random (same media type)</option>
+                    </select>
+                </div>
+                <div class="cmp-setting-row">
+                    <label for="cmp-axis">Axis focus</label>
+                    <select id="cmp-axis" onchange="cmpSettingsChanged()">
+                        <option value="">Any axis</option>
+                        <option value="model">Model</option>
+                        <option value="lora">LoRA</option>
+                        <option value="sampler">Sampler</option>
+                        <option value="scheduler">Scheduler</option>
+                        <option value="cfg">CFG</option>
+                        <option value="steps">Steps</option>
+                        <option value="denoise">Denoise</option>
+                        <option value="resolution">Resolution</option>
+                        <option value="prompt">Prompt</option>
+                        <option value="upscale">Upscale</option>
+                    </select>
+                </div>
+                <div class="cmp-setting-row">
+                    <label for="cmp-reveal">Reveal after vote</label>
+                    <select id="cmp-reveal" onchange="cmpSettingsChanged()">
+                        <option value="0">Off</option>
+                        <option value="1000" selected>1 s</option>
+                        <option value="2000">2 s</option>
+                    </select>
+                </div>
+                <div class="cmp-setting-row">
+                    <input type="checkbox" id="cmp-blind" checked onchange="cmpSettingsChanged()" style="width: 12px; height: 12px; cursor: pointer;">
+                    <label for="cmp-blind" style="cursor: pointer;">Blind (hide settings until you vote)</label>
+                </div>
+                <div class="cmp-setting-row">
+                    <input type="checkbox" id="cmp-restrict" checked onchange="cmpSettingsChanged()" style="width: 12px; height: 12px; cursor: pointer;">
+                    <label for="cmp-restrict" style="cursor: pointer;">Scoreboard: only votes inside the current filter</label>
+                </div>
+                <button class="session-action-btn"
+                    style="background: #cc2222; width: 100%; font-size: 11px; padding: 8px; margin-top: 8px; border: 2px solid #ff4444;"
+                    onclick="clearComparisons()" title="Delete every vote saved in this session">
+                    CLEAR VOTES
+                </button>
+                <div id="cmp-status" style="margin-top: 6px; font-size: 10px; color: #666; min-height: 14px;"></div>
+            </div>
+
             <!-- Section 5: Manifest Analytics -->
             <div class="cog-panel-section">
                 <div class="cog-panel-section-title">MANIFEST ANALYTICS</div>
@@ -405,6 +481,18 @@
                     <tr style="border-bottom: 1px solid #333;">
                         <td style="padding: 4px 8px; color: #0af; font-family: monospace;">R</td>
                         <td style="padding: 4px 8px; color: #ccc;">Reload session</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 4px 8px; color: #0af; font-family: monospace;">C</td>
+                        <td style="padding: 4px 8px; color: #ccc;">Compare mode (blind A/B review)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 4px 8px; color: #0af; font-family: monospace;">A/D, S, W</td>
+                        <td style="padding: 4px 8px; color: #ccc;">In compare: A wins / B wins, tie, skip (arrows work too)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 4px 8px; color: #0af; font-family: monospace;">Z, I, B</td>
+                        <td style="padding: 4px 8px; color: #ccc;">In compare: undo, unblind, scoreboard</td>
                     </tr>
                     <tr style="border-bottom: 1px solid #333;">
                         <td style="padding: 4px 8px; color: #0af; font-family: monospace;">1-9</td>
@@ -682,6 +770,40 @@
             onclick="selectJSON('json-bar-favorite')">[]</div>
         <div id="json-bar-bad" class="json-bar" style="display: none;" title="REJECTED CONFIGS (Click to select)"
             onclick="selectJSON('json-bar-bad')">[]</div>
+    </div>
+
+    <!-- Pairwise review overlay (see logic_compare.js) -->
+    <div id="compare-overlay" style="display: none;">
+        <div id="cmp-head">
+            <span id="cmp-mode-label"></span>
+            <span id="cmp-progress"></span>
+            <span id="cmp-repeat-badge" style="display: none;">repeating voted pairs</span>
+            <span class="cmp-spacer"></span>
+            <button class="cmp-head-btn" id="cmp-unblind-btn" onclick="cmpToggleUnblind()" title="Show what differs before you vote (I)">Unblind (I)</button>
+            <button class="cmp-head-btn" onclick="openScoreboard()" title="Scoreboard (B)">Scoreboard (B)</button>
+            <button class="cmp-head-btn" onclick="cmpUndo()" title="Undo last vote (Z)">Undo (Z)</button>
+            <button class="cmp-head-btn cmp-close" onclick="closeCompareMode()" title="Close (Esc)">&#10005;</button>
+        </div>
+        <div id="cmp-panes">
+            <div class="cmp-pane" id="cmp-pane-a" onclick="cmpVoteSide('a')">
+                <div class="cmp-label">A</div>
+                <div class="cmp-media" id="cmp-media-a"></div>
+                <div class="cmp-chips" id="cmp-chips-a"></div>
+            </div>
+            <div class="cmp-pane" id="cmp-pane-b" onclick="cmpVoteSide('b')">
+                <div class="cmp-label">B</div>
+                <div class="cmp-media" id="cmp-media-b"></div>
+                <div class="cmp-chips" id="cmp-chips-b"></div>
+            </div>
+        </div>
+        <div id="cmp-empty" style="display: none;"></div>
+        <div id="cmp-bar">
+            <button class="cmp-btn" onclick="cmpVoteSide('a')">&#9664; A wins</button>
+            <button class="cmp-btn" onclick="cmpVoteSide('tie')">Tie</button>
+            <button class="cmp-btn" onclick="cmpSkip()">Skip</button>
+            <button class="cmp-btn" onclick="cmpVoteSide('b')">B wins &#9654;</button>
+            <button class="cmp-btn cmp-btn-undo" onclick="cmpUndo()">&#8630; Undo</button>
+        </div>
     </div>
 
     <div id="modal">

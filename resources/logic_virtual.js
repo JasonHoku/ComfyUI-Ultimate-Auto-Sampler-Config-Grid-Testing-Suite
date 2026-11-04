@@ -906,6 +906,14 @@ function setupKeyboardShortcuts() {
                 updateTransform();
                 updateVisibleItems();
                 break;
+            case 'c':
+            case 'C':
+                // Pairwise review (compare mode); plain C only, so Ctrl+C copy is untouched
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && typeof openCompareMode === 'function') {
+                    e.preventDefault();
+                    openCompareMode();
+                }
+                break;
         }
 
         // 1-9 (no modifiers): Quick favorite — toggle favorite on Nth visible card

@@ -14,6 +14,7 @@ function toggleFullscreen() {
 function setupKeyReloadFullscreen() {
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (window._compareOpen) return;   // compare mode swallows f / r
 
         switch (e.key) {
             case 'f':
@@ -94,6 +95,7 @@ async function loadSession() {
         fullManifest = data;
         activeData = fullManifest.items || [];
         meta = fullManifest.meta || {};
+        if (typeof onComparisonsReplaced === 'function') onComparisonsReplaced();
 
         console.log(`[Load] 📦 activeData now has ${activeData.length} items`);
 

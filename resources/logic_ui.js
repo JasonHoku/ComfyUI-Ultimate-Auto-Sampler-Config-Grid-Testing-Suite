@@ -295,6 +295,13 @@ function buildLabelOverlay(d) {
         }
     }
 
+    if (labelMode.fields.rating && typeof getItemRating === 'function') {
+        const rt = getItemRating(d.id);
+        if (rt && rt.votes > 0) {
+            tags.push(`<span class="label-tag label-rating" title="Pairwise rating (Bradley-Terry) and number of votes">★${Math.round(rt.rating)} · ${rt.votes}</span>`);
+        }
+    }
+
     if (tags.length === 0) return '';
     return `<div class="label-overlay">${tags.join('')}</div>`;
 }
@@ -320,7 +327,7 @@ function toggleLabelMode(enabled) {
 function updateLabelFields() {
     const fields = ['model', 'lora', 'prompt', 'sampler', 'scheduler', 'cfg', 'steps', 'seed', 'denoise', 'upscale',
                      'upscaleMode', 'upscaleModel', 'upscaleRatio', 'upscaleDenoise', 'upscaleResizeMethod', 'upscaleHiresSteps', 'upscaleTiling',
-                     'hiresPromptBehavior', 'hiresPromptText'];
+                     'hiresPromptBehavior', 'hiresPromptText', 'rating'];
     fields.forEach(f => {
         const cb = document.getElementById(`label-field-${f}`);
         if (cb) labelMode.fields[f] = cb.checked;
@@ -388,7 +395,7 @@ function loadLabelPreferences() {
 
     const fields = ['model', 'lora', 'prompt', 'sampler', 'scheduler', 'cfg', 'steps', 'seed', 'denoise', 'upscale',
                      'upscaleMode', 'upscaleModel', 'upscaleRatio', 'upscaleDenoise', 'upscaleResizeMethod', 'upscaleHiresSteps', 'upscaleTiling',
-                     'hiresPromptBehavior', 'hiresPromptText'];
+                     'hiresPromptBehavior', 'hiresPromptText', 'rating'];
     fields.forEach(f => {
         const cb = document.getElementById(`label-field-${f}`);
         if (cb) cb.checked = labelMode.fields[f] || false;
@@ -521,6 +528,13 @@ document.addEventListener('keydown', (e) => {
         const reviseModal = document.getElementById('modal');
         if (reviseModal && reviseModal.style.display !== 'none' && reviseModal.style.display !== '') {
             closeM();
+            return;
+        }
+
+        // Close pairwise-review scoreboard
+        const scoreboardModal = document.getElementById('scoreboard-modal');
+        if (scoreboardModal) {
+            scoreboardModal.remove();
             return;
         }
 

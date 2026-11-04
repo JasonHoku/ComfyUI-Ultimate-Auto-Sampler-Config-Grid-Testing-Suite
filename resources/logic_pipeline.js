@@ -310,6 +310,8 @@ function compareItems(a, b, sortKey) {
             return (a.sampler || "").toLowerCase().localeCompare((b.sampler || "").toLowerCase());
         case 'size':
             return (a.width * a.height) - (b.width * b.height);
+        case 'rating':
+            return (typeof compareRatings === 'function') ? compareRatings(a, b) : 0;
         default: return 0;
     }
 }

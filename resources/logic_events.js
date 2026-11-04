@@ -85,6 +85,7 @@ window.addEventListener('message', (event) => {
             fullManifest = payload.manifest;
             activeData = fullManifest.items || [];
             meta = payload.meta || {};
+            if (typeof onComparisonsReplaced === 'function') onComparisonsReplaced();
 
             // Recompute label global values with new data
             if (typeof computeLabelGlobalValues === 'function' && labelMode && labelMode.enabled) {
