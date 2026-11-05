@@ -755,7 +755,13 @@ def _run_adapters(ctx, names, image, meta):
             mb = ad.get("max_batch")
             kwargs[ad["image_arg"]] = img[:mb] if mb and getattr(img, "shape", None) is not None and img.shape[0] > mb else img
             if ad.get("text_arg"):
-                kwargs[ad["text_arg"]] = str(meta.get("positive") or meta.get("config_positive") or "")
+                _txt = str(meta.get("positive") or meta.get("config_positive") or "")
+                try:
+                    from .regional_prompt import plain_prompt_text   # COUPLE: score the plain text, not the markers
+                    _txt = plain_prompt_text(_txt)
+                except ImportError:
+                    pass
+                kwargs[ad["text_arg"]] = _txt
             cls = mappings[ad["node_id"]]
             req = _required_inputs(cls)
             if req is not None:

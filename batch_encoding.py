@@ -1,7 +1,8 @@
 """
 Batch CLIP Encoding Module
 Handles efficient batch encoding of prompts with caching.
-Supports prompt combinators: AND, CAT, AVG(), BREAK (native).
+Supports prompt combinators: AND, CAT, AVG(), BREAK (native), and regional
+prompts: `base COUPLE left | right` (see regional_prompt.py).
 """
 
 import contextlib
@@ -12,6 +13,8 @@ import weakref
 import torch
 import gc
 import comfy.model_management
+
+from .regional_prompt import parse_regional_prompt, has_regions, region_tag, REGION_KEY
 
 
 # ============================================================
@@ -461,7 +464,7 @@ def encode_prompts_batched(clip_model, prompts, batch_size, clip_skip=0, verify=
 
 
 # ============================================================
-# === PROMPT COMBINATOR ENCODING (AND / CAT / AVG / BREAK) ===
+# === PROMPT COMBINATOR ENCODING (AND / CAT / AVG / BREAK / COUPLE) ===
 # ============================================================
 
 def _encode_single(clip_model, text, clip_skip=0, tokens=None):
@@ -498,8 +501,8 @@ def _encode_single(clip_model, text, clip_skip=0, tokens=None):
 
 
 def _has_combinators(prompt):
-    """True when the prompt uses AND / CAT / AVG() (the slow path of encode_prompt_with_combinators)."""
-    return ' AND ' in prompt or ' CAT ' in prompt or 'AVG(' in prompt
+    """True when the prompt uses AND / CAT / AVG() / COUPLE (the slow path of encode_prompt_with_combinators)."""
+    return ' AND ' in prompt or ' CAT ' in prompt or 'AVG(' in prompt or has_regions(prompt)
 
 
 def _parse_and_segments(prompt):
@@ -620,6 +623,28 @@ def _conditioning_average(cond_to, cond_from, strength):
     return out
 
 
+def _encode_regional(clip_model, spec, clip_skip=0):
+    """
+    Encode a parsed COUPLE prompt: the base (if any) as ordinary unmasked entries, then every
+    active region's entries tagged with REGION_KEY (size independent; masks are built at sample
+    time by regional_prompt.apply_regional_masks). The parts cannot contain a COUPLE marker,
+    so the recursion through encode_prompt_with_combinators is safe.
+    """
+    count = len(spec.regions)
+    result = []
+    if spec.base:
+        result.extend(encode_prompt_with_combinators(clip_model, spec.base, clip_skip))
+    for i, region in enumerate(spec.regions):
+        if not region.text or region.weight <= 0:
+            continue  # keeps its layout slot, adds no cond (that part only gets the base)
+        tag = region_tag(i, count, spec.axis, region.weight)
+        for t, d in encode_prompt_with_combinators(clip_model, region.text, clip_skip):
+            result.append([t, {**d, REGION_KEY: dict(tag)}])
+    if not result:
+        return _encode_single(clip_model, "", clip_skip)
+    return result
+
+
 def encode_prompt_with_combinators(clip_model, prompt, clip_skip=0):
     """
     Encode a prompt that may contain AND, CAT, or AVG() combinators.
@@ -636,6 +661,7 @@ def encode_prompt_with_combinators(clip_model, prompt, clip_skip=0):
       - "prompt1 CAT prompt2"           → ConditioningConcat
       - "prompt1 AVG(0.3) prompt2"      → ConditioningAverage (0.3 = 30% prompt2)
       - "prompt1 BREAK prompt2"         → Separate 77-token chunks (native)
+      - "base COUPLE a | b"             → regional prompt (base + 2-4 masked regions)
 
     Args:
         clip_model: CLIP model instance
@@ -645,6 +671,11 @@ def encode_prompt_with_combinators(clip_model, prompt, clip_skip=0):
     Returns:
         Conditioning list: [[cond_tensor, pooled_dict], ...]
     """
+    # COUPLE regional prompt: base + tagged region entries (raises RegionalPromptError on bad syntax)
+    spec = parse_regional_prompt(prompt)
+    if spec is not None:
+        return _encode_regional(clip_model, spec, clip_skip)
+
     # Fast path: if no combinators present, use direct encoding
     if not _has_combinators(prompt):
         return _encode_single(clip_model, prompt, clip_skip)

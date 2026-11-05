@@ -17,6 +17,7 @@ from PIL import Image as PILImage
 
 from .model_loader import load_checkpoint, load_vae_by_name
 from .batch_encoding import encode_prompt_with_combinators, encode_pair_cached
+from .regional_prompt import append_to_base
 from .image_generation import upscale_image, decode_latent_with_vae, create_image_metadata
 from .manifest_utils import save_manifest, base_dims_of
 from . import image_metrics
@@ -268,7 +269,7 @@ def _run_upscale_thread(job, target_items, upscale_config, meta, manifest_data, 
                 if hires_prompt_behavior_rt == "prepend":
                     adjusted = hires_prompt_text_rt + " " + pos_prompt
                 elif hires_prompt_behavior_rt == "append_end":
-                    adjusted = pos_prompt + " " + hires_prompt_text_rt
+                    adjusted = append_to_base(pos_prompt, hires_prompt_text_rt)
                 elif hires_prompt_behavior_rt == "replace":
                     adjusted = hires_prompt_text_rt
                 else:
