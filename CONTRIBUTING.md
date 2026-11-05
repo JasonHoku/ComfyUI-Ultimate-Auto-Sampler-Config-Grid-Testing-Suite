@@ -94,7 +94,7 @@ for f in resources/*.js; do
 done
 ```
 
-The Dashboard files in `resources/` are inlined into ONE script (see `js_files` in `html_generator.py`), so a duplicate top-level name only shows up in the assembled page. The `js-syntax` job therefore also builds the page with `html_generator.get_html_template()` and syntax-checks every inline script body (the snippet is in `.github/workflows/tests.yml`).
+The Dashboard files in `resources/` share ONE script scope (see `JS_FILES` in `html_generator.py`; the page loads them as one bundle after a small globals script), so a duplicate top-level name only shows up in the assembled page. The `js-syntax` job therefore also builds the page with `html_generator.get_html_template(..., inline_assets=True)` and syntax-checks every inline script body, plus the globals script + bundle joined as one script (the snippet is in `.github/workflows/tests.yml`).
 
 ---
 

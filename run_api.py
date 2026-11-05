@@ -33,6 +33,27 @@ def _etag_matches(if_none_match, etag):
     return False
 
 
+def bundle_response(bundle, v, if_none_match, accept_encoding):
+    """HTTP shaping for the dashboard JS/CSS bundle routes: (status, body_or_None, headers).
+
+    `v` (the ?v= query) is only COMPARED with the bundle hash, never used to look anything up: a
+    stale or bogus value still gets the current bundle, just with a no-cache policy.
+    """
+    etag = 'W/"%s"' % bundle.hash
+    headers = {
+        "ETag": etag,
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "public, max-age=31536000, immutable" if v == bundle.hash else "no-cache",
+    }
+    if _etag_matches(if_none_match, etag):
+        return 304, None, headers
+    if "gzip" in str(accept_encoding or "").lower():
+        headers["Content-Encoding"] = "gzip"
+        return 200, bundle.gzip, headers
+    return 200, bundle.body, headers
+
+
 def load_manifest_for_fetch(benchmarks_base, raw_session, if_none_match=None):
     """Backend of GET /config_tester/manifest?session=<name> (the dashboard SPA's data fetch).
 

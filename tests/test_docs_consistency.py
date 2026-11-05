@@ -165,7 +165,7 @@ def test_events_documented():
 
 def test_js_files_order():
     src = _read("html_generator.py")
-    m = re.search(r"js_files\s*=\s*\[(.*?)\n\s*\]", src, re.S)
+    m = re.search(r"(?:JS_FILES|js_files)\s*=\s*[\[(](.*?)\n\s*[\])]", src, re.S)
     assert m
     files = re.findall(r'^\s*"([\w\-]+\.js)"', m.group(1), re.M)
     assert files and files[-1] == "logic_standalone.js"

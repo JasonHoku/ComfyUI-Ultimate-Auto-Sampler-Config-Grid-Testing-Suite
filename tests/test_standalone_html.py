@@ -75,9 +75,24 @@ def test_escaped_manifest_still_parses_with_dashboard_js_extraction():
 @pytest.mark.parametrize("standalone", [True, False])
 def test_concatenated_script_parses_as_one_script(standalone):
     page = _page(standalone=standalone)
-    scripts = re.findall(r"<script>([\s\S]*?)</script>", page)
+    scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>", page)
     assert scripts, "no inline script found"
-    js = max(scripts, key=len)
+    js = "\n;\n".join(scripts)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "page.js")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(js)
+        out = subprocess.run([NODE, "--check", path], capture_output=True, timeout=60)
+    assert out.returncode == 0, out.stderr.decode()
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_shell_script_parses_as_one_script():
+    """The shell's globals script + the bundle route's JS share one global lexical scope."""
+    page = _shell(standalone=True)
+    scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>", page)
+    assert scripts
+    js = "\n;\n".join(scripts) + "\n;\n" + html_generator.get_dashboard_bundle("js").text
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "page.js")
         with open(path, "w", encoding="utf-8") as f:
@@ -106,7 +121,7 @@ def test_shell_inlines_no_item_data():
 
 def test_shell_size_does_not_grow_with_the_session():
     big = [{"id": i, "note": "x" * 2500, "positive": "p" * 300} for i in range(1000)]
-    assert len(_shell(big).encode("utf-8")) < 560 * 1024
+    assert len(_shell(big).encode("utf-8")) < 100 * 1024
     assert len(_shell(big)) == len(_shell([]))
 
 
@@ -115,7 +130,8 @@ def test_shell_placeholders_all_replaced():
     assert 'const TARGET_NODE_ID = "42";' in page
     assert "const USCG_STANDALONE = true" in page
     assert 'id="session-input" class="session-name-input" type="text" value="my-sess"' in page
-    for token in ("__TITLE__", "__NODE_ID__", "__STANDALONE_FLAG__", "__CSS_CONTENT__", "__JS_CONTENT__"):
+    for token in ("__TITLE__", "__NODE_ID__", "__STANDALONE_FLAG__", "__CSS_CONTENT__", "__JS_CONTENT__",
+                  "__CSS_TAG__", "__JS_TAG__"):
         assert token not in page
 
 
@@ -131,18 +147,6 @@ def test_shell_parses_with_dashboard_js_extraction_as_lazy():
                          capture_output=True, timeout=30)
     assert out.returncode == 0, out.stderr.decode()
     assert out.stdout.decode() == '[true,0,"abc"]'
-
-
-@pytest.mark.skipif(NODE is None, reason="node not installed")
-def test_shell_script_parses_as_one_script():
-    scripts = re.findall(r"<script>([\s\S]*?)</script>", _shell(standalone=True))
-    js = max(scripts, key=len)
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "page.js")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(js)
-        out = subprocess.run([NODE, "--check", path], capture_output=True, timeout=60)
-    assert out.returncode == 0, out.stderr.decode()
 
 
 def test_inline_manifest_flag_keeps_the_old_behaviour():

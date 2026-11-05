@@ -13,14 +13,14 @@ import time
 import inspect
 from .sampler_node import SamplerGridTester
 from .dashboard_node import SamplerConfigDashboardViewer
-from .html_generator import get_html_template
+from .html_generator import get_html_template, get_dashboard_bundle, BUNDLE_CONTENT_TYPES
 from .config_builder_node import UltimateConfigBuilder
 from .json_text_node import SmartJSONTextNode
 from .metadata_packer import pack_metadata_into_image
 from .directory_scanner import scan_directory_for_images
 from .run_api import (
     RunTracker, sanitize_session_name_strict, load_manifest_for_fetch, normalize_configs_payload, apply_run_overrides,
-    build_run_prompt, resolve_saved_config, saved_config_to_configs_obj, summarize_history, find_in_queue,
+    build_run_prompt, resolve_saved_config, saved_config_to_configs_obj, summarize_history, find_in_queue, bundle_response,
 )
 from .workflow_sweep_collect import USCGSweepCollect, USCGSweepCollectVideo
 import sys
@@ -647,6 +647,33 @@ def _dashboard_response(request, html):
     resp = web.Response(status=200, text=html, content_type="text/html", charset="utf-8", headers=headers)
     resp.enable_compression()
     return resp
+
+
+def _bundle_http(request, kind):
+    """Serve the cached dashboard JS/CSS bundle. `kind` is a literal per route; the request only
+    contributes ?v= (compared, never looked up) and the caching/encoding headers."""
+    try:
+        bundle = get_dashboard_bundle(kind)
+        status, body, headers = bundle_response(
+            bundle, request.query.get("v", ""), request.headers.get("If-None-Match"),
+            request.headers.get("Accept-Encoding", ""))
+        if body is None:
+            return web.Response(status=status, headers=headers)
+        return web.Response(status=status, body=body, content_type=BUNDLE_CONTENT_TYPES[kind],
+                            charset="utf-8", headers=headers)
+    except Exception as e:
+        print(f"[GridTester] /dashboard_bundle_{kind} failed: {e}")
+        return web.Response(status=500, text="bundle unavailable")
+
+
+@server.PromptServer.instance.routes.get("/config_tester/dashboard_bundle_js")
+async def dashboard_bundle_js(request):
+    return _bundle_http(request, "js")
+
+
+@server.PromptServer.instance.routes.get("/config_tester/dashboard_bundle_css")
+async def dashboard_bundle_css(request):
+    return _bundle_http(request, "css")
 
 
 @server.PromptServer.instance.routes.get("/config_tester/dashboard")

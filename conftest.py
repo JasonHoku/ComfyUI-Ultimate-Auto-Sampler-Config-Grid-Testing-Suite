@@ -86,7 +86,9 @@ def _install_stubs():
     _subs = {
         "sampler_node": {"SamplerGridTester": type("SamplerGridTester", (), {})},
         "dashboard_node": {"SamplerConfigDashboardViewer": type("SamplerConfigDashboardViewer", (), {})},
-        "html_generator": {"get_html_template": lambda *a, **kw: ""},
+        "html_generator": {"get_html_template": lambda *a, **kw: "",
+                           "get_dashboard_bundle": lambda *a, **kw: None,
+                           "BUNDLE_CONTENT_TYPES": {}},
         "json_text_node": {"SmartJSONTextNode": type("SmartJSONTextNode", (), {})},
         "metadata_packer": {"pack_metadata_into_image": lambda *a, **kw: None},
         "directory_scanner": {

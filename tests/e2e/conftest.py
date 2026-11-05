@@ -17,17 +17,38 @@ SESSION = "smoke"
 N_ITEMS = 24
 
 
-def load_real_html_generator():
-    spec = importlib.util.spec_from_file_location(
-        "uscg_real_html_generator", os.path.join(_NODE_ROOT, "html_generator.py"))
+_REAL_HG = None
+_REAL_RUN_API = None
+
+
+def _load_by_path(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_NODE_ROOT, filename))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def build_dashboard_page(manifest, node_id="7", title=SESSION):
-    """The exact HTML string the Dashboard node shows in its iframe srcdoc (a lazy shell: no items inlined)."""
-    return load_real_html_generator().get_html_template(title, manifest, node_id)
+def load_real_html_generator():
+    """Cached: the module keeps the bundle cache, so every page and every bundle response share it."""
+    global _REAL_HG
+    if _REAL_HG is None:
+        _REAL_HG = _load_by_path("uscg_real_html_generator", "html_generator.py")
+    return _REAL_HG
+
+
+def load_real_run_api():
+    global _REAL_RUN_API
+    if _REAL_RUN_API is None:
+        _REAL_RUN_API = _load_by_path("uscg_real_run_api", "run_api.py")
+    return _REAL_RUN_API
+
+
+def build_dashboard_page(manifest, node_id="7", title=SESSION, **kw):
+    """The exact HTML string the Dashboard node shows in its iframe srcdoc (a lazy shell: no items inlined).
+
+    Bundled by default (the JS/CSS come from the fake origin's bundle routes); pass inline_assets=True
+    for the self-contained page."""
+    return load_real_html_generator().get_html_template(title, manifest, node_id, **kw)
 
 
 def make_item(i, model, sampler, scheduler, cfg, steps, lora):
@@ -110,6 +131,8 @@ class Dashboard:
         self.known_sessions = None    # None: every session name exists (like the old /view); else a set
         self.hold_manifest = False    # True: park manifest requests until release_manifest()
         self.held = []
+        self.bundle_requests = []     # (kind, v) per GET /config_tester/dashboard_bundle_{js,css}
+        self.bundle_status = None     # e.g. 500: make the bundle routes fail
 
     def release_manifest(self):
         self.hold_manifest = False
@@ -155,6 +178,18 @@ class Dashboard:
         if path == "/":
             return route.fulfill(status=200, content_type="text/html; charset=utf-8",
                                  body=build_dashboard_page(self.manifest, title=self.title))
+        if path in ("/config_tester/dashboard_bundle_js", "/config_tester/dashboard_bundle_css"):
+            kind = "js" if path.endswith("_js") else "css"
+            from urllib.parse import parse_qs
+            v = (parse_qs(query).get("v") or [""])[0]
+            self.bundle_requests.append((kind, v))
+            if self.bundle_status:
+                return route.fulfill(status=self.bundle_status, content_type="text/plain", body="bundle unavailable")
+            hg = load_real_html_generator()
+            status, body, headers = load_real_run_api().bundle_response(
+                hg.get_dashboard_bundle(kind), v, None, "")
+            return route.fulfill(status=status, content_type=hg.BUNDLE_CONTENT_TYPES[kind] + "; charset=utf-8",
+                                 body=body, headers=headers)
         if path == "/config_tester/manifest":
             if self.hold_manifest:
                 self.held.append(route)
@@ -209,7 +244,9 @@ def dashboard(page, manifest_meta):
 @pytest.fixture
 def dashboard_kit():
     """Raw pieces for tests that need a custom page around the dashboard (e.g. an iframe wrapper)."""
-    return {"ORIGIN": ORIGIN, "Dashboard": Dashboard, "make_manifest": make_manifest}
+    return {"ORIGIN": ORIGIN, "Dashboard": Dashboard, "make_manifest": make_manifest,
+            "build_dashboard_page": build_dashboard_page, "load_real_html_generator": load_real_html_generator,
+            "N_ITEMS": N_ITEMS}
 
 
 @pytest.fixture

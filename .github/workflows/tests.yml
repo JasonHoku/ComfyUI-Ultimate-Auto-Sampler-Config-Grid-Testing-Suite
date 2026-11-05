@@ -77,7 +77,7 @@ jobs:
           import os, re, sys
           sys.path.insert(0, os.getcwd())
           import html_generator
-          page = html_generator.get_html_template("ci", {"items": []}, "1")
+          page = html_generator.get_html_template("ci", {"items": []}, "1", inline_assets=True)
           bodies = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", page, re.S)
           assert bodies, "no inline <script> found in the generated page"
           out = os.environ.get("RUNNER_TEMP", ".")
@@ -85,6 +85,12 @@ jobs:
               with open(os.path.join(out, f"bundle_{n}.js"), "w", encoding="utf-8") as fh:
                   fh.write(body)
           print(f"wrote {len(bodies)} script bodies to {out}")
+          # globals script + bundle as ONE script: catches a resource redeclaring
+          # TARGET_NODE_ID / USCG_STANDALONE / fullManifest
+          with open(os.path.join(out, "bundle_all.js"), "w", encoding="utf-8") as fh:
+              fh.write("\n;\n".join(bodies))
+          with open(os.path.join(out, "bundle_route.js"), "w", encoding="utf-8") as fh:
+              fh.write(html_generator.get_dashboard_bundle("js").text)
           PY
           for f in "${RUNNER_TEMP:-.}"/bundle_*.js; do
             node --check "$f" || { echo "FAIL $f"; exit 1; }

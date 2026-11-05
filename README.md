@@ -1025,7 +1025,7 @@ http://<comfyui-host>:8188/config_tester/dashboard?session=<session_name>
 - It opens its own ComfyUI websocket, so new images and the ETA bar update live while a run is going. After your phone sleeps, it reloads the session when you come back, without duplicating cards. Reverse proxies that do not upgrade websockets (some Tailscale Serve / nginx setups) lose live updates; the **R** key and the resume reload still work.
 - Touch screens get 44px buttons, and the lightbox gets a bottom bar (Prev / Favorite / Reject / Revise / Next). The in-node view is unchanged apart from the extra header button.
 - **GENERATE NEW** in the lightbox queues through the run API below, into the session you are viewing. "Pack workflow" in export needs the ComfyUI tab and is disabled here.
-- **Lazy loading:** the page itself is only the dashboard code (~500 KB, ~115 KB gzipped); the image data comes from `GET /config_tester/manifest?session=<name>` (compact JSON, gzip, `ETag`). A 1000-image session is about 160 KB over the wire instead of 3.7 MB of page plus 3.5 MB of `manifest.json`, and a phone that wakes up and finds nothing new pays one 304. Both the page and the manifest answer `If-None-Match`, so a reload with nothing changed is nearly free. `--enable-compress-response-body` is not needed.
+- **Lazy loading:** the page itself is a small shell (~70 KB, ~12 KB gzipped); the dashboard code is two cached files, `/config_tester/dashboard_bundle_js` (~409 KB, ~99 KB gzipped) and `_css` (~49 KB, ~9 KB gzipped), referenced by content hash with `Cache-Control: immutable`, so the browser downloads them once and every later load (and every node iframe) pays only the shell's 304. Editing a file in `resources/` changes the hash, so a reload picks it up. The image data comes from `GET /config_tester/manifest?session=<name>` (compact JSON, gzip, `ETag`). A 1000-image session is about 160 KB over the wire instead of 3.7 MB of page plus 3.5 MB of `manifest.json`, and a phone that wakes up and finds nothing new pays one 304. The page, the bundles and the manifest all answer `If-None-Match`. `--enable-compress-response-body` is not needed. Set `USCG_INLINE_DASHBOARD_ASSETS=1` to inline everything into the page again (one self-contained document).
 - Like ComfyUI itself, the page has no authentication. Only expose it on a network you trust.
 
 ---
@@ -1563,6 +1563,8 @@ Bot pattern: `POST /run`, post `dashboard_url` to the channel, poll `run_status`
 |---|---|---|
 | POST | `/configbuilder/preview` | Body `{state}` (the Builder state); returns `{configs_json}` from the same function the node uses (what the JSON Preview panel shows) |
 | GET | `/config_tester/dashboard` | The Dashboard as a standalone page, optional `?session=` |
+| GET | `/config_tester/dashboard_bundle_js` | The dashboard's JavaScript bundle (`?v=<hash>`, cached immutable, gzip) |
+| GET | `/config_tester/dashboard_bundle_css` | The dashboard's stylesheet bundle (`?v=<hash>`, cached immutable, gzip) |
 | GET | `/config_tester/manifest` | A session's manifest as compact JSON `?session=<name>` (gzip, ETag / 304); what the Dashboard fetches |
 | POST | `/config_tester/save_comparisons` | Append / remove Pairwise Review votes `{session_name, append, remove}` |
 | POST | `/config_tester/clear_comparisons` | Delete every vote of a session `{session_name}` |
@@ -1751,7 +1753,7 @@ Tests live in `tests/` and must not contain network or process-spawning code (no
 
 2. **One config-to-JSON implementation**: `UltimateConfigBuilder.state_to_configs_json` in `config_builder_node.py` is the single source of truth. The Builder preview POSTs the state to `/configbuilder/preview`, which runs the same function; there is no JS converter any more.
 
-3. **Dashboard runs in an iframe** — The dashboard HTML is set via `iframe.srcdoc`. All JS/CSS is inlined (no external code requests); the manifest is fetched from `/config_tester/manifest` (the page is a lazy shell with no item data). Communication between the parent ComfyUI page and the iframe uses `postMessage()`. The `dashboard.js` file bridges server events to iframe messages.
+3. **Dashboard runs in an iframe** — The dashboard HTML is set via `iframe.srcdoc`. The JS/CSS come from the two cached bundle routes (same origin, absolute `/config_tester/dashboard_bundle_*` paths); the manifest is fetched from `/config_tester/manifest` (the page is a lazy shell with no item data). Communication between the parent ComfyUI page and the iframe uses `postMessage()`. The `dashboard.js` file bridges server events to iframe messages.
 
 4. **Dashboard auto-loads on node creation** — `web/dashboard.js` calls `forceLoadSession()` with a 500ms delay when a dashboard node is created. The `get_session_html` API endpoint returns a full HTML template with empty manifest for non-existent sessions (NOT a 404).
 
@@ -1832,6 +1834,7 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 * 📐 **Latent input size:** a connected latent's image size was always cells x 8; it is now cells x the loaded model's latent ratio (16 for Flux.2/MOSS-Image/Krea 2).
 
 ### Update 11/4/26: Standalone dashboard, pairwise review, image metrics, preview pass, workflow sweeps
+* ⚡ **Dashboard loads from cached bundles:** the dashboard page shrank from ~527 KB to ~70 KB. Its JavaScript and CSS are served once as content-hashed, immutable files (`/config_tester/dashboard_bundle_js` and `_css`), so a repeat load or a second dashboard costs only a small 304, and each run's result message (which carries the page) is ~450 KB lighter. Edit-and-reload of `resources/` still works. `USCG_INLINE_DASHBOARD_ASSETS=1` restores the single-file page.
 * 🧩 **Regional prompts (`COUPLE`):** `base COUPLE left | right` (or `COUPLE(rows)`, 2-4 regions, per-region `:w` weight) gives each part of the image its own prompt using native masked conditioning. Triggers, model prefix/suffix and HiRes "Append to end" text go into the base; works with HiRes, tiled HiRes and Florence2 crops. The conditioning cache on disk now keeps every entry (AND prompts included), so older cache files are re-encoded once. See [Prompt Combinators & Regional Prompts (COUPLE)](#prompt-combinators--regional-prompts-couple).
 * 📱 **Standalone Dashboard + Run API:** open the dashboard as a normal web page at `/config_tester/dashboard?session=<name>` (phone, second monitor) with live updates over its own websocket. `POST /config_tester/run` and `GET /config_tester/run_status` start and track headless runs (Discord bot, curl) without any workflow JSON.
 * ⚖️ **Pairwise Review:** blind A/B compare mode (`C` key) with matched, same-settings, one-axis and random pairing, Bradley-Terry ratings (Sort by Rating) and a per-setting scoreboard with 95% intervals. Votes are stored in the session manifest under `comparisons`.
