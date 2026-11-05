@@ -1,7 +1,7 @@
 [project]
 name = "ultimate-auto-sampler-config-grid-testing-suite"
 description = "Test Everything All In One Run!!! Testing & benchmarking tool for samplers, schedulers, CFG scales, multiple prompts, img2img denoise values, Models, Weights, LoRA  and more!  Features infinite-canvas dashboard image grids with virtual scrolling that can handle thousands of images! Smart caching, powerful sorting, filters, favoriting, reviewing, automatic resume on interrupt, and real-time visualization. Test entire checkpoint folders, stack multiple LoRAs, generate random seed variations, and export optimized configs, save sessions. Includes powerful UI for building AIO comparison runs, fullscreen mode, keyboard navigation, smart filtering by parameters, civitai model data info, and one-click regeneration workflow, and SO MUCH MORE. Perfect for sampler output optimization and parameter tuning."
-version = "1.23.1"
+version = "1.24.0"
 license = {file = "LICENSE"} 
 classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
