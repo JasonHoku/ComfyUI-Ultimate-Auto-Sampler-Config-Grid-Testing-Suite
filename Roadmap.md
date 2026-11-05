@@ -114,7 +114,7 @@ A button in the builder UI to pack short sha256 into config with an explanation 
 
 #### **11. Model-Specific Prompts** (Needs improvement)
 
-#### **13. Real-Time ETA** (Improved — now uses rolling 10-job window for more responsive estimates. Distribution times still TODO)
+#### **13. Real-Time ETA** (Improved — now uses rolling 10-job window for more responsive estimates. Distributed runs: DONE, combined-throughput ETA over all active machines, pushed to the dashboard as `phase: "distributed"` progress events)
 
 #### **14. Cache Trigger Word Placement** (low priority)
 * **Problem:** `trigger_words.py` logic runs every loop iteration.
@@ -184,7 +184,10 @@ README is 2000+ words; most users won't read it. Efficiency Nodes grew via commu
 Verify `te_batch_size` on the 5060 Ti with the real MOSS-Image, Krea 2 and Qwen-Image encoders, then decide whether the default of 1 (off) should change.
 
 #### **30. Distributed companion parity**
-**Done (wave 3, `feat/dist-parity`):** `job_order`, the preview pass and image metrics now work in distributed mode (master-owned plan, `populate_from_plan`, `dist_worker` on every item). Open: re-check rejects made mid-run at claim time, claim affinity, Start At Job in distributed mode, LTX workers.
+**Done (wave 3, `feat/dist-parity`):** `job_order`, the preview pass and image metrics now work in distributed mode (master-owned plan, `populate_from_plan`, `dist_worker` on every item). DONE (feat/dist-open): rejects made mid-run are re-checked at claim time, claim affinity, Start At Job in distributed mode, LTX rendered on the master (never on workers). Open: live two-machine verification of the whole set.
+
+#### **73. Distributed Model Sync hardening**
+DONE (feat/dist-open, both repos): the master now takes over jobs still claimed after the wait timeout instead of discarding the workers' images (`wait_timeout`, default `max(600, claim_timeout)`); the companion de-duplicates concurrent downloads of one file, resolves model folders with fallbacks, normalises backslash names, refuses `..` paths and treats a VAE of `None` as the default. Open: confirm with a real slow-download run which defect the original failure was.
 
 #### **31. Scorer-pack adapters**
 Verify the node ids of the optional aesthetic / reward scorer packs against the real packs, then enable the shipped adapter entries.

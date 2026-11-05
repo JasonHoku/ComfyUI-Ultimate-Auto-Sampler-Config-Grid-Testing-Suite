@@ -1055,6 +1055,17 @@ def calculate_eta(job_durations, current_job, total_jobs):
     }
 
 
+def format_eta_str(seconds):
+    """Human ETA text: "1h 2m", "2m 5s" or "9s" (same rules as the console progress lines)."""
+    seconds = max(0, int(seconds))
+    hours, minutes, secs = seconds // 3600, (seconds % 3600) // 60, seconds % 60
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    if minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def print_generation_progress(current_job, total_jobs, config, width, height, duration, eta_info):
     """
     Print progress information for current generation.

@@ -579,6 +579,7 @@ The Dashboard is a standalone single-page app rendered inside an iframe. All cod
   "sync_models_to_workers": false
 }
 ```
+`wait_timeout` (seconds, optional, not sent by the Builder UI): how long the master waits on remote workers before taking their claimed jobs over; default `max(600, claim_timeout)` (`_dist_wait_timeout`).
 
 **Top-level state fields** (outside `config_arrays`):
 ```json
@@ -799,7 +800,7 @@ __init__.py
 |---|---|---|---|
 | `ultimate_grid.update` | `generation_orchestrator.py` / `image_generation.py` / `remote_vae.py` / `workflow_sweep_collect.py` | `session_name, node, manifest, meta, new_items` | New images generated |
 | `ultimate_grid.update_data` | `generation_orchestrator.py`, `upscale_runner.py` | `session_name, new_items` (+ `node` from the orchestrator) | Per-item replacement: the listed items replace the cards with the same id (deferred upscales, dashboard upscales) |
-| `ultimate_grid.progress` | `generation_orchestrator.py`, `upscale_runner.py`, `workflow_sweep_runner.py` | `session_name, node, progress_pct, eta_str, current_job, total_jobs, avg_duration, last_duration, finish_time` | ETA/progress bar. Optional `phase`: `upscaling` (deferred and dashboard upscales) or `sweep` (Workflow Sweep, label "Sweep job"). The sweep payload is `{node, session_name, phase: "sweep", sweep_id, state, errors, current_job, total_jobs, progress_pct, eta_str, finish_time, avg_duration, last_duration}` plus, on completion, `complete, total_elapsed, total_generated` |
+| `ultimate_grid.progress` | `generation_orchestrator.py`, `upscale_runner.py`, `workflow_sweep_runner.py` | `session_name, node, progress_pct, eta_str, current_job, total_jobs, avg_duration, last_duration, finish_time` | ETA/progress bar. Optional `phase`: `upscaling` (deferred and dashboard upscales), `distributed` (distributed run: adds `workers`, the machines currently working, and the label gets ` | N machine(s)`; sent on every worker result via the manager's `on_status` hook, jobs skipped by Start At Job / claim filter / done on the master included in `current_job`) or `sweep` (Workflow Sweep, label "Sweep job"). The sweep payload is `{node, session_name, phase: "sweep", sweep_id, state, errors, current_job, total_jobs, progress_pct, eta_str, finish_time, avg_duration, last_duration}` plus, on completion, `complete, total_elapsed, total_generated` |
 | `ultimate_grid.next_run_seeds` | `generation_orchestrator.py` | `node, seeds` | Per-config seeds the NEXT run should use after a `random_after` / `increment_after` / `decrement_after` full-run seed behavior, as `{config_index: seed}` (no listener in this package) |
 | `ultimate_grid.metrics_progress` | `metrics_runner.py` | `session_name, job_id, status, completed, total` | Progress of a "compute metrics for this session" job (no listener in this package; the SPA polls `/config_tester/metrics_status`) |
 | `ultimate_grid.distribution_status` | `generation_orchestrator.py` | `session_name, workers, stats` | Distribution worker status |

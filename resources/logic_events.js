@@ -46,6 +46,14 @@ function applyManifestReplace(manifest, newMeta) {
     updateDataPipeline();
 }
 
+// Text of the ETA bar for a non-final progress event (pure; no DOM access).
+function formatProgressText(p) {
+    const phaseLabel = p.phase === 'upscaling' ? 'Upscaling' : (p.phase === 'sweep' ? 'Sweep job' : 'Job');
+    const finishPart = p.finish_time ? ` | ~${p.finish_time}` : '';
+    const machinesPart = (p.phase === 'distributed' && p.workers) ? ` | ${p.workers} machine(s)` : '';
+    return `${phaseLabel} ${p.current_job}/${p.total_jobs} (${p.progress_pct}%) | ETA: ${p.eta_str}${finishPart} | ${p.avg_duration}s/job${p.errors ? ` | ${p.errors} error${p.errors === 1 ? '' : 's'}` : ''}${(p.state === 'paused' || p.state === 'cancelled') ? ` | ${p.state}` : ''}${machinesPart}`;
+}
+
 // WebSocket Listener - OPTIMIZED
 window.addEventListener('message', (event) => {
     // Handle real-time ETA/progress updates
@@ -65,9 +73,7 @@ window.addEventListener('message', (event) => {
                 setTimeout(() => { if (etaBar) etaBar.style.display = 'none'; }, 30000);
             } else {
                 if (etaText) {
-                    const phaseLabel = p.phase === 'upscaling' ? 'Upscaling' : (p.phase === 'sweep' ? 'Sweep job' : 'Job');
-                    const finishPart = p.finish_time ? ` | ~${p.finish_time}` : '';
-                    etaText.textContent = `${phaseLabel} ${p.current_job}/${p.total_jobs} (${p.progress_pct}%) | ETA: ${p.eta_str}${finishPart} | ${p.avg_duration}s/job${p.errors ? ` | ${p.errors} error${p.errors === 1 ? '' : 's'}` : ''}${(p.state === 'paused' || p.state === 'cancelled') ? ` | ${p.state}` : ''}`;
+                    etaText.textContent = formatProgressText(p);
                 }
                 if (etaProgress) {
                     etaProgress.style.width = `${p.progress_pct}%`;
