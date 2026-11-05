@@ -237,6 +237,9 @@ def dashboard(page, manifest_meta):
     page.wait_for_function(
         f"typeof processedData!=='undefined' && processedData.length==={N_ITEMS}")
     expect(page.locator("#grid .card:visible")).to_have_count(N_ITEMS)
+    # Let the initial auto-fit (ResizeObserver -> recalculateLayout) land before any test reads pan/scale:
+    # two animation frames after the cards exist; otherwise a late layout pass can move panOffsetX mid-test.
+    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
     yield d
     assert d.pageerrors == []
 
