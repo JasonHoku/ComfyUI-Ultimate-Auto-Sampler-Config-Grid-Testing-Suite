@@ -7,6 +7,7 @@ import re
 from functools import lru_cache
 from .lora_utils import load_and_save_tags
 from .config_utils import parse_lora_definition
+from .regional_prompt import join_prompt_parts
 
 
 def _should_omit_trigger(trigger, omit_normalized):
@@ -214,7 +215,7 @@ def collect_unique_prompts_with_triggers(expanded_configs, lora_triggerwords_mod
                 if end_triggers:
                     parts.append(", ".join(end_triggers))
 
-                full_positive = ", ".join(parts)
+                full_positive = join_prompt_parts(parts, 1 if start_triggers else 0)
 
                 # Show omitted triggers only once during pre-encoding
                 if omit_list:
@@ -286,7 +287,7 @@ def _apply_model_prompt_affixes(prompt, config):
     if suffix:
         parts.append(suffix)
 
-    return ", ".join(parts)
+    return join_prompt_parts(parts, 1 if prefix else 0)
 
 
 def build_prompt_with_triggers(config, lora_triggerwords_mode):
@@ -363,7 +364,7 @@ def build_prompt_with_triggers(config, lora_triggerwords_mode):
     if end_triggers:
         parts.append(", ".join(end_triggers))
 
-    final_prompt = ", ".join(parts)
+    final_prompt = join_prompt_parts(parts, 1 if start_triggers else 0)
 
     # Apply model-specific prefix/suffix (wraps the entire prompt+triggers)
     final_prompt = _apply_model_prompt_affixes(final_prompt, config)

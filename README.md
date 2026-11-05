@@ -107,6 +107,7 @@ If you'd rather build the graph yourself:
   - [MOSS-Image, Flux.2, Krea 2 (16 px latent models)](#moss-image-flux2-krea-2-16-px-latent-models)
   - [Model-Specific Prompts](#model-specific-prompts)
   - [Recursive Cartesian Prompt Builder](#recursive-cartesian-prompt-builder)
+  - [Prompt Combinators & Regional Prompts (COUPLE)](#prompt-combinators--regional-prompts-couple)
   - [Job Order & Preview Pass](#job-order--preview-pass-run-settings)
   - [Image Metrics (Optional)](#image-metrics-optional)
   - [Workflow Sweep](#workflow-sweep-sweep-any-comfyui-workflow)
@@ -197,7 +198,7 @@ If you'd rather build the graph yourself:
 * **Remote VAE Support:** Offload VAE decoding to remote servers (HuggingFace endpoints or local) for 20-30% faster generation and lower VRAM usage.
 * **VAE Selection & Iteration:** Test multiple VAEs per config — add individual VAEs from a searchable dropdown or expand entire VAE folders. Each VAE becomes a dimension in the Cartesian grid.
 * **Attention Mode Testing:** Grid-test different attention implementations (`default`, `sage`, `sage3`, `flash`, `xformers`, etc.) as a combinatorial dimension. Find the optimal attention backend for your hardware.
-* **CLIP Encoding Combinators:** Advanced prompt syntax with `AND`, `CAT`, `AVG(weight)`, and `BREAK` keywords for multi-segment conditioning. `AND` creates separate conditioning entries, `CAT` concatenates token contexts, `AVG(0.5)` blends prompts, and `BREAK` forces new 77-token chunks.
+* **CLIP Encoding Combinators:** Advanced prompt syntax with `AND`, `CAT`, `AVG(weight)`, and `BREAK` keywords for multi-segment conditioning. `AND` creates separate conditioning entries, `CAT` concatenates token contexts, `AVG(0.5)` blends prompts, and `BREAK` forces new 77-token chunks. `COUPLE` splits a prompt into left/right (or top/bottom) regions, see [Prompt Combinators & Regional Prompts (COUPLE)](#prompt-combinators--regional-prompts-couple).
 * **Model-Specific Prompts:** Per-config prompt prefix and suffix fields for model-appropriate quality tags (e.g., prepend `"masterpiece, best quality"` for anime models, append `"4k, photorealistic"` for realistic models).
 * **Recursive Cartesian Prompt Builder:** Visual chip-based prompt editor with `{option1|option2|option3}` syntax that expands into all combinations. Nest multiple groups for exponential prompt variation.
 * **Model & LoRA On/Off Switches:** Toggle individual models and LoRAs on/off without removing them from the config. Bypassed entries are omitted from both the preview JSON and the generated config output.
@@ -336,6 +337,7 @@ ComfyUI/custom_nodes/ComfyUI-Ultimate-Auto-Sampler/
 ├── remote_vae.py                    # Remote VAE offloading
 │
 ├── batch_encoding.py                # CLIP batch encoding with combinator support
+├── regional_prompt.py               # COUPLE regional prompts (parser, masks)
 ├── conditioning_cache.py            # Disk-based conditioning cache
 ├── lora_utils.py                    # LoRA searching & validation
 ├── trigger_words.py                 # CivitAI trigger word fetching & prompt assembly
@@ -404,7 +406,7 @@ This suite consists of three nodes found under the `sampling/testing` category:
   
 * **`te_batch_size`** (Run Setting "Text Encoder Batch Size"): How many prompts to encode per text-encoder forward. `1` (default) = off.
   - Only MOSS-Image, Krea 2 and Qwen-Image encoders batch; every other encoder ignores it.
-  - Weighted prompts and `AND` / `CAT` / `AVG()` / `BREAK` prompts are still encoded one at a time.
+  - Weighted prompts and `AND` / `CAT` / `AVG()` / `BREAK` / `COUPLE` prompts are still encoded one at a time.
   - The first batch is self-checked against a single-prompt encode; on any mismatch the run falls back to one-by-one automatically. A CUDA OOM halves the batch and retries.
   - The pre-encode summary line shows how many prompts were batched.
 
@@ -823,6 +825,41 @@ This expands into all combinations (3 × 2 × 2 = 12 prompts):
 - ... etc.
 
 The editor provides a visual chip interface for building and editing these variation groups. Each group is displayed as a clickable chip that can be expanded to add/remove options. Multiple groups can be nested for exponential prompt variation.
+
+### Prompt Combinators & Regional Prompts (COUPLE)
+
+Positive and negative prompts understand these keywords (capitals, as their own word):
+
+* `A AND B` makes separate conditioning entries (a trailing ` :1.3` after a part is its weight), `A CAT B` concatenates token contexts, `A AVG(0.3) B` blends two prompts, `BREAK` starts a new 77-token chunk.
+* `COUPLE` splits the image into regions, each with its own prompt, using ComfyUI's native masked conditioning (no extra nodes or patches).
+
+```
+[<base>] COUPLE[(<layout>)] <region1> | <region2> [| <region3> [| <region4>]]
+```
+
+* `COUPLE` or `COUPLE(cols)`: regions side by side, left to right. `COUPLE(rows)`: stacked bands, top to bottom.
+* 2 to 4 regions of equal size, separated by a top-level `|` (a `|` inside `()`, `[]`, `{}` or `<>` is not a separator).
+* The text before `COUPLE` is the **base**: it applies to the whole image. Regions are not prefixed with the base; the base and the region are blended in each region's area.
+* A region may end with ` :w` (space, colon, number) to weight it; ` :0` turns the region off. An empty region (`a | | b`) leaves that part of the image to the base. Lowercase `couple` is plain text.
+* A region can use `AND` / `CAT` / `AVG()` / `BREAK` too. Invalid syntax (one region, more than four, unknown layout, two `COUPLE`, an empty base with an empty region) stops the run before any model is loaded, listing the bad prompts.
+
+Examples:
+
+```
+no humans, scenery, sports car COUPLE red sports car | blue sports car
+2girls, park, sunny COUPLE(cols) 1girl, red hair AND smiling | 1girl, blue hair :1.3
+sky, mountains, masterpiece COUPLE(rows) clouds, sunset | snowy peak
+```
+
+Notes:
+
+* Each region costs one extra model pass per sampling step.
+* Text that is added after the prompt goes into the **base**, not the last region: LoRA trigger words, the model prompt prefix/suffix, and the HiRes prompt with "Append to end". HiRes "Replace" drops the regions (the replacement text is used as is). "Prepend" adds the text in front of the whole prompt, which makes it part of the base.
+* Prompt groups in the Builder are joined with `, `, so text in a later group lands in the last region. Put the `COUPLE` text in the **last** prompt group.
+* Masks are built at the size of the latent being sampled, so HiRes, tiled HiRes, Florence2 HiRes crops and img2img latents all work.
+* Image metrics that use the prompt text (such as ImageReward) score the plain text with the markers removed.
+
+Limitations: no per-region LoRAs, equal splits only (no ratios), hard region edges, not supported by Workflow Sweep or LTX video (the text is encoded literally, and LTX prints a warning), and distributed workers must run the same USCG version (an older worker ignores the tag and applies every region to the whole image, without an error).
 
 ### Job Order & Preview Pass (Run Settings)
 Both live in the **Run Settings** section of the Config Builder and default to the old behaviour.
@@ -1795,6 +1832,7 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 * 📐 **Latent input size:** a connected latent's image size was always cells x 8; it is now cells x the loaded model's latent ratio (16 for Flux.2/MOSS-Image/Krea 2).
 
 ### Update 11/4/26: Standalone dashboard, pairwise review, image metrics, preview pass, workflow sweeps
+* 🧩 **Regional prompts (`COUPLE`):** `base COUPLE left | right` (or `COUPLE(rows)`, 2-4 regions, per-region `:w` weight) gives each part of the image its own prompt using native masked conditioning. Triggers, model prefix/suffix and HiRes "Append to end" text go into the base; works with HiRes, tiled HiRes and Florence2 crops. The conditioning cache on disk now keeps every entry (AND prompts included), so older cache files are re-encoded once. See [Prompt Combinators & Regional Prompts (COUPLE)](#prompt-combinators--regional-prompts-couple).
 * 📱 **Standalone Dashboard + Run API:** open the dashboard as a normal web page at `/config_tester/dashboard?session=<name>` (phone, second monitor) with live updates over its own websocket. `POST /config_tester/run` and `GET /config_tester/run_status` start and track headless runs (Discord bot, curl) without any workflow JSON.
 * ⚖️ **Pairwise Review:** blind A/B compare mode (`C` key) with matched, same-settings, one-axis and random pairing, Bradley-Terry ratings (Sort by Rating) and a per-setting scoreboard with 95% intervals. Votes are stored in the session manifest under `comparisons`.
 * 📏 **Image Metrics (optional):** a Run Settings checkbox stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image. Sort, filter and label by them in the Dashboard, or compute them for older sessions from the cog panel.
@@ -1845,7 +1883,7 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 ### Update 2/16/26 — Config Builder & Dashboard Overhaul
 * 🎛️ **VAE Selection & Iteration:** Test multiple VAEs per config with searchable dropdown and folder expansion. VAEs are a full Cartesian dimension.
 * 🧠 **Attention Mode Testing:** Grid-test different attention implementations (`default`, `sage`, `xformers`) as a combinatorial dimension.
-* 🔗 **CLIP Encoding Combinators:** `AND`, `CAT`, `AVG(weight)`, and `BREAK` keywords for multi-segment conditioning and prompt blending.
+* 🔗 **CLIP Encoding Combinators:** `AND`, `CAT`, `AVG(weight)`, `BREAK` and `COUPLE` (regional prompts) keywords for multi-segment conditioning and prompt blending.
 * 📝 **Model-Specific Prompts:** Per-config prompt prefix and suffix fields for model-appropriate quality tags.
 * 🔄 **Recursive Cartesian Prompt Builder:** Visual chip-based editor with `{option1|option2}` syntax expanding into all combinations.
 * 🔘 **Model & LoRA On/Off Switches:** Toggle entries on/off without removing them. Bypassed entries excluded from preview and output.

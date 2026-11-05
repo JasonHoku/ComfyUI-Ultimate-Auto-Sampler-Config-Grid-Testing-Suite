@@ -16,6 +16,7 @@ import comfy.sd  # Required for async workers
 from comfy.model_management import InterruptProcessingException
 
 from .trigger_words import collect_unique_prompts_with_triggers, build_prompt_with_triggers, clear_trigger_caches
+from .regional_prompt import append_to_base, validate_regional_prompts, has_regions
 from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators, pinned_clip, DEFAULT_TE_BATCH_SIZE
 from .manifest_utils import load_existing_manifest, save_manifest, item_filename
 from .model_loader import (
@@ -526,7 +527,7 @@ def run_deferred_upscales(
             if hires_prompt_behavior_rt == "prepend":
                 adjusted_prompt = hires_prompt_text_rt + " " + actual_positive_prompt
             elif hires_prompt_behavior_rt == "append_end":
-                adjusted_prompt = actual_positive_prompt + " " + hires_prompt_text_rt
+                adjusted_prompt = append_to_base(actual_positive_prompt, hires_prompt_text_rt)
             elif hires_prompt_behavior_rt == "replace":
                 adjusted_prompt = hires_prompt_text_rt
             else:
@@ -1431,6 +1432,10 @@ def run_generation_loop(
                 expanded, lora_triggerwords_mode
             )
 
+        # Stop with a clear message on malformed COUPLE regional prompts (instead of a later
+        # "Encoding not found" failure)
+        validate_regional_prompts(sorted(set(unique_positives) | set(unique_negatives)))
+
         # Collect adjusted HiRes prompts for pre-encoding (if hires prompt adjustment is enabled)
         upscale_settings = session_settings.get("upscaling", {}) if session_settings else {}
         if upscale_settings.get("enabled") and upscale_settings.get("hires_prompt_adjust") and upscale_settings.get("hires_prompt_text", "").strip():
@@ -1441,7 +1446,7 @@ def run_generation_loop(
                 if hires_behavior == "prepend":
                     adjusted = hires_text + " " + base_prompt
                 elif hires_behavior == "append_end":
-                    adjusted = base_prompt + " " + hires_text
+                    adjusted = append_to_base(base_prompt, hires_text)
                 elif hires_behavior == "replace":
                     adjusted = hires_text
                 else:
@@ -1647,6 +1652,9 @@ def run_generation_loop(
         # accesses conf['sampler']/conf['steps'] (LTX configs use sampler_stage1/2).
         if conf.get("model_type") == "ltx_video":
             from .ltx_video_generation import preflight_ltx, load_ltx_models, ltx_video_generate
+
+            if has_regions(conf.get("positive", "")) or has_regions(conf.get("negative", "")):
+                print("[GridTester] ⚠️ COUPLE regional prompts are not supported for LTX video; text is encoded literally")
 
             # Pre-flight on first LTX config of this run (idempotent — cached check internally)
             if not _ltx_preflight_done[0]:
@@ -2179,7 +2187,7 @@ def run_generation_loop(
                     if hires_prompt_behavior_rt == "prepend":
                         adjusted_prompt = hires_prompt_text_rt + " " + actual_positive_prompt
                     elif hires_prompt_behavior_rt == "append_end":
-                        adjusted_prompt = actual_positive_prompt + " " + hires_prompt_text_rt
+                        adjusted_prompt = append_to_base(actual_positive_prompt, hires_prompt_text_rt)
                     elif hires_prompt_behavior_rt == "replace":
                         adjusted_prompt = hires_prompt_text_rt
                     else:
@@ -3125,6 +3133,8 @@ def _preencode_all_conditionings(
             actual_negative = conf.get("negative", "")
             unique_positives.add(actual_positive)
             unique_negatives.add(actual_negative)
+
+        validate_regional_prompts(sorted(unique_positives | unique_negatives))
 
         print(f"[Distribution] 🧠   {len(unique_positives)} unique positive, "
               f"{len(unique_negatives)} unique negative prompt(s)")

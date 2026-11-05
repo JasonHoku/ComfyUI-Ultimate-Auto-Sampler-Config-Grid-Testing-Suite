@@ -55,6 +55,7 @@ from PIL import Image
 
 from . import image_metrics
 from .image_metrics import _CURRENT as _METRICS_RUN
+from .regional_prompt import apply_regional_masks
 
 
 def _latent_ratio(patched_model):
@@ -211,7 +212,8 @@ def generate_image(
     slg_start_percent=0.0,
     slg_end_percent=0.5,
     width=1024,
-    height=1024
+    height=1024,
+    region_frame=None
 ):
     """
     Generate a single image using ComfyUI's KSampler or SamplerCustomAdvanced pipeline.
@@ -410,6 +412,13 @@ def generate_image(
             positive_conditioning, {"guidance": float(flux_guidance_value)}
         )
         print(f"[GridTester] 🔧 Applied FluxGuidance (guidance={flux_guidance_value})")
+
+    # === Regional prompts (COUPLE) ===
+    # Turn uscg_region tags into native ComfyUI masked conditioning at the actual latent size.
+    # region_frame says which part of the full image this latent is (tiles / Florence2 crops).
+    _lat_shape = latent_input["samples"].shape
+    positive_conditioning = apply_regional_masks(positive_conditioning, _lat_shape, region_frame)
+    negative_conditioning = apply_regional_masks(negative_conditioning, _lat_shape, region_frame)
 
     t0 = time.time()
 
@@ -631,7 +640,8 @@ def tiled_hires_sample(latent_input, patched_model, config, positive_conditionin
                 config.get("sampler", "euler"), config.get("scheduler", "normal"),
                 positive_conditioning, negative_conditioning,
                 {"samples": tile_latent}, hires_denoise,
-                width=(x_end - x_start) * 8, height=(y_end - y_start) * 8
+                width=(x_end - x_start) * 8, height=(y_end - y_start) * 8,
+                region_frame=(y_start / lat_h, x_start / lat_w, y_end / lat_h, x_end / lat_w)
             )
 
             tile_out = tile_result["samples"]

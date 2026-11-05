@@ -49,6 +49,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── ltx_video_generation.py      # LTX 2.3 video pipeline + _call_node helper for V3/V1 nodes (716 lines)
 │
 ├── batch_encoding.py            # Batch CLIP Encoding, Combinators, pinned_clip, Text-Encoder Batching (878 lines)
+├── regional_prompt.py           # COUPLE regional prompts: parser, join helpers, mask builder (327 lines)
 ├── conditioning_cache.py        # Disk-based Conditioning Cache (372 lines)
 ├── lora_utils.py                # LoRA Searching & Validation (468 lines)
 ├── trigger_words.py             # Trigger Word Prompt Assembly (377 lines)
@@ -348,9 +349,16 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
   * Caches CLIP text encodings to disk
   * Hashes `(Prompt + CLIP State + LoRA Config)` to ensure validity
   * Auto-disabled when optional inputs connected
+  * Stores every cond entry with all its extra keys (AND prompts, `uscg_region` tags); legacy single-entry files count as a miss and are re-encoded once
+
+* **`regional_prompt.py`** (327 lines)
+  * Pure Python (torch imported only inside the mask functions). `COUPLE` regional prompts: `base COUPLE[(cols|rows)] r1 | r2 [| r3 [| r4]]`
+  * `parse_regional_prompt()`, `has_regions()`, `validate_regional_prompts()` (one `RegionalPromptError` listing every bad prompt), `split_at_marker()`
+  * `join_prompt_parts()` / `append_to_base()` — put trigger words, model prefix/suffix and HiRes `append_end` text into the base instead of the last region (byte-identical output without `COUPLE`); `plain_prompt_text()` for text metrics
+  * `region_tag()` marks cached cond entries with `uscg_region`; `build_region_masks()` / `apply_regional_masks()` turn the tags into native ComfyUI `mask` + `mask_strength` entries at the sampled latent's size (called by `image_generation.generate_image`, with `region_frame` for tiles and Florence2 crops)
 
 * **`batch_encoding.py`** (378 lines)
-  * `encode_prompt_with_combinators(clip, text, clip_skip)` — supports AND, CAT, AVG, BREAK combinators
+  * `encode_prompt_with_combinators(clip, text, clip_skip)` — supports AND, CAT, AVG, BREAK combinators and `COUPLE` regional prompts (each cond entry of a region carries a `uscg_region` tag; see `regional_prompt.py`)
   * `batch_encode_prompts()` — bulk prompt encoding with cache integration
   * `encode_prompts_batched()` — `te_batch_size` > 1: several eligible prompts per text-encoder forward (right-padded, per-prompt replay of the unmodified `_encode_single`; allowlist `TE_BATCH_FAMILIES`, self-check, OOM halving, `DEFAULT_TE_BATCH_SIZE`)
   * **Combinators:** `AND` (multi-cond with optional weights like `:1.5`), `CAT` (tensor concatenation), `AVG(weight)` (weighted average), `BREAK` (77-token segment break)
@@ -922,6 +930,7 @@ __init__.py
 | `generation_orchestrator.py` | `run_generation_loop()`, `check_if_job_completed()`, `setup_session_directories()`, `_preencode_all_conditionings()`, `_conditioning_to_serializable()`, `_run_distributed_generation()` | -, -, 43, -, -, - |
 | `image_generation.py` | `generate_image()`, `create_image_metadata()`, `flush_batch_with_vae()`, `upscale_image()`, `decode_latent_with_vae()`, `calculate_eta()` | 16, 483, 605, 265, -, 540 |
 | `batch_encoding.py` | `encode_prompt_with_combinators()`, `batch_encode_prompts()` | |
+| `regional_prompt.py` | `parse_regional_prompt()`, `validate_regional_prompts()`, `join_prompt_parts()`, `append_to_base()`, `apply_regional_masks()`, `build_region_masks()` | |
 | `config_utils.py` | `expand_configs()`, `parse_prompt_input_nested()`, `prepare_input_jobs()`, `parse_lora_definition()`, `sanitize_session_name()` | |
 | `model_loader.py` | `load_checkpoint()`, `load_loras()`, `load_vae_by_name()`, `load_diffusion_model_and_clip()` | |
 | `model_cache.py` | `ModelCache.get_base_model()`, `.put_base_model()`, `.preload_lora_model()`, `.register_schedule()` | |

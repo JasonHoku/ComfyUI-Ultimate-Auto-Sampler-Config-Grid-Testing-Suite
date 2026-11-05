@@ -200,6 +200,69 @@ class ConditioningCache:
             print(f"[CondCache] Error deserializing conditioning: {e}")
             return None
     
+    @staticmethod
+    def _tensor_to_json(t) -> Dict[str, Any]:
+        arr = np.ascontiguousarray(t.detach().cpu().numpy())
+        return {"t": "tensor", "data": base64.b64encode(arr.tobytes()).decode("utf-8"),
+                "shape": list(arr.shape), "dtype": str(arr.dtype)}
+
+    def _conditioning_to_entries(self, conditioning) -> Optional[list]:
+        """
+        Serialize EVERY conditioning entry and EVERY extra key (AND prompts, attention masks,
+        regional tags...). Tensors become base64 numpy, None stays None, anything else must
+        survive json.dumps. Returns None when something cannot be stored (the entry then stays
+        memory-only instead of being silently truncated).
+        """
+        try:
+            entries = []
+            for item in conditioning:
+                tensor = item[0]
+                extras = item[1] if len(item) > 1 else {}
+                if not hasattr(tensor, "detach"):
+                    return None
+                ser_extras = {}
+                for k, v in (extras or {}).items():
+                    if v is None:
+                        ser_extras[k] = {"t": "none"}
+                    elif hasattr(v, "detach"):
+                        ser_extras[k] = self._tensor_to_json(v)
+                    else:
+                        json.dumps(v)  # raises for anything not JSON-safe
+                        ser_extras[k] = {"t": "value", "v": v}
+                entries.append({"cond": self._tensor_to_json(tensor), "extras": ser_extras})
+            return entries
+        except Exception as e:
+            print(f"[CondCache] Not caching to disk (unserializable conditioning): {e}")
+            return None
+
+    @staticmethod
+    def _tensor_from_json(d):
+        raw = base64.b64decode(d["data"])
+        arr = np.frombuffer(raw, dtype=np.dtype(d["dtype"])).reshape(tuple(d["shape"])).copy()
+        return torch.from_numpy(arr)
+
+    def _entries_to_conditioning(self, entries):
+        """Inverse of _conditioning_to_entries. Returns None on any problem (treated as a cache miss)."""
+        try:
+            result = []
+            for e in entries:
+                extras = {}
+                for k, v in e.get("extras", {}).items():
+                    kind = v.get("t")
+                    if kind == "none":
+                        extras[k] = None
+                    elif kind == "tensor":
+                        extras[k] = self._tensor_from_json(v)
+                    elif kind == "value":
+                        extras[k] = v["v"]
+                    else:
+                        return None
+                result.append([self._tensor_from_json(e["cond"]), extras])
+            return result or None
+        except Exception as ex:
+            print(f"[CondCache] Error deserializing conditioning entries: {ex}")
+            return None
+
     def _load_from_disk(self) -> Dict[str, Any]:
         """
         Load cache from disk.
@@ -294,7 +357,11 @@ class ConditioningCache:
         
         if key in self.disk_cache.get("entries", {}):
             entry = self.disk_cache["entries"][key]
-            conditioning = self._dict_to_conditioning(entry["conditioning"])
+            # conditioning_v2 keeps every entry + extra key. Legacy entries (single-entry
+            # "conditioning" only) dropped AND prompts / regional tags, so they count as a miss.
+            conditioning = None
+            if "conditioning_v2" in entry:
+                conditioning = self._entries_to_conditioning(entry["conditioning_v2"])
             
             if conditioning is not None:
                 # Store in memory cache for fast access (using full text)
@@ -326,7 +393,7 @@ class ConditioningCache:
             return
         
         key = self._prompt_key(prompt_text)
-        serialized = self._conditioning_to_dict(conditioning)
+        serialized = self._conditioning_to_entries(conditioning)
         
         if serialized is not None:
             if "entries" not in self.disk_cache:
@@ -335,7 +402,7 @@ class ConditioningCache:
             self.disk_cache["entries"][key] = {
                 "prompt": prompt_text[:200],  # Truncate for readability
                 "type": prompt_type,
-                "conditioning": serialized
+                "conditioning_v2": serialized
             }
             
             self.stats["saves"] += 1

@@ -30,6 +30,7 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `config_builder_node.py` | 1578 | Config builder node. `state_to_configs_json(state)` is the ONLY state-to-configs implementation (`generate_config()` and `POST /configbuilder/preview` both call it). API endpoints for model lists, trigger lookups |
 | `generation_orchestrator.py` | 3892 | **Largest file.** Main generation loop over a flat job plan (`config_utils.build_job_plan`), smart skip, preview pass, upscaling pipelines, deferred upscales (`run_deferred_upscales()`), GPU cooldown, distribution, ETA tracking, Start At Job # |
 | `image_generation.py` | 1321 | KSampler wrapper, VAE decode, `flush_batch_with_vae()` (saves images + updates manifest), `upscale_image()`, `create_image_metadata()`, rolling ETA |
+| `regional_prompt.py` | 327 | `COUPLE` regional prompts: parser, `join_prompt_parts()`/`append_to_base()` (affix text goes into the base), mask builder, `apply_regional_masks()` (called from `generate_image`) |
 | `batch_encoding.py` | 878 | Prompt pre-encode with combinators, `pinned_clip()` (one text-encoder load per pass), `te_batch_size` text-encoder batching |
 | `civitai.py`, `distribution.py` | 40, 107 | Thin facades for the companion plugins (ComfyUI-USCG-CivitAI, ComfyUI-USCG-Distributed). No outbound network code in this package. |
 | `upscale_runner.py` | 642 | Dashboard async upscaling. Background thread loads models, runs pipeline chains, updates manifests, sends progress events. |

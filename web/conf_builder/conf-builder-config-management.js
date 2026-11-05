@@ -5124,7 +5124,16 @@ function createPromptGroupEditor(groups, onChange, label, borderColor = "#0066cc
     const titleEl = document.createElement("div");
     titleEl.style.cssText = `font-size: 12px; font-weight: bold; color: ${borderColor};`;
     titleEl.textContent = label;
+    const promptSyntaxHelp = "Combinators: A AND B (:w weights), A CAT B, A AVG(0.3) B, BREAK. " +
+        "Regional: base COUPLE left | right (2-4 regions; COUPLE(rows) for top/bottom; region :w weight). " +
+        "Put COUPLE text in the last prompt group: later groups join the last region.";
+    titleEl.title = promptSyntaxHelp;
     header.appendChild(titleEl);
+    const syntaxHint = document.createElement("span");
+    syntaxHint.style.cssText = "font-size: 10px; color: #888; cursor: help; margin-left: 6px;";
+    syntaxHint.textContent = "ⓘ syntax";
+    syntaxHint.title = promptSyntaxHelp;
+    titleEl.appendChild(syntaxHint);
 
     const modeToggleContainer = document.createElement("div");
     modeToggleContainer.style.cssText = "display: flex; gap: 4px;";
@@ -7135,7 +7144,7 @@ export function renderRunSettingsSection(node, container) {
     _addRunSetting(content, { stateKey: "vae_batch_size", label: "VAE Batch Size", kind: "int", min: -1, max: 64, defaultValue: 1,
         tooltip: "How many images to encode/decode per VAE pass. Lower = less VRAM. -1 = process all at once. Default: 4." });
     _addRunSetting(content, { stateKey: "te_batch_size", label: "Text Encoder Batch Size", kind: "int", min: 1, max: 32, defaultValue: 1,
-        tooltip: "Encode this many prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image only; other encoders ignore it). 1 = off. 8 is a good value once verified; weighted/AND/CAT/AVG/BREAK prompts are still encoded one by one." });
+        tooltip: "Encode this many prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image only; other encoders ignore it). 1 = off. 8 is a good value once verified; weighted/AND/CAT/AVG/BREAK/COUPLE prompts are still encoded one by one." });
     _addRunSetting(content, { stateKey: "add_random_seeds_to_gens", label: "Additional Random Seeds", kind: "int", min: 0, max: 100, defaultValue: 0,
         tooltip: "Generate this many extra images per config using additional random seeds. 0 = disabled." });
 

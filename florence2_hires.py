@@ -767,6 +767,9 @@ def run_florence2_step(
         denoise=float(step_config.get("hires_denoise", 0.45)),
         width=target_w,
         height=target_h,
+        # Which part of the full image this crop is (COUPLE regional prompts)
+        region_frame=(bbox[1] / src_h, bbox[0] / src_w,
+                      (bbox[1] + bbox[3]) / src_h, (bbox[0] + bbox[2]) / src_w),
     )
     decoded_pil = decode_latent_with_vae(vae_handle, hires_latent_dict["samples"])
     _vram_log("after sample + VAE decode")
