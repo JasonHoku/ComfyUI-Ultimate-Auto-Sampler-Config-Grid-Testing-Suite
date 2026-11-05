@@ -509,6 +509,8 @@ async def save_manifest(request):
         data = await request.json()
         session_name = data.get("session_name")
         manifest_data = data.get("manifest")  # This is from dashboard (may be stale)
+        if isinstance(manifest_data, dict):
+            manifest_data.pop("__uscg_lazy__", None)  # never persist the lazy-shell flag
         
         # --- sanitize ---
         if session_name:
@@ -1331,7 +1333,7 @@ async def scan_directory_route(request):
         # Run the scan in a thread pool to avoid blocking the event loop
         loop = asyncio.get_event_loop()
         items, stats = await loop.run_in_executor(
-            None, scan_directory_for_images, directory_path, 5000, view_subfolder
+            None, scan_directory_for_images, directory_path, 5000, view_subfolder, session_name
         )
 
         from_manifest = stats.get("from_manifest", 0)

@@ -17,6 +17,7 @@ All loop-bound ComfyUI access goes through `ComfyBridge`, so the runner is testa
 """
 
 import asyncio
+import functools
 import inspect
 import json
 import os
@@ -391,7 +392,7 @@ def prepare_sweep(configs, session_settings=None, origin_node=None, client_id=No
                "prompt_id": None, "error": None, "gen_index": gen_base + idx, "replace_ids": [],
                "enqueued_at": None, "started_at": None, "finished_at": None, "duration": None,
                "collected": False, "missing_since": None, "success_seen_at": None}
-        if idx < start_at:
+        if idx + 1 < start_at:
             job["status"], job["skip_reason"] = "skipped", "start_at_job"
         elif conf["wf_fingerprint"] in by_fp:
             if overwrite:
@@ -507,6 +508,11 @@ def start_sweep(configs, session_settings=None, origin_node=None, client_id=None
         sw.bridge.run_on_loop(validate_first(sw))
         return launch(sw)
     except SweepAlreadyRunning as e:
+        if e.sweep.state == "paused":
+            ok, msg = resume(e.sweep.id)
+            print(f"[GridTester] ▶️ Same workflow sweep was paused ({e.sweep.id}, session "
+                  f"'{e.sweep.session}'): resumed ({msg})")
+            return e.sweep
         print(f"[GridTester] 🔁 Same workflow sweep already running ({e.sweep.id}, session "
               f"'{e.sweep.session}'): attaching, nothing re-queued")
         return e.sweep
@@ -541,7 +547,8 @@ def _fail_job(sw, job, status, error, params=None):
     sw.consecutive_errors += 1
     sw.terminal_since_spec += 1
     print(f"[GridTester] ❌ Sweep job {job['index'] + 1}/{len(sw.jobs)} {status}: {error}")
-    if sw.consecutive_errors >= BREAKER and sw.state == "running":
+    others_left = any(j is not job and j["status"] in ("pending", "enqueued", "running") for j in sw.jobs)
+    if sw.consecutive_errors >= BREAKER and sw.state == "running" and others_left:
         sw.state = "paused"
         sw.reason = f"{BREAKER} jobs in a row failed; last: {error}"
 
@@ -730,6 +737,12 @@ def tick(sw):
             if pulled:
                 with sw.lock:
                     job.update(status="pending", prompt_id=None, enqueued_at=None, missing_since=None)
+        with sw.lock:
+            nothing_left = (sw.state == "paused" and not sw.in_flight()
+                            and not any(j["status"] == "pending" for j in sw.jobs))
+        if nothing_left:  # the breaker (or a user pause) left nothing to resume: complete instead of blocking new sweeps
+            _finish(sw)  # reason = "N job(s) failed" when there were failures
+            return False
         return True
 
     while True:
@@ -952,7 +965,14 @@ def _write_spec(sw):
         path = os.path.join(paths["sweeps"], f"{sw.id}.json")
         with open(path + ".tmp", "w") as f:
             json.dump(spec, f, indent=1)
-        os.replace(path + ".tmp", path)
+        for attempt in range(5):
+            try:
+                os.replace(path + ".tmp", path)
+                break
+            except PermissionError:  # Windows: a reader (the dashboard) has the file open
+                if attempt == 4:
+                    raise
+                time.sleep(0.04)
     except Exception as e:
         print(f"[GridTester] ⚠️ Could not write the sweep spec file: {e}")
 
@@ -987,7 +1007,8 @@ async def dry_run(body, bridge=None, class_info=wfs.comfy_class_info):
         limit = max(1, min(20, int(body.get("limit", 3))))
     except (TypeError, ValueError):
         limit = 3
-    sw = prepare_sweep(configs, settings, None, None, bridge, class_info, check_busy=False)
+    sw = await asyncio.get_running_loop().run_in_executor(
+        None, functools.partial(prepare_sweep, configs, settings, None, None, bridge, class_info, check_busy=False))
     jobs_out = []
     for job in sw.jobs[:limit]:
         prompt, partial = build_job_request(sw, job)
@@ -1012,7 +1033,9 @@ async def api_start(body, bridge=None, class_info=wfs.comfy_class_info):
     """POST /config_tester/sweep/start. Returns (http_status, json_body). Runs on the event loop."""
     try:
         configs, settings = configs_from_body(body)
-        sw = prepare_sweep(configs, settings, body.get("node_id"), body.get("client_id"), bridge, class_info)
+        sw = await asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(prepare_sweep, configs, settings, body.get("node_id"), body.get("client_id"),
+                                    bridge, class_info))
         await validate_first(sw)
         launch(sw)
     except SweepAlreadyRunning as e:
