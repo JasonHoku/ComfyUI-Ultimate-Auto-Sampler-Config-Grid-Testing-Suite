@@ -124,16 +124,32 @@ def test_run_tests_starts_sweep_and_returns_dashboard_without_waiting(sampler_no
         runner.reset_registry()
 
 
-def test_mixed_workflow_and_standard_configs_raise(sampler_node, tmp_path, monkeypatch):
+def test_mixed_workflow_and_standard_configs_route_loop_then_sweep(sampler_node, tmp_path, monkeypatch):
+    """Formerly raised "cannot be mixed": now the standard configs run in the loop, then the sweep starts."""
     import folder_paths
     monkeypatch.setattr(folder_paths, "get_output_directory", lambda: str(tmp_path), raising=False)
     monkeypatch.setattr(folder_paths, "get_filename_list", lambda t: ["a.safetensors"], raising=False)
+    monkeypatch.setattr(sys.modules["comfy"], "model_management", sys.modules["comfy.model_management"], raising=False)
+    monkeypatch.setattr(runner, "TICK", 0.05)
+    loops = []
+
+    def fake_loop(self, *args, **kwargs):
+        loops.append((json.loads(args[8]), kwargs))
+        kwargs["run_info"]["total_jobs"] = 1
+        return ("<loop>",)
+
+    monkeypatch.setattr(sys.modules[f"{PKG}.generation_orchestrator"], "run_generation_loop", fake_loop, raising=False)
     runner.reset_registry()
     runner.set_bridge(_FakeBridge())
     cfg = json.dumps({"configs": [wf_config(), {"model_type": "checkpoint", "model": "x"}]})
     try:
-        with pytest.raises(ValueError, match="cannot be mixed"):
-            sampler_node.SamplerGridTester().run_tests(cfg, unique_id="1")
+        assert sampler_node.SamplerGridTester().run_tests(cfg, unique_id="1") == ("<loop>",)
+        assert loops[0][0] == [{"model_type": "checkpoint", "model": "x"}] and loops[0][1]["next_phase"] == "sweep"
+        assert runner._active_sweep() is not None
     finally:
+        sw = runner._active_sweep()
+        if sw is not None:
+            runner.cancel(sw.id)
+            sw.thread.join(5)
         runner.set_bridge(None)
         runner.reset_registry()

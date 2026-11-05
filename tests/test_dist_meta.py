@@ -35,12 +35,10 @@ def test_job_order_preview_and_session_settings_kept():
     assert m["seed"] == 7 and m["image_format"] == "webp"
 
 
-def test_same_keys_as_normal_loop_literal():
-    """The normal loop's final meta literal (generation_orchestrator) and this helper write the same keys."""
-    import re
-    src = open(go.__file__, encoding="utf-8").read()
-    i = src.index('existing_data["meta"] = {\n        "positive": positive_text,')
-    block = src[i:src.index("**_meta_run", i)]
-    normal_keys = set(re.findall(r'^\s+"(\w+)":', block, re.M))
-    helper_keys = set(_meta({"items": []}).keys()) - set(run_meta_extras({}, False).keys())
-    assert normal_keys == helper_keys
+def test_same_keys_as_normal_loop_helper():
+    """The normal loop (_standard_run_meta, shared by its 4 exit paths) and the distributed helper write the same keys."""
+    args = dict(positive_text="p", negative_text="n", ckpt_name="m", seed=1, vae_batch_size=1, configs_json="[]",
+                resolutions_json="[]", image_format="webp", job_order="as_written", preview_on=False, pv_steps=8,
+                pv_scale=0.5, pv_cfg=None, meta_run=run_meta_extras({}, False))
+    normal = go._standard_run_meta({"items": []}, **args)
+    assert set(normal) == set(_meta({"items": []}))

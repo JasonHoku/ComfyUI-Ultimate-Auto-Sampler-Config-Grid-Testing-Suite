@@ -1,0 +1,4 @@
+{
+  "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 8, "color": 0}, "_meta": {"title": "EmptyImage"}},
+  "2": {"class_type": "SaveAnimatedPNG", "inputs": {"images": ["1", 0], "filename_prefix": "USCG-test", "fps": 6, "compress_level": 4}, "_meta": {"title": "Save Animated PNG"}}
+}
