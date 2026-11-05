@@ -15,7 +15,7 @@ import folder_paths
 import comfy.sd  # Required for async workers
 from comfy.model_management import InterruptProcessingException
 
-from .trigger_words import collect_unique_prompts_with_triggers, build_prompt_with_triggers, clear_trigger_caches
+from .trigger_words import collect_unique_prompts_with_triggers, build_prompt_with_triggers, clear_trigger_caches, omit_without_lookup_warning
 from .regional_prompt import append_to_base, validate_regional_prompts, has_regions
 from .batch_encoding import batch_encode_prompts, encode_prompt_with_combinators, pinned_clip, DEFAULT_TE_BATCH_SIZE
 from .manifest_utils import load_existing_manifest, save_manifest, item_filename
@@ -94,6 +94,30 @@ REMOTE_VAE_PREFIX = "remote:"
 def is_remote_vae(vae_string):
     """Check if a VAE value is a per-config remote URL (e.g. 'remote:http://...')."""
     return isinstance(vae_string, str) and vae_string.startswith(REMOTE_VAE_PREFIX)
+
+def normalize_config_vae(vae):
+    """A config's ``vae`` value as the loop sees it: None / "" / "None" mean "Default" (use the
+    checkpoint's bundled VAE, or the sampler node's remote VAE when one is set)."""
+    if not vae or str(vae) in ("None", "none"):
+        return "Default"
+    return vae
+
+
+def configs_needing_work(job_plan, status_fn):
+    """Configs (each once, in plan order) with at least one plan entry still 'todo'.
+
+    This is the pre-encoding filter: prompts are only encoded for jobs that will actually run, so a
+    resumed run skips the text-encoder work for everything already on disk.
+    """
+    needed, seen = [], set()
+    for pj in job_plan:
+        if id(pj["conf"]) in seen:
+            continue
+        if status_fn(pj) == "todo":
+            seen.add(id(pj["conf"]))
+            needed.append(pj["conf"])
+    return needed
+
 
 def extract_remote_vae_url(vae_string):
     """Extract the URL from a remote VAE string like 'remote:http://...'.
@@ -1102,9 +1126,12 @@ def run_generation_loop(
     # LTX video configs are exempt — they declare vae_video and vae_audio in their own LTX
     # block, validated separately by preflight_ltx() at gen time.
     use_remote_vae = remote_vae_endpoint and remote_vae_endpoint != "None"
+    _omit_warn = omit_without_lookup_warning(expanded, lora_triggerwords_mode)
+    if _omit_warn:
+        print(f"[GridTester] ⚠️ {_omit_warn}")
     needs_vae = any(
         c.get("model_type", "checkpoint") not in ("checkpoint", "ltx_video")
-        and c.get("vae", "Default") == "Default"
+        and normalize_config_vae(c.get("vae", "Default")) == "Default"
         for c in expanded
     )
     if needs_vae and not use_remote_vae and optional_vae is None:
@@ -1364,9 +1391,7 @@ def run_generation_loop(
         # remote_vae_endpoint. Normalize "None"/empty to "Default" — a
         # fresh Builder UI with no VAE selected should mean "use the
         # checkpoint's bundled VAE", not "load a model file named None".
-        target_vae = first_conf.get("vae", "Default")
-        if not target_vae or str(target_vae) in ("None", "none"):
-            target_vae = "Default"
+        target_vae = normalize_config_vae(first_conf.get("vae", "Default"))
         if target_vae != "Default":
             config_overrides_vae = True
             if is_remote_vae(target_vae):
@@ -1406,26 +1431,17 @@ def run_generation_loop(
         # This avoids wasting time encoding prompts for jobs that will be skipped in resume mode
         print(f"[GridTester] 🧠 Collecting unique prompts...")
         if not overwrite_existing and _have_history():
-            configs_needing_work = []
-            _seen_need = set()
-            # A config needs work if ANY of its plan entries (resolution/batch) is still todo
-            for _npj in job_plan:
-                if id(_npj["conf"]) in _seen_need:
-                    continue
-                if _job_status(_npj) == "todo":
-                    _seen_need.add(id(_npj["conf"]))
-                    configs_needing_work.append(_npj["conf"])
-
-            skippable = len(expanded) - len(configs_needing_work)
+            configs_needing_work_ = configs_needing_work(job_plan, _job_status)
+            skippable = len(expanded) - len(configs_needing_work_)
             if skippable > 0:
-                print(f"[GridTester] ⏭️ {skippable}/{len(expanded)} configs already completed, encoding only {len(configs_needing_work)} needed")
+                print(f"[GridTester] ⏭️ {skippable}/{len(expanded)} configs already completed, encoding only {len(configs_needing_work_)} needed")
 
-            if not configs_needing_work:
+            if not configs_needing_work_:
                 print(f"[GridTester] ⏭️ All configs already completed, skipping encoding entirely")
                 unique_positives, unique_negatives = set(), set()
             else:
                 unique_positives, unique_negatives = collect_unique_prompts_with_triggers(
-                    configs_needing_work, lora_triggerwords_mode
+                    configs_needing_work_, lora_triggerwords_mode
                 )
         else:
             unique_positives, unique_negatives = collect_unique_prompts_with_triggers(
@@ -1817,9 +1833,7 @@ def run_generation_loop(
 
         # ==== PER-CONFIG VAE SWITCHING ====
         # Config Builder VAE settings take priority over sampler node's remote_vae_endpoint
-        target_vae = conf.get("vae", "Default")
-        if not target_vae or str(target_vae) in ("None", "none"):
-            target_vae = "Default"
+        target_vae = normalize_config_vae(conf.get("vae", "Default"))
         if target_vae != cached_vae_key:
             # Flush pending batch before switching VAE (they need current VAE for decoding)
             if pending_batch:
@@ -3668,9 +3682,7 @@ def _run_distributed_generation(
 
             # --- VAE Switching ---
             # Config Builder VAE settings take priority over sampler node's remote_vae_endpoint
-            target_vae = conf.get("vae", "Default")
-            if not target_vae or str(target_vae) in ("None", "none"):
-                target_vae = "Default"
+            target_vae = normalize_config_vae(conf.get("vae", "Default"))
             if target_vae != cached_vae_key:
                 # Flush pending batch before switching VAE
                 if pending_batch:

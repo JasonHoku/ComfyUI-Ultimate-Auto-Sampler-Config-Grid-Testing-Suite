@@ -24,10 +24,28 @@ def _should_omit_trigger(trigger, omit_normalized):
         True if the trigger should be omitted
     """
     for omit_term in omit_normalized:
-        # Use word boundary regex: ensures "blue" matches "blue" but not "blueberry"
-        if re.search(r'\b' + re.escape(omit_term) + r'\b', trigger, re.IGNORECASE):
+        # A blank term (stray comma / empty chip) must never match: "\b\b" matches every trigger
+        if not omit_term:
+            continue
+        # Word-boundary match ("blue" omits "blue eyes" but not "blueberry"). Lookarounds instead of \b so
+        # terms that start/end with punctuation, e.g. "(masterpiece)", still match.
+        if re.search(r'(?<!\w)' + re.escape(omit_term) + r'(?!\w)', trigger, re.IGNORECASE):
             return True
     return False
+
+
+def omit_without_lookup_warning(configs, lora_triggerwords_mode):
+    """Message when configs carry omit lists but trigger lookup is off (mode "None"), else None.
+
+    In mode "None" no trigger words are fetched or appended, so the omit list has no effect at all."""
+    if lora_triggerwords_mode != "None":
+        return None
+    n = sum(1 for c in configs if c.get("lora_omit_triggers") and c.get("lora", "None") != "None")
+    if not n:
+        return None
+    return (f"{n} config(s) have a LoRA omit-trigger list but lora_triggerwords_mode is \"None\" "
+            f"(no trigger words are looked up), so the omit list has no effect. Set the Builder's "
+            f"\"LoRA Triggerwords Mode\" to Append To End / Append To Start / Read From Config.")
 
 
 @lru_cache(maxsize=128)
