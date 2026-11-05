@@ -140,6 +140,8 @@ _GEN_ORCH_DEPS = {
     },
     "html_generator": {
         "get_html_template": lambda *a, **kw: "",
+        "get_dashboard_bundle": lambda *a, **kw: None,
+        "BUNDLE_CONTENT_TYPES": {},
     },
     "conditioning_cache": {
         "ConditioningCache": type("ConditioningCache", (), {}),

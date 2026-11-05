@@ -19,7 +19,7 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 
 1. **Python Backend** (runs inside ComfyUI server) — nodes, orchestration, generation, API endpoints
 2. **JS Frontend Bridge** (`web/`) — registers nodes in ComfyUI browser tab, served at `/extensions/`
-3. **Dashboard SPA** (`resources/`) — standalone app inlined into iframe by `html_generator.py`, zero external requests
+3. **Dashboard SPA** (`resources/`) — standalone app; `html_generator.py` builds a small shell (iframe `srcdoc` / `/config_tester/dashboard`) that loads two cached bundle routes (`/config_tester/dashboard_bundle_js` / `_css`, `?v=<hash>`); `inline_assets=True` / `USCG_INLINE_DASHBOARD_ASSETS=1` inlines them again
 
 ## Critical Files & Their Roles
 

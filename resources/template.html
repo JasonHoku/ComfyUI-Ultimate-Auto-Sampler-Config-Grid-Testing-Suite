@@ -4,10 +4,7 @@
 <head>
     <title>USCG - __TITLE__</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <style>
-        /* INJECTED CSS */
-        __CSS_CONTENT__
-    </style>
+    __CSS_TAG__
 </head>
 
 <body>
@@ -930,16 +927,13 @@
     </div>
 
     <script>
-        // INJECTED DATA
+        // INJECTED DATA (per page)
         const TARGET_NODE_ID = "__NODE_ID__";
         // true when served by /config_tester/dashboard, or whenever this page is not inside a frame
         const USCG_STANDALONE = __STANDALONE_FLAG__ || (window.parent === window);
         let fullManifest = __JSON_DATA__;
-
-        // INJECTED LOGIC
-        __JS_CONTENT__
-
     </script>
+    __JS_TAG__
     <style>
         /* Default behavior: The button is visible */
         .gh-hide-on-mobile {
