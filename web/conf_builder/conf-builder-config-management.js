@@ -7312,7 +7312,7 @@ export function renderRunSettingsSection(node, container) {
     _addRunSetting(content, { stateKey: "vae_batch_size", label: "VAE Batch Size", kind: "int", min: -1, max: 64, defaultValue: 1,
         tooltip: "How many images to encode/decode per VAE pass. Lower = less VRAM. -1 = process all at once. Default: 4." });
     _addRunSetting(content, { stateKey: "te_batch_size", label: "Text Encoder Batch Size", kind: "int", min: 1, max: 32, defaultValue: 1,
-        tooltip: "Encode this many prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image only; other encoders ignore it). 1 = off. 8 is a good value once verified; weighted/AND/CAT/AVG/BREAK/COUPLE prompts are still encoded one by one." });
+        tooltip: "Encode this many prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image only; other encoders ignore it). 1 = off (recommended: on MOSS-Image a batch of 8 measured 1.5x slower and not image-identical). Weighted/AND/CAT/AVG/BREAK/COUPLE prompts are still encoded one by one." });
     _addRunSetting(content, { stateKey: "add_random_seeds_to_gens", label: "Additional Random Seeds", kind: "int", min: 0, max: 100, defaultValue: 0,
         tooltip: "Generate this many extra images per config using additional random seeds. 0 = disabled." });
 

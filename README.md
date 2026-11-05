@@ -194,7 +194,7 @@ If you'd rather build the graph yourself:
 * **LoRA Compatibility Detection:** Automatically detects and skips incompatible LoRAs with detailed error reporting, preventing log spam.
 * **Graceful Interruption:** Cancel button now stops ALL remaining jobs (not just current generation) and saves all completed work including pending remote VAE decodes.
 * **VAE Batching:** Includes a `vae_batch_size` input to batch decode images, significantly speeding up large grid runs.
-* **Text-Encoder Batching:** The `te_batch_size` Run Setting encodes several prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image), cutting pre-encode time on prompt-heavy grids. Off by default.
+* **Text-Encoder Batching:** The `te_batch_size` Run Setting encodes several prompts per text-encoder pass (MOSS-Image, Krea 2, Qwen-Image), intended to cut pre-encode time on prompt-heavy grids. Off by default, and the live check argues for leaving it off: Measured 2026-11-04 on a 5060 Ti with MOSS-Image (Qwen3.5-9B w4a8): a batch of 8 was 1.5x SLOWER per prompt than one-by-one (padding to the longest prompt in the batch) and the images were not identical to the unbatched run (the encoder outputs match to relL2 5e-5, which the sampler amplifies into visibly different images), so leave it at 1 unless you measure a gain on your encoder.
 * **Live Dashboard Updates:** Configure `flush_batch_every` to update the dashboard incrementally (e.g., every 4 images) instead of waiting for the entire batch to complete.
 * **Remote VAE Support:** Offload VAE decoding to remote servers (HuggingFace endpoints or local) for 20-30% faster generation and lower VRAM usage.
 * **VAE Selection & Iteration:** Test multiple VAEs per config — add individual VAEs from a searchable dropdown or expand entire VAE folders. Each VAE becomes a dimension in the Cartesian grid.
@@ -417,7 +417,7 @@ This suite consists of three nodes found under the `sampling/testing` category:
   - `12-24`: For 24GB+ VRAM  
   - `-1`: Decode all images at once (fastest, but risky)
   
-* **`te_batch_size`** (Run Setting "Text Encoder Batch Size"): How many prompts to encode per text-encoder forward. `1` (default) = off.
+* **`te_batch_size`** (Run Setting "Text Encoder Batch Size"): How many prompts to encode per text-encoder forward. `1` (default) = off. Measured 2026-11-04 on a 5060 Ti with MOSS-Image (Qwen3.5-9B w4a8): a batch of 8 was 1.5x SLOWER per prompt than one-by-one (padding to the longest prompt in the batch) and the images were not identical to the unbatched run (the encoder outputs match to relL2 5e-5, which the sampler amplifies into visibly different images), so leave it at 1 unless you measure a gain on your encoder.
   - Only MOSS-Image, Krea 2 and Qwen-Image encoders batch; every other encoder ignores it.
   - Weighted prompts and `AND` / `CAT` / `AVG()` / `BREAK` / `COUPLE` prompts are still encoded one at a time.
   - The first batch is self-checked against a single-prompt encode; on any mismatch the run falls back to one-by-one automatically. A CUDA OOM halves the batch and retries.
@@ -1300,7 +1300,7 @@ Create a consistent quality stack using the Config Builder: add 3 LoRAs manually
 2. Use `add_random_seeds_to_gens: 2-3` to evaluate model consistency.
 
 ### For MOSS-Image / Krea 2 / Qwen-Image grids with many prompts
-1. Try `te_batch_size: 8` (Run Settings > Text Encoder Batch Size) to cut pre-encode time; lower it if you see an OOM retry message.
+1. `te_batch_size` (Run Settings > Text Encoder Batch Size) is NOT a free win: on MOSS-Image a batch of 8 measured 1.5x slower and not image-identical (see Performance Settings). Try it only on an encoder you have measured; lower it if you see an OOM retry message.
 
 ### For Memory-Constrained Systems
 1. Lower `vae_batch_size` to 1-2.

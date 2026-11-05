@@ -180,8 +180,7 @@ README is 2000+ words; most users won't read it. Efficiency Nodes grew via commu
 
 ## Open follow-ups (11/4/26)
 
-#### **29. Text-Encoder Batching: live check, then flip the default**
-Verify `te_batch_size` on the 5060 Ti with the real MOSS-Image, Krea 2 and Qwen-Image encoders, then decide whether the default of 1 (off) should change.
+#### ~~**29. Text-Encoder Batching: live check, then flip the default**~~ DONE (11/4/26): checked on the 5060 Ti with MOSS-Image via docs/tools/te_batch_check: encoder outputs match (relL2 5e-5, shapes equal) but a batch of 8 was 0.66x the per-prompt speed (padding to the longest prompt) and the sampler turned the float noise into visibly different images (mean abs diff 4-52/255 vs a 0.000 A1-A2 floor). The default stays 1 (off); documented in README. Krea 2 / Qwen-Image not measured.
 
 #### **30. Distributed companion parity**
 **Done (wave 3, `feat/dist-parity`):** `job_order`, the preview pass and image metrics now work in distributed mode (master-owned plan, `populate_from_plan`, `dist_worker` on every item). DONE (feat/dist-open): rejects made mid-run are re-checked at claim time, claim affinity, Start At Job in distributed mode, LTX rendered on the master (never on workers). Open: live two-machine verification of the whole set.
