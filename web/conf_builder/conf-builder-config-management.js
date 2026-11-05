@@ -9,6 +9,9 @@ import {
     parseLoraString,
     buildLoraString,
     getIterationCount,
+    normalizeExtraStrengths,
+    legacyWeightArraysToExtras,
+    MAX_LORA_STRENGTHS,
 
     countPromptCombinations,
     expandPromptPreview,
@@ -1244,6 +1247,7 @@ export function createConfigArrayElement(node, configArray, arrayIdx, modelLists
     const iterationCount = getIterationCount(configArray);
     const countDisplay = document.createElement("div");
     countDisplay.style.cssText = "color: #00cc00; font-family: monospace; font-size: 13px; font-weight: bold; display: flex; align-items: center;";
+    countDisplay.setAttribute("data-cb-iter-count", String(arrayIdx));
     countDisplay.innerHTML = `⏱️ Iterations: ${iterationCount}`;
     controlsBar.appendChild(countDisplay);
 
@@ -1617,6 +1621,36 @@ export function createModelElement(node, modelEntry, arrayIdx, modelIdx, modelLi
 
 // --- LORA ELEMENT CREATOR ---
 
+/** Update the "Iterations" readout of one config array in place (no full re-render). */
+export function refreshIterationCount(node, arrayIdx) {
+    const el = node.htmlContainer?.querySelector(`[data-cb-iter-count="${arrayIdx}"]`);
+    const arr = node.state?.config_arrays?.[arrayIdx];
+    if (!el || !arr) return;
+    el.innerHTML = `⏱️ Iterations: ${getIterationCount(arr)}`;
+}
+
+// Extra strength rows are keyed by LoRA name (like bypass/lock); two cards with the same name share them.
+function loraNameInUse(configArray, name) {
+    return (configArray.loras || []).some(l => parseLoraString(l).name === name);
+}
+
+/** The card at loraIdx was renamed (oldName -> its new name): move its rows along unless another card still uses oldName. */
+function relocateLoraExtras(node, arrayIdx, loraIdx, oldName) {
+    const c = node.state.config_arrays[arrayIdx];
+    const map = c.lora_extra_strengths;
+    if (!map || map[oldName] === undefined) return;
+    const newName = parseLoraString(c.loras[loraIdx]).name;
+    if (newName === oldName || loraNameInUse(c, oldName)) return;
+    const rows = map[oldName];
+    delete map[oldName];
+    if (newName && newName !== "None" && map[newName] === undefined) map[newName] = rows;
+}
+
+/** A card was deleted: drop its rows unless another card still uses the name. */
+function dropLoraExtrasIfUnused(configArray, name) {
+    if (configArray.lora_extra_strengths && !loraNameInUse(configArray, name)) delete configArray.lora_extra_strengths[name];
+}
+
 
 export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLoras, loraFolders) {
     const div = document.createElement("div");
@@ -1643,7 +1677,7 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
     const isBypassed = node.state.config_arrays[arrayIdx].lora_bypass_states[parsed.name] || false;
 
     // Get strength lock state (default to true - locked by default)
-    const isStrengthLocked = node.state.config_arrays[arrayIdx].lora_strength_lock[parsed.name] !== false;
+    let isStrengthLocked = node.state.config_arrays[arrayIdx].lora_strength_lock[parsed.name] !== false;
 
     // Header with bypass toggle
     const header = document.createElement("div");
@@ -1705,6 +1739,7 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
     deleteBtn.textContent = "✖";
     deleteBtn.onclick = () => {
         node.state.config_arrays[arrayIdx].loras.splice(loraIdx, 1);
+        dropLoraExtrasIfUnused(node.state.config_arrays[arrayIdx], parsed.name);
         node.saveState();
         debouncedRenderUI(node);
     };
@@ -1749,6 +1784,7 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
         if (typeSelect.value === "folder") node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString("/", currentModelStr, currentClipStr);
         else if (typeSelect.value === "combined") node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString("/*", currentModelStr, currentClipStr);
         else node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString("None", currentModelStr, currentClipStr);
+        relocateLoraExtras(node, arrayIdx, loraIdx, parsed.name);
         node.saveState();
         debouncedRenderUI(node);
     };
@@ -1768,6 +1804,7 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
                 ? normalizePath(selectedName) + "*"
                 : normalizePath(selectedName);
             node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString(finalName, currentModelStr, currentClipStr);
+            relocateLoraExtras(node, arrayIdx, loraIdx, parsed.name);
             node.saveState();
             debouncedRenderUI(node);
         },
@@ -1775,19 +1812,169 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
     );
     contentDiv.appendChild(nameSearchable);
 
-    // Check if this LoRA has weight arrays stored
-    if (!node.state.config_arrays[arrayIdx].lora_weight_arrays) {
-        node.state.config_arrays[arrayIdx].lora_weight_arrays = {};
+    // --- Strength rows: "＋" adds another strength to compare (state: lora_extra_strengths[name]) ---
+    // Row 0 is the base sliders (loras[loraIdx] = "name:m:c"); every extra row is one more
+    // {model, clip} pair. Python (process_lora_array) emits one concrete lora string per row.
+    const cfgOf = () => node.state.config_arrays[arrayIdx];
+    const loraKey = parsed.name;
+    const roundTo2 = (v) => Math.round(v * 100) / 100;
+    const asNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : 1);
+    const currentLoraName = () => (isCombined ? cleanName + "*" : parsed.name);
+
+    // Old "Compare Strengths" data (lora_weight_arrays): shown as rows right away, but only
+    // converted into lora_extra_strengths on the first edit (ensureMigrated).
+    const hasStateRows = () => {
+        const r = cfgOf().lora_extra_strengths?.[loraKey];
+        return Array.isArray(r) && r.length > 0;
+    };
+    let legacyView = hasStateRows()
+        ? null
+        : legacyWeightArraysToExtras(cfgOf().lora_weight_arrays, loraKey, currentModelStr, currentClipStr);
+    if (legacyView) {
+        currentModelStr = legacyView.base.model;
+        currentClipStr = legacyView.base.clip;
+        // A model x CLIP sweep needs independent CLIP values: show it unlocked.
+        if ([legacyView.base, ...legacyView.extras].some(r => r.clip !== r.model)) isStrengthLocked = false;
     }
-    const weightArrays = node.state.config_arrays[arrayIdx].lora_weight_arrays;
-    // "Active" = array exists (ANY length). Length-1 arrays pass through Python
-    // unchanged (only length>1 gets bracket-rewritten), so persisting [1] is safe
-    // and lets us remember the "user activated compare mode" UI state across reloads.
-    const isCompareActive = weightArrays[parsed.name + "_model"] !== undefined;
+
+    const ensureMigrated = () => {
+        const c = cfgOf();
+        const wa = c.lora_weight_arrays;
+        const hasLegacyKeys = !!wa && (wa[loraKey + "_model"] !== undefined || wa[loraKey + "_clip"] !== undefined);
+        if (!hasLegacyKeys && !legacyView) return;
+        if (!c.lora_extra_strengths) c.lora_extra_strengths = {};
+        if (legacyView && !hasStateRows()) {
+            c.loras[loraIdx] = buildLoraString(currentLoraName(), currentModelStr, currentClipStr);
+            if (legacyView.extras.length > 0) c.lora_extra_strengths[loraKey] = legacyView.extras.map(r => ({ model: r.model, clip: r.clip }));
+            if (!isStrengthLocked) c.lora_strength_lock[loraKey] = false;
+        }
+        if (wa) {
+            delete wa[loraKey + "_model"];
+            delete wa[loraKey + "_clip"];
+        }
+        legacyView = null;
+    };
+
+    const duplicateMarks = [];   // [{rowEl}] aligned with the extra rows currently rendered
+    const rowsDiv = document.createElement("div");
+    rowsDiv.className = "cb-lora-strength-rows";
+    rowsDiv.style.cssText = "display: flex; flex-direction: column; gap: 4px; margin: 0 0 4px 12px; padding-left: 6px; border-left: 2px solid #0af;";
+
+    const addStrengthBtn = document.createElement("button");
+    addStrengthBtn.className = "cb-button cb-lora-add-strength";
+    addStrengthBtn.textContent = "＋";
+    addStrengthBtn.style.cssText = "padding: 0 8px; margin-left: 6px; font-weight: bold; color: #0af;";
+    addStrengthBtn.title = `Add another strength to compare (max ${MAX_LORA_STRENGTHS}). Each extra strength is one more run of this config.`;
+
+    const currentRows = () => (hasStateRows() ? cfgOf().lora_extra_strengths[loraKey] : (legacyView ? legacyView.extras : []));
+
+    const updateDuplicateMarks = () => {
+        const norm = normalizeExtraStrengths(currentRows(), isStrengthLocked, currentModelStr, currentClipStr);
+        duplicateMarks.forEach((rowEl, k) => {
+            const dup = !!norm.rows[k]?.duplicate;
+            rowEl.style.opacity = dup ? "0.45" : "1";
+            rowEl.title = dup ? "duplicate, ignored" : "";
+            rowEl.dataset.duplicate = dup ? "1" : "0";
+        });
+    };
+
+    const afterRowsChanged = () => {
+        node.saveState();
+        refreshIterationCount(node, arrayIdx);
+    };
+
+    const setRowValue = (k, field, val) => {
+        ensureMigrated();
+        const rows = cfgOf().lora_extra_strengths?.[loraKey];
+        if (!rows || !rows[k]) return;
+        const v = roundTo2(val);
+        if (field === "model") {
+            rows[k].model = v;
+            if (isStrengthLocked) rows[k].clip = v;
+        } else {
+            rows[k].clip = v;
+        }
+        updateDuplicateMarks();
+        afterRowsChanged();
+    };
+
+    const removeRow = (k) => {
+        ensureMigrated();
+        const c = cfgOf();
+        const rows = c.lora_extra_strengths?.[loraKey];
+        if (!rows) return;
+        rows.splice(k, 1);
+        if (rows.length === 0) delete c.lora_extra_strengths[loraKey];
+        renderStrengthRows();
+        afterRowsChanged();
+    };
+
+    const renderStrengthRows = () => {
+        rowsDiv.innerHTML = "";
+        duplicateMarks.length = 0;
+        const rows = currentRows();
+        if (legacyView && rows.length > 0) {
+            const hint = document.createElement("div");
+            hint.style.cssText = "font-size: 9px; color: #888;";
+            hint.textContent = "converted from Compare Strengths on first edit";
+            rowsDiv.appendChild(hint);
+        }
+        rows.forEach((row, k) => {
+            const rowEl = document.createElement("div");
+            rowEl.className = "cb-lora-strength-row";
+            rowEl.dataset.row = String(k);
+            rowEl.style.cssText = "display: flex; flex-direction: column; gap: 2px;";
+            const makeRemove = () => {
+                const rm = document.createElement("button");
+                rm.className = "cb-button danger cb-lora-remove-strength";
+                rm.textContent = "✕";
+                rm.style.cssText = "padding: 0 6px; font-size: 10px;";
+                rm.title = "Remove this strength";
+                rm.onclick = () => removeRow(k);
+                return rm;
+            };
+            const first = document.createElement("div");
+            first.style.cssText = "display: flex; align-items: center; gap: 4px;";
+            if (isStrengthLocked) {
+                const s = createSlider(`Strength #${k + 2}`, asNum(row.model), 0, 2, 0.05, (val) => setRowValue(k, "model", val));
+                s.style.flex = "1";
+                first.appendChild(s);
+                first.appendChild(makeRemove());
+                rowEl.appendChild(first);
+            } else {
+                const s = createSlider(`Model #${k + 2}`, asNum(row.model), 0, 2, 0.05, (val) => setRowValue(k, "model", val));
+                s.style.flex = "1";
+                first.appendChild(s);
+                first.appendChild(makeRemove());
+                rowEl.appendChild(first);
+                rowEl.appendChild(createSlider(`CLIP #${k + 2}`, asNum(row.clip), 0, 2, 0.05, (val) => setRowValue(k, "clip", val)));
+            }
+            rowsDiv.appendChild(rowEl);
+            duplicateMarks.push(rowEl);
+        });
+        rowsDiv.style.display = rows.length > 0 ? "flex" : "none";
+        addStrengthBtn.disabled = rows.length + 1 >= MAX_LORA_STRENGTHS;
+        addStrengthBtn.style.opacity = addStrengthBtn.disabled ? "0.4" : "1";
+        updateDuplicateMarks();
+    };
+
+    addStrengthBtn.onclick = () => {
+        ensureMigrated();
+        const c = cfgOf();
+        if (!c.lora_extra_strengths) c.lora_extra_strengths = {};
+        if (!Array.isArray(c.lora_extra_strengths[loraKey])) c.lora_extra_strengths[loraKey] = [];
+        const rows = c.lora_extra_strengths[loraKey];
+        if (rows.length + 1 >= MAX_LORA_STRENGTHS) return;
+        const m = roundTo2(asNum(currentModelStr));
+        rows.push({ model: m, clip: isStrengthLocked ? m : roundTo2(asNum(currentClipStr)) });
+        renderStrengthRows();
+        afterRowsChanged();
+    };
 
     const modelSlider = createSlider("Model Strength", currentModelStr, 0, 2, 0.05, (val) => {
+        ensureMigrated();
         currentModelStr = val;
-        const currentName = isCombined ? cleanName + "*" : parsed.name;
+        const currentName = currentLoraName();
 
         // If strength is locked, update both sliders
         if (isStrengthLocked) {
@@ -1804,97 +1991,29 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
             if (clipSliderInput) clipSliderInput.value = val;
             if (clipNumberInput) clipNumberInput.value = val;
         }
+        updateDuplicateMarks();
+        refreshIterationCount(node, arrayIdx);
     });
+    if (parsed.name !== "None") modelSlider.appendChild(addStrengthBtn);
     contentDiv.appendChild(modelSlider);
 
-    // === Compare Strengths section (locked-semantics) ===
-    // ONE button toggles a SINGLE labeled input. We only persist
-    // weightArrays[name + "_model"] — Python emits "name:[a, b, c]" (no clip
-    // part) which the orchestrator expands as N configs each with
-    // model=clip=value. This avoids the Cartesian explosion that
-    // "name:[m]:[c]" (two arrays) would trigger.
-    //
-    // When Strength Lock is ON (default): label says "Strengths:" because
-    // the array applies to both model and clip equally.
-    // When Strength Lock is OFF: label says "Model Strengths:" because the
-    // clip is fixed at the scalar slider value (set independently below).
-    const compareBtnRow = document.createElement("div");
-    compareBtnRow.style.cssText = "margin: -4px 0 4px 0; display: flex; align-items: center; gap: 4px;";
-
-    const compareBtn = document.createElement("button");
-    compareBtn.className = "cb-btn";
-    compareBtn.textContent = isCompareActive ? "✕ Compare Strengths" : "+ Compare Strengths";
-    compareBtn.style.cssText = "font-size: 9px; padding: 1px 6px; color: " + (isCompareActive ? "#f80" : "#0af") + ";";
-    compareBtn.title = "Test this LoRA at multiple strength values in one run.\n\nClick to activate, then enter comma-separated values (e.g. 0.5, 0.8, 1.0). Each value generates one config — model and clip strength both equal that value (locked semantics).\n\nWith Strength Lock OFF, the scalar Clip slider below sets a fixed clip strength while model varies.\n\nClick again to deactivate.";
-    compareBtnRow.appendChild(compareBtn);
-    contentDiv.appendChild(compareBtnRow);
-
-    // Single labeled input
-    const compareSection = document.createElement("div");
-    compareSection.style.cssText = "display: " + (isCompareActive ? "flex" : "none") + "; flex-direction: column; gap: 3px; margin: 0 0 6px 12px; padding: 4px 6px; border-left: 2px solid #0af; background: rgba(0,170,255,0.04);";
-
-    const strengthRow = document.createElement("div");
-    strengthRow.style.cssText = "display: flex; align-items: center; gap: 6px;";
-    const strengthLabel = document.createElement("span");
-    strengthLabel.textContent = isStrengthLocked ? "Strengths:" : "Model Strengths:";
-    strengthLabel.style.cssText = "font-size: 10px; color: #ccc; white-space: nowrap; min-width: 100px;";
-    const strengthInput = document.createElement("input");
-    strengthInput.type = "text";
-    strengthInput.placeholder = "1, 0.8, 0.5";
-    strengthInput.value = isCompareActive
-        ? (weightArrays[parsed.name + "_model"] || [1]).join(", ")
-        : "1";
-    strengthInput.style.cssText = "flex: 1; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 2px 6px; font-size: 10px;";
-    strengthInput.onchange = () => {
-        const vals = strengthInput.value.split(",").map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
-        if (vals.length > 0) {
-            weightArrays[parsed.name + "_model"] = vals;
-        }
-        // Always remove _clip — Cartesian path is intentionally dropped.
-        delete weightArrays[parsed.name + "_clip"];
-        node.saveState();
-        updatePreview(node);
-    };
-    strengthRow.appendChild(strengthLabel);
-    strengthRow.appendChild(strengthInput);
-    compareSection.appendChild(strengthRow);
-    contentDiv.appendChild(compareSection);
-
-    compareBtn.onclick = () => {
-        const currentlyActive = weightArrays[parsed.name + "_model"] !== undefined;
-        if (currentlyActive) {
-            // Deactivate — remove arrays and hide section
-            delete weightArrays[parsed.name + "_model"];
-            delete weightArrays[parsed.name + "_clip"];
-            compareSection.style.display = "none";
-            compareBtn.textContent = "+ Compare Strengths";
-            compareBtn.style.color = "#0af";
-        } else {
-            // Activate — seed model array with [1], never write _clip
-            weightArrays[parsed.name + "_model"] = [1];
-            delete weightArrays[parsed.name + "_clip"];
-            compareSection.style.display = "flex";
-            compareBtn.textContent = "✕ Compare Strengths";
-            compareBtn.style.color = "#f80";
-            strengthInput.value = "1";
-            // Focus so the user can type immediately
-            strengthInput.focus();
-            strengthInput.select();
-        }
-        node.saveState();
-        updatePreview(node);
-    };
-
-    // CLIP Slider - conditionally visible based on lock state
+    // CLIP Slider - only when Model & CLIP are not locked together; sits right under the
+    // base model slider, followed by the extra strength rows.
     let clipSliderContainer = null;
     if (!isStrengthLocked) {
         clipSliderContainer = createSlider("CLIP Strength", currentClipStr, 0, 2, 0.05, (val) => {
+            ensureMigrated();
             currentClipStr = val;
-            const currentName = isCombined ? cleanName + "*" : parsed.name;
-            node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString(currentName, currentModelStr, currentClipStr);
+            node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString(currentLoraName(), currentModelStr, currentClipStr);
             node.saveState();
+            updateDuplicateMarks();
+            refreshIterationCount(node, arrayIdx);
         });
         contentDiv.appendChild(clipSliderContainer);
+    }
+    if (parsed.name !== "None") {
+        contentDiv.appendChild(rowsDiv);
+        renderStrengthRows();
     }
 
     // --- COLLAPSIBLE "MORE LORA OPTIONS" SECTION ---
@@ -1944,11 +2063,14 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
         strengthLockCheck.onchange = () => {
             node.state.config_arrays[arrayIdx].lora_strength_lock[parsed.name] = strengthLockCheck.checked;
 
-            // If locking, sync CLIP to Model strength
+            // If locking, sync CLIP to Model strength (the base row and every extra row)
             if (strengthLockCheck.checked) {
+                ensureMigrated();
                 currentClipStr = currentModelStr;
                 const currentName = isCombined ? cleanName + "*" : parsed.name;
                 node.state.config_arrays[arrayIdx].loras[loraIdx] = buildLoraString(currentName, currentModelStr, currentClipStr);
+                const lockedRows = node.state.config_arrays[arrayIdx].lora_extra_strengths?.[parsed.name];
+                if (Array.isArray(lockedRows)) lockedRows.forEach(r => { r.clip = r.model; });
             }
 
             node.saveState();
@@ -1957,6 +2079,7 @@ export function createLoraElement(node, loraStr, arrayIdx, loraIdx, availableLor
 
         strengthLockLabel.appendChild(strengthLockCheck);
         strengthLockLabel.appendChild(document.createTextNode("🔒 Lock Model & CLIP Strength Together"));
+        strengthLockLabel.title = "On: each strength row is one value used for both Model and CLIP.\nOff: every row has its own Model and CLIP sliders (one job per row).";
         moreOptionsContent.appendChild(strengthLockLabel);
 
         // 2. Auto Append Trigger Words Section
@@ -4798,10 +4921,12 @@ export function renderLorasSection(node, div, configArray, arrayIdx, availableLo
 
     // LoRAs section presets
     const lorasPresetRow = createSectionPresetRow("loras",
-        () => ({ loras: configArray.loras, lora_weight_arrays: configArray.lora_weight_arrays || {}, lora_strength_lock: configArray.lora_strength_lock || {} }),
+        () => ({ loras: configArray.loras, lora_weight_arrays: configArray.lora_weight_arrays || {}, lora_extra_strengths: configArray.lora_extra_strengths || {}, lora_strength_lock: configArray.lora_strength_lock || {} }),
         (data) => {
             node.state.config_arrays[arrayIdx].loras = data.loras || ["None"];
             if (data.lora_weight_arrays) node.state.config_arrays[arrayIdx].lora_weight_arrays = data.lora_weight_arrays;
+            if (data.lora_extra_strengths) node.state.config_arrays[arrayIdx].lora_extra_strengths = data.lora_extra_strengths;
+            else delete node.state.config_arrays[arrayIdx].lora_extra_strengths;
             if (data.lora_strength_lock) node.state.config_arrays[arrayIdx].lora_strength_lock = data.lora_strength_lock;
         },
         node

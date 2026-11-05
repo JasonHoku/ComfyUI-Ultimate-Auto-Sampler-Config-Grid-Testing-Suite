@@ -63,9 +63,12 @@ function computeLabelGlobalValues() {
         labelGlobalValues[f] = valueSets[f].size === 1;
     });
 
-    // For lora unique-only: also track which individual loras appear on every card
+    // For lora unique-only: also track which individual loras appear on every card.
+    // A name is only "global" when it is on every card AND with a single strength string:
+    // a strength sweep of one LoRA (x:1.00:1.00 vs x:0.60:0.60) must keep its tag.
     if (labelMode.fields.loraUniqueOnly) {
         const loraCountMap = {};
+        const loraPartMap = {};
         let totalCards = activeData.length;
         for (const item of activeData) {
             const loraStr = item.lora || "None";
@@ -78,11 +81,13 @@ function computeLabelGlobalValues() {
                     seen.add(name);
                     loraCountMap[name] = (loraCountMap[name] || 0) + 1;
                 }
+                if (!loraPartMap[name]) loraPartMap[name] = new Set();
+                loraPartMap[name].add(part.trim());
             }
         }
         labelGlobalValues._loraGlobalNames = new Set();
         for (const [name, count] of Object.entries(loraCountMap)) {
-            if (count === totalCards) {
+            if (count === totalCards && loraPartMap[name].size === 1) {
                 labelGlobalValues._loraGlobalNames.add(name);
             }
         }
@@ -669,7 +674,9 @@ function initFilters() {
                     fullText = val.replace(/ \+ /g, '\n');
                 } else {
                     let clean = val.replace(/\\/g, '/').split('/').pop().split(':')[0];
-                    label = truncateText(clean, 12);
+                    // Keep the strengths so the buttons of a strength sweep differ (detail:0.60:0.60)
+                    const strengths = val.includes(':') ? val.slice(val.indexOf(':')) : '';
+                    label = truncateText(clean, 12) + strengths;
                     fullText = val;
                 }
             } else if (key === 'model') {

@@ -95,7 +95,7 @@ ProjectStructure.md has notes to assist AI in developing this project
 
 
 
-#### **12. Arrays in LoRA Weights** Integrated but needs adding to the Builder UI
+#### ~~**12. Arrays in LoRA Weights**~~ DONE — the ＋ button in the Builder's LoRA card adds strength rows (one slider, or Model + CLIP sliders with the lock off; max 8 per LoRA); each row is one full copy of the config's jobs, stacked LoRAs get every combination. State key `lora_extra_strengths`; the old Compare Strengths box is converted on first edit.
 
 Builder UI could have a + button right next to model strength text input (on its right side) to make it easy to add a compare different lora strengths. If activated it should add an additonal slider, or two sliders if 🔒 Lock Model & CLIP Strength Together is deactivated, for each time they click +. If a lora has a multiple strength array, the preview json and py node json_output should duplicate the full config for that run for each entry with the only difference being each lora strength. If multiple loras have multiple arrays it needs to output a cartesian of an each for each of all lora strenth combos. 
 

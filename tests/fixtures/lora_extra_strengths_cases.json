@@ -1,0 +1,108 @@
+{
+  "_comment": "Shared by tests/test_lora_extra_strengths.py (Python emit) and tests/js/lora-extra-strengths.test.js (loraEntryCount). 'array' holds the config-array fields; 'expected' is the exact lora list the Builder must emit; the JS entry count must equal len(expected) (no folder expansion: available_loras is not set).",
+  "cases": [
+    {
+      "name": "locked_one_lora_two_rows",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_extra_strengths": {"a.safetensors": [{"model": 0.6, "clip": 0.6}, {"model": 0.8, "clip": 0.8}]}
+      },
+      "expected": ["a.safetensors:1.00:1.00", "a.safetensors:0.60:0.60", "a.safetensors:0.80:0.80"]
+    },
+    {
+      "name": "unlocked_pairs",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_strength_lock": {"a.safetensors": false},
+        "lora_extra_strengths": {"a.safetensors": [{"model": 0.6, "clip": 0.4}]}
+      },
+      "expected": ["a.safetensors:1.00:1.00", "a.safetensors:0.60:0.40"]
+    },
+    {
+      "name": "locked_forces_clip_to_model",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_extra_strengths": {"a.safetensors": [{"model": 0.6, "clip": 0.1}]}
+      },
+      "expected": ["a.safetensors:1.00:1.00", "a.safetensors:0.60:0.60"]
+    },
+    {
+      "name": "stack_two_by_three_first_lora_slowest",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00", "b.safetensors:0.50:0.50"],
+        "lora_extra_strengths": {
+          "a.safetensors": [{"model": 0.6, "clip": 0.6}],
+          "b.safetensors": [{"model": 0.8, "clip": 0.8}, {"model": 0.9, "clip": 0.9}]
+        }
+      },
+      "expected": [
+        "a.safetensors:1.00:1.00 + b.safetensors:0.50:0.50",
+        "a.safetensors:1.00:1.00 + b.safetensors:0.80:0.80",
+        "a.safetensors:1.00:1.00 + b.safetensors:0.90:0.90",
+        "a.safetensors:0.60:0.60 + b.safetensors:0.50:0.50",
+        "a.safetensors:0.60:0.60 + b.safetensors:0.80:0.80",
+        "a.safetensors:0.60:0.60 + b.safetensors:0.90:0.90"
+      ]
+    },
+    {
+      "name": "folder_entry_and_one_file_stay_separate",
+      "array": {
+        "loras": ["foo/", "a.safetensors:1.00:1.00"],
+        "lora_extra_strengths": {
+          "foo/": [{"model": 0.6, "clip": 0.6}],
+          "a.safetensors": [{"model": 0.7, "clip": 0.7}]
+        }
+      },
+      "expected": ["foo/", "foo/:0.60:0.60", "a.safetensors:1.00:1.00", "a.safetensors:0.70:0.70"]
+    },
+    {
+      "name": "duplicates_of_base_and_earlier_rows_dropped",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_extra_strengths": {"a.safetensors": [{"model": 1.0, "clip": 1.0}, {"model": 0.6, "clip": 0.6}, {"model": 0.604, "clip": 0.6}, {"model": 0.8, "clip": 0.8}]}
+      },
+      "expected": ["a.safetensors:1.00:1.00", "a.safetensors:0.60:0.60", "a.safetensors:0.80:0.80"]
+    },
+    {
+      "name": "bypassed_lora_rows_ignored",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00", "b.safetensors:0.50:0.50"],
+        "lora_bypass_states": {"a.safetensors": true},
+        "lora_extra_strengths": {"a.safetensors": [{"model": 0.6, "clip": 0.6}]}
+      },
+      "expected": ["b.safetensors:0.50:0.50"]
+    },
+    {
+      "name": "cap_is_eight_strengths_in_total",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_extra_strengths": {"a.safetensors": [
+          {"model": 0.1, "clip": 0.1}, {"model": 0.2, "clip": 0.2}, {"model": 0.3, "clip": 0.3}, {"model": 0.4, "clip": 0.4},
+          {"model": 0.5, "clip": 0.5}, {"model": 0.6, "clip": 0.6}, {"model": 0.7, "clip": 0.7}, {"model": 0.8, "clip": 0.8},
+          {"model": 0.9, "clip": 0.9}, {"model": 1.1, "clip": 1.1}
+        ]}
+      },
+      "expected": [
+        "a.safetensors:1.00:1.00", "a.safetensors:0.10:0.10", "a.safetensors:0.20:0.20", "a.safetensors:0.30:0.30",
+        "a.safetensors:0.40:0.40", "a.safetensors:0.50:0.50", "a.safetensors:0.60:0.60", "a.safetensors:0.70:0.70"
+      ]
+    },
+    {
+      "name": "new_rows_win_over_old_weight_arrays",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_weight_arrays": {"a.safetensors_model": [0.1, 0.2, 0.3]},
+        "lora_extra_strengths": {"a.safetensors": [{"model": 0.6, "clip": 0.6}]}
+      },
+      "expected": ["a.safetensors:1.00:1.00", "a.safetensors:0.60:0.60"]
+    },
+    {
+      "name": "invalid_rows_are_dropped",
+      "array": {
+        "loras": ["a.safetensors:1.00:1.00"],
+        "lora_extra_strengths": {"a.safetensors": [{"model": "abc"}, {"model": null}, {"model": 0.6, "clip": "x"}, {"model": 0.7}]}
+      },
+      "expected": ["a.safetensors:1.00:1.00", "a.safetensors:0.70:0.70"]
+    }
+  ]
+}

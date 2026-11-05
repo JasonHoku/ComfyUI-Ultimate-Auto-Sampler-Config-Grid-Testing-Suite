@@ -669,8 +669,11 @@ Each LoRA card includes:
   - **Folder (Separate):** Test each LoRA in the folder individually with the same strength settings.
   - **Folder (Combined):** Stack ALL LoRAs in the folder into a single load.
 * **Model Strength Slider:** Range 0.0–2.0 (default 1.0). Controls how strongly the LoRA affects the model. Number input accepts values beyond slider range.
-* **CLIP Strength Slider:** Range 0.0–2.0 (default 1.0). Controls how strongly the LoRA affects text encoding. Independent from model strength.
-* **🔗 Lock Strengths:** Toggle to link model and CLIP strengths so both sliders move together.
+* **CLIP Strength Slider:** Shown when the lock is off. Range 0.0–2.0 (default 1.0). Controls how strongly the LoRA affects text encoding. Independent from model strength.
+* **＋ Add Strength:** The ＋ button next to the Model Strength box adds another strength to compare, as a new row right below (up to 8 strengths per LoRA, the base sliders count as the first). With **Lock Model & CLIP Strength Together** on (the default) each row is one *Strength* slider used for both model and CLIP; with the lock off each row has its own *Model* and *CLIP* sliders and is one job (pair). ✕ removes a row. A row equal to the base or to an earlier row is greyed out ("duplicate, ignored") and skipped. Rows belong to the LoRA name, so two cards with the same LoRA share them.
+* **Job count:** every strength is one full copy of the config's jobs, differing only in the LoRA strength, so the count multiplies (a config with 3 strengths and 2 samplers is 6 jobs). With several LoRAs in one config they are stacked together and you get every combination, first LoRA slowest: a LoRA with 2 strengths plus a LoRA with 3 strengths is 6 stacked entries. The Iterations counter and the preview JSON both show it. Folder entries are never stacked; their rows become separate entries.
+* **🔗 Lock Strengths:** Toggle to link model and CLIP strengths so both sliders move together. Turning it on also sets CLIP = model on every extra row.
+* **Old "Compare Strengths" box:** Workflows saved with the old comma-separated Compare Strengths box still load and run unchanged; their values show up as ＋ rows and are converted the first time you edit that LoRA.
 * **🔍 Lookup Trigger Words:** Opens the Trigger Word Lookup Modal (fetches from CivitAI API).
 * **🚫 Bypass Trigger Fetch:** Toggle to prevent automatic trigger word lookup for this LoRA.
 * **🗑️ Remove LoRA:** Deletes this LoRA from the config (at least one is always required).
@@ -1160,7 +1163,7 @@ Tests all models from all three folders with the same settings.
 
 ### LoRA Strength Sweep
 
-Find the optimal strength for a new LoRA using the Config Builder: add the same LoRA 6 times with strengths from 0.4 to 1.5, keep everything else minimal (1 sampler, 1 scheduler), and compare the 6 images side by side.
+Find the optimal strength for a new LoRA using the Config Builder: add the LoRA once, set the base strength to 0.4, then press **＋** five times and set the new rows to 0.6, 0.8, 1.0, 1.2 and 1.5 (6 strengths in total, 8 at most). Keep everything else minimal (1 sampler, 1 scheduler) and compare the 6 images side by side. With the lock off each row also has its own CLIP value, so you can sweep model and CLIP together as pairs. In the Dashboard the label overlay shows each image's strength (for example `detail:0.60:0.60`) even with "unique only" on, because the strength differs between cards.
 
 ### Quality Enhancement Stack
 
