@@ -501,6 +501,151 @@ export function expandPromptPreview(groups, limit = 20) {
     return all.slice(0, limit);
 }
 
+// --- LORA STRENGTH ROWS (the "+" button in the LoRAs section) ---
+
+export const MAX_LORA_STRENGTHS = 8; // base row + up to 7 extra rows per LoRA
+
+const _num2 = (v) => {
+    if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+    const f = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(f) ? Math.round(f * 100) / 100 : null;
+};
+
+/**
+ * Validate the extra strength rows of one LoRA (state key lora_extra_strengths[name]).
+ * JS twin of UltimateConfigBuilder._clean_extra_strengths (config_builder_node.py): same
+ * rules, so the Iterations count and the UI "duplicate" greying agree with the preview.
+ *   list: [{model, clip}, ...]  (a missing clip means "same as model")
+ *   locked: clip is forced to model.   baseModel/baseClip: the base row, or null (unknown).
+ * Returns { rows, effective }: rows = valid rows (rounded to 2 decimals, capped at
+ * maxTotal - 1) each with a `duplicate` flag; effective = the rows that are not duplicates
+ * of the base or of an earlier row, as plain {model, clip}.
+ */
+export function normalizeExtraStrengths(list, locked, baseModel, baseClip, maxTotal = MAX_LORA_STRENGTHS) {
+    if (!Array.isArray(list)) return { rows: [], effective: [] };
+    let rows = [];
+    for (const item of list) {
+        let mRaw, cRaw;
+        if (Array.isArray(item)) { mRaw = item[0]; cRaw = item[1]; }
+        else if (item && typeof item === "object") { mRaw = item.model; cRaw = item.clip; }
+        else continue;
+        const m = _num2(mRaw);
+        if (m === null) continue;
+        let c = (cRaw === null || cRaw === undefined) ? m : _num2(cRaw);
+        if (c === null) continue;
+        if (locked) c = m;
+        rows.push({ model: m, clip: c });
+    }
+    rows = rows.slice(0, Math.max(0, maxTotal - 1));
+    const seen = new Set();
+    const bm = _num2(baseModel), bc = _num2(baseClip);
+    if (bm !== null && bc !== null) seen.add(bm + "|" + bc);
+    const out = [], effective = [];
+    for (const r of rows) {
+        const key = r.model + "|" + r.clip;
+        const duplicate = seen.has(key);
+        seen.add(key);
+        out.push({ model: r.model, clip: r.clip, duplicate });
+        if (!duplicate) effective.push({ model: r.model, clip: r.clip });
+    }
+    return { rows: out, effective };
+}
+
+/**
+ * Old "Compare Strengths" state (lora_weight_arrays[name + "_model" / "_clip"]) -> the new
+ * row model, mirroring what Python emitted for it (_apply_weight_array): a model list with
+ * no CLIP list means CLIP = model; both lists mean every model x CLIP pair; a CLIP list
+ * alone sweeps CLIP at the base model strength. Returns
+ * { base: {model, clip}, extras: [{model, clip}] } (at most MAX_LORA_STRENGTHS rows in
+ * total) or null when there is nothing to convert (lists with fewer than 2 values).
+ */
+export function legacyWeightArraysToExtras(weightArrays, name, baseModel, baseClip) {
+    if (!weightArrays || typeof weightArrays !== "object") return null;
+    const toNums = (arr) => Array.isArray(arr) ? arr.map(_num2).filter(v => v !== null) : [];
+    const mArr = toNums(weightArrays[name + "_model"]);
+    const cArr = toNums(weightArrays[name + "_clip"]);
+    if (mArr.length < 2 && cArr.length < 2) return null;
+    let pairs;
+    if (mArr.length > 1 && cArr.length > 1) {
+        pairs = [];
+        for (const m of mArr) for (const c of cArr) pairs.push({ model: m, clip: c });
+    } else if (mArr.length > 1) {
+        pairs = mArr.map(m => ({ model: m, clip: m }));
+    } else {
+        // CLIP-only list: Python emits "name:<model>:[c, ...]", the model stays at the base value
+        const bm = _num2(baseModel);
+        if (bm === null) return null;
+        pairs = cArr.map(c => ({ model: bm, clip: c }));
+    }
+    pairs = pairs.slice(0, MAX_LORA_STRENGTHS);
+    return { base: pairs[0], extras: pairs.slice(1) };
+}
+
+// "name[:m[:c]]" -> {name, model, clip} with the same defaults as Python's parse_lora_definition
+// (missing strengths = 1.0, missing CLIP = model). model/clip are null for bracket strings.
+function _baseOfLoraString(loraStr) {
+    const norm = normalizePath(String(loraStr || ""));
+    const parts = norm.split(":");
+    if (norm.includes("[")) return { name: parts[0], model: null, clip: null };
+    const m = parts.length > 1 && parts[1].trim() !== "" ? parseFloat(parts[1]) : 1.0;
+    const c = parts.length > 2 && parts[2].trim() !== "" ? parseFloat(parts[2]) : m;
+    return { name: parts[0], model: Number.isFinite(m) ? m : null, clip: Number.isFinite(c) ? c : null };
+}
+
+/**
+ * How many LoRA entries one config array produces, mirroring process_lora_array in
+ * config_builder_node.py: bypassed entries skipped; 2+ stackable entries (anything that is
+ * not a "folder/" reference) combine into ONE stack whose entries are every combination of
+ * the LoRAs' strengths; otherwise the entries add up (a folder counts its files).
+ */
+export function loraEntryCount(configArray, availableLoraList) {
+    const loras = configArray.loras;
+    if (!loras || loras.length === 0) return 1;
+    const extras = configArray.lora_extra_strengths || {};
+    const lockMap = configArray.lora_strength_lock || {};
+    const legacy = configArray.lora_weight_arrays || {};
+
+    const variantsFor = (loraStr, name) => {
+        const rows = extras[name];
+        if (Array.isArray(rows) && rows.length > 0) {
+            const b = _baseOfLoraString(loraStr);
+            const eff = normalizeExtraStrengths(rows, lockMap[name] !== false, b.model, b.clip).effective;
+            if (eff.length > 0) return 1 + eff.length;
+        }
+        const mLen = Array.isArray(legacy[name + "_model"]) ? legacy[name + "_model"].length : 0;
+        const cLen = Array.isArray(legacy[name + "_clip"]) ? legacy[name + "_clip"].length : 0;
+        if (mLen > 1) return mLen * (cLen > 1 ? cLen : 1);
+        if (cLen > 1) return cLen;
+        return 1;
+    };
+
+    const entries = [];
+    loras.forEach(l => {
+        const parsed = parseLoraString(l);
+        if (configArray.lora_bypass_states?.[parsed.name]) return; // Skip bypassed
+        entries.push({ name: parsed.name, variants: parsed.name === "None" ? 1 : variantsFor(l, parsed.name) });
+    });
+
+    const stackable = entries.filter(e => e.name !== "None" && !e.name.endsWith("/"));
+    if (stackable.length > 1) return stackable.reduce((n, e) => n * e.variants, 1);
+
+    let total = 0;
+    entries.forEach(e => {
+        if (e.name === "None" || e.name.endsWith("/*")) {
+            total += e.variants; // "None" = 1; combined folder = 1 stack
+        } else if (e.name.endsWith("/")) {
+            const norm = normalizePath(e.name);
+            let files;
+            if (norm === "/" || norm === "") files = availableLoraList ? availableLoraList.length : 1;
+            else files = availableLoraList ? availableLoraList.filter(al => normalizePath(al).startsWith(norm)).length : 1;
+            total += files * e.variants;
+        } else {
+            total += e.variants;
+        }
+    });
+    return total || 1;
+}
+
 // --- ITERATION COUNT CALCULATION ---
 
 export function getIterationCount(configArray) {
@@ -547,34 +692,8 @@ export function getIterationCount(configArray) {
     if (m_count === 0) m_count = 1;
 
     // 3. LoRAs
-    let l_count = 0;
-    if (!configArray.loras || configArray.loras.length === 0) {
-        l_count = 1;
-    } else {
-        configArray.loras.forEach(l => {
-            const parsed = parseLoraString(l);
-            const name = parsed.name;
-            if (configArray.lora_bypass_states?.[name]) return; // Skip bypassed
-            if (name === "None") {
-                l_count += 1;
-            } else if (name.endsWith("/*")) {
-                // Combined Folder -> 1 iteration (Single Stack)
-                l_count += 1;
-            } else if (name.endsWith("/")) {
-                // Separate Folder -> N iterations
-                const norm = normalizePath(name);
-                if (norm === "/" || norm === "") {
-                    l_count += availableLoras ? availableLoras.length : 1;
-                } else {
-                    l_count += availableLoras ? availableLoras.filter(al => normalizePath(al).startsWith(norm)).length : 1;
-                }
-            } else {
-                // Single File -> 1 iteration
-                l_count += 1;
-            }
-        });
-    }
-    if (l_count === 0) l_count = 1;
+    // (Stacks, folders and strength rows: see loraEntryCount.)
+    const l_count = loraEntryCount(configArray, availableLoras);
 
     // 4. VAEs
     let v_count = 0;

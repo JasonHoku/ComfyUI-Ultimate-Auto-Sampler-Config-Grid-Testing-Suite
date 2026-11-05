@@ -39,6 +39,13 @@ The refactoring splits the original monolithic `config_builder.js` into four mod
 
 * **Iteration Calculation**:
 * `getIterationCount(configArray)`: A critical logic function that calculates the total number of generation steps by multiplying the counts of models, LoRAs, samplers, schedulers, etc. It handles complex logic for folders and wildcards.
+* `loraEntryCount(configArray, availableLoras)`: The LoRA factor of that product. It mirrors `process_lora_array` in `config_builder_node.py`: stacked LoRAs become one entry per combination of their strengths, folders add their file count times their strength variants.
+
+
+* **LoRA Strength Rows** (the ＋ button):
+* State key `config_arrays[i].lora_extra_strengths`: `{ "<lora name>": [ {"model": 0.6, "clip": 0.6}, ... ] }`. Only the EXTRA rows are stored; row 0 stays in `loras[j]` (`"name:m:c"`). Keyed by LoRA name like `lora_bypass_states` / `lora_strength_lock`. Values are rounded to 2 decimals, at most 7 extra rows (8 strengths in total). When `lora_strength_lock[name]` is not `false`, Python forces `clip = model`.
+* Python emits one concrete string per row on the config's `lora` list (`"a:1.00:1.00"`, `"a:0.60:0.60"`, ...), and every combination for stacks. A non-empty entry replaces the old `lora_weight_arrays` entries of that name; states without the key behave exactly as before.
+* `normalizeExtraStrengths(...)` is the JS twin of `_clean_extra_strengths` (validation, cap, duplicate flags). `legacyWeightArraysToExtras(...)` converts old Compare Strengths data (`lora_weight_arrays`) into rows on the first edit.
 
 
 * **Config Conversion**:

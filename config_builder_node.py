@@ -14,6 +14,8 @@ from typing import List, Dict, Any
 import server
 from aiohttp import web
 import hashlib
+import itertools
+import math
 from .civitai import civitai_fetch_by_hash
 from . import image_metrics
 
@@ -476,6 +478,76 @@ class UltimateConfigBuilder:
         return result
 
     @staticmethod
+    def _base_strengths(lora_str: str):
+        """Return (model, clip) floats for a "name[:m[:c]]" lora string, mirroring
+        parse_lora_definition (no strengths = 1.0/1.0, missing CLIP = model).
+        Returns None for bracket-array strings or anything unparseable."""
+        if "[" in lora_str:
+            return None
+        parts = lora_str.split(":")
+        try:
+            m = float(parts[1]) if len(parts) > 1 and parts[1].strip() != "" else 1.0
+            c = float(parts[2]) if len(parts) > 2 and parts[2].strip() != "" else m
+        except ValueError:
+            return None
+        if not (math.isfinite(m) and math.isfinite(c)):
+            return None
+        return (m, c)
+
+    @staticmethod
+    def _clean_extra_strengths(raw, locked, base_m, base_c, max_total=8) -> List[tuple]:
+        """Validate the extra strength rows of one LoRA (state key lora_extra_strengths).
+
+        raw: list of {"model": m, "clip": c} dicts (or leniently [m, c] lists); a missing
+        clip means "same as model". locked: clip is forced to model. base_m/base_c: the
+        base row (None = unknown, no dedupe against it). Returns the effective extra
+        (model, clip) tuples rounded to 2 decimals: invalid rows dropped, at most
+        max_total - 1 rows kept, duplicates of the base or of an earlier row dropped.
+        SYNC: JS twin is normalizeExtraStrengths() in conf-builder-utilities.js."""
+        if not isinstance(raw, (list, tuple)):
+            return []
+
+        def _num(v):
+            if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+                return None
+            try:
+                f = float(v)
+            except ValueError:
+                return None
+            return f if math.isfinite(f) else None
+
+        rows = []
+        for item in raw:
+            if isinstance(item, dict):
+                m_raw, c_raw = item.get("model"), item.get("clip")
+            elif isinstance(item, (list, tuple)) and len(item) >= 1:
+                m_raw, c_raw = item[0], (item[1] if len(item) > 1 else None)
+            else:
+                continue
+            m = _num(m_raw)
+            if m is None:
+                continue
+            c = _num(c_raw) if c_raw is not None else m
+            if c is None:
+                continue
+            if locked:
+                c = m
+            rows.append((round(m, 2) + 0.0, round(c, 2) + 0.0))
+        if len(rows) > max_total - 1:
+            print(f"[ConfigBuilder] Warning: {len(rows)} extra strengths for one LoRA, keeping the first {max_total - 1}")
+            rows = rows[:max_total - 1]
+        seen = set()
+        if base_m is not None and base_c is not None:
+            seen.add((round(base_m, 2) + 0.0, round(base_c, 2) + 0.0))
+        out = []
+        for row in rows:
+            if row in seen:
+                continue
+            seen.add(row)
+            out.append(row)
+        return out
+
+    @staticmethod
     def process_lora_array(config_array: Dict, include_none: bool) -> List[str]:
         """
         Process a SINGLE config array and return its lora strings.
@@ -514,7 +586,8 @@ class UltimateConfigBuilder:
         # (config_array.lora_weight_arrays[name + "_model" / "_clip"]). Rewrite
         # each lora string from "name:m:c" -> "name:[m_arr]:[c_arr|c]" so the
         # orchestrator's _expand_lora_weight_arrays can fan them out at runtime.
-        # SYNC WARNING: must match convertStateToConfigs() in conf-builder-utilities.js.
+        # (Preview and run both use this Python path; the only JS twin is the Iterations
+        # count, loraEntryCount() in conf-builder-utilities.js.)
         weight_arrays = config_array.get("lora_weight_arrays", {}) or {}
 
         def _apply_weight_array(lora_str: str) -> str:
@@ -543,7 +616,31 @@ class UltimateConfigBuilder:
                 return f"{name}:{model_str}:[" + ", ".join(str(v) for v in clip_arr) + "]"
             return lora_str
 
-        lora_strings = [_apply_weight_array(s) for s in lora_strings]
+        # Strength rows added with the Builder's "+" button (state key
+        # lora_extra_strengths[name] = [{model, clip}, ...]). Each LoRA string becomes a
+        # list of concrete variants: the user's verbatim base string first, then one
+        # "name:m:c" per extra row. A non-empty entry replaces lora_weight_arrays for that
+        # name. SYNC: loraEntryCount() in conf-builder-utilities.js mirrors this.
+        extra_map = config_array.get("lora_extra_strengths", {}) or {}
+        lock_map = config_array.get("lora_strength_lock", {}) or {}
+        if not isinstance(extra_map, dict):
+            extra_map = {}
+        if not isinstance(lock_map, dict):
+            lock_map = {}
+
+        def _variants(lora_str: str) -> List[str]:
+            name = lora_str.split(":")[0]
+            raw_rows = extra_map.get(name)
+            if raw_rows:
+                base = UltimateConfigBuilder._base_strengths(lora_str)
+                base_m, base_c = base if base else (None, None)
+                locked = lock_map.get(name) is not False
+                extras = UltimateConfigBuilder._clean_extra_strengths(raw_rows, locked, base_m, base_c)
+                if extras:
+                    return [lora_str] + [f"{name}:{m:.2f}:{c:.2f}" for m, c in extras]
+            return [_apply_weight_array(lora_str)]
+
+        variants = [_variants(s) for s in lora_strings]
 
         # Add combined version if requested
         if combine and len(lora_strings) > 1:
@@ -551,12 +648,21 @@ class UltimateConfigBuilder:
             # runtime into multiple loras. Detect by the NAME portion (before the
             # first colon) ending in "/", not the whole string, so that
             # "folder/:[a,b]:[c,d]" (folder ref + strength array) is also excluded.
-            stackable = [s for s in lora_strings if not s.split(":", 1)[0].endswith("/")]
+            stackable = [v for s, v in zip(lora_strings, variants) if not s.split(":", 1)[0].endswith("/")]
             if len(stackable) > 1:
-                # When combine is true, ONLY return the combined version
-                combined = " + ".join(stackable)
-                lora_strings = [combined]
+                # When combine is true, ONLY return the combined versions: every
+                # combination of the stacked LoRAs' strengths, first LoRA slowest.
+                combos = 1
+                for v in stackable:
+                    combos *= len(v)
+                if combos > 256:
+                    print(f"[ConfigBuilder] Warning: {array_name}: LoRA strengths produce {combos} stacked combinations")
+                lora_strings = [" + ".join(p) for p in itertools.product(*stackable)]
                 print(f"[ConfigBuilder] {array_name}: Combined {len(stackable)} LoRAs into stack")
+            else:
+                lora_strings = [x for v in variants for x in v]
+        else:
+            lora_strings = [x for v in variants for x in v]
         
         # Remove duplicates while preserving order
         seen = set()
