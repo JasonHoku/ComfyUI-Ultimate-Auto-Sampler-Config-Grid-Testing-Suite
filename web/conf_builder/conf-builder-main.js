@@ -217,6 +217,7 @@ app.registerExtension({
                         clear_vram: false
                     },
                     image_format: "webp",
+                    pack_nodes_metadata: false,
                     metrics: { enabled: false, builtins: { sharpness: true, entropy: true, colorfulness: true, contrast: true, luma: true, saturation: true, sobel: true }, adapters: {} },
                     overwrite_existing: false,
                     flush_batch_every: 1,
@@ -336,6 +337,7 @@ app.registerExtension({
 
                             // Migration: ensure top-level Run Settings fields exist
                             if (this.state.overwrite_existing === undefined) this.state.overwrite_existing = false;
+                            if (this.state.pack_nodes_metadata === undefined) this.state.pack_nodes_metadata = false;
                             if (this.state.flush_batch_every === undefined) this.state.flush_batch_every = 1;
                             if (this.state.lora_triggerwords_mode === undefined) this.state.lora_triggerwords_mode = "None";
                             if (this.state.save_conditioning_cache_to_file === undefined) this.state.save_conditioning_cache_to_file = false;

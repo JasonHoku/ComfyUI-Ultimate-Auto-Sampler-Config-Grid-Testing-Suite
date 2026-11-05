@@ -1083,6 +1083,8 @@ class UltimateConfigBuilder:
             session_settings["start_at_job"] = 0
         # Image save format — always emit so Builder UI is authoritative.
         session_settings["image_format"] = str(state.get("image_format", "webp"))
+        # Embed the pure-nodes ComfyUI workflow into every saved PNG/WEBP (Roadmap 71). Always emitted.
+        session_settings["pack_nodes_metadata"] = bool(state.get("pack_nodes_metadata", False))
         # Builder UI is authoritative for all run settings — emit every field.
         # Type coercion is defensive; the Builder UI sends correct types but
         # workflows saved before the Builder UI had these fields might have

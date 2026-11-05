@@ -7131,6 +7131,7 @@ export function renderCooldownSection(node, container) {
 export function renderRunSettingsSection(node, container) {
     if (node.state.start_at_job === undefined) node.state.start_at_job = 0;
     if (node.state.image_format === undefined) node.state.image_format = "webp";
+    if (node.state.pack_nodes_metadata === undefined) node.state.pack_nodes_metadata = false;
     if (node.state.overwrite_existing === undefined) node.state.overwrite_existing = false;
     if (node.state.flush_batch_every === undefined) node.state.flush_batch_every = 1;
     if (node.state.lora_triggerwords_mode === undefined) node.state.lora_triggerwords_mode = "None";
@@ -7218,6 +7219,9 @@ export function renderRunSettingsSection(node, container) {
     fmtDiv.appendChild(fmtSelect);
     content.appendChild(fmtDiv);
     content.appendChild(fmtDesc);
+
+    _addRunSetting(content, { stateKey: "pack_nodes_metadata", label: "Embed ComfyUI Nodes Workflow", kind: "bool",
+        tooltip: "Write the Revise 'copy as nodes' graph (checkpoint, LoRAs, prompts, KSampler) into every saved PNG/WebP so dragging the image onto ComfyUI loads it. JPG cannot carry a ComfyUI workflow. Diffusion-model/GGUF/video configs are skipped." });
 
     // Helper: renders a labeled row with a "?" tooltip icon, binding to node.state[stateKey].
     function _addRunSetting(content, opts) {

@@ -486,8 +486,12 @@ def run_florence2_step(
     negative_prompt,
     clip_skip,
     session_model_name=None,
+    model_wrap=None,
 ):
     """Run one Florence2 Hi-Res Fix step on one image.
+
+    model_wrap: optional callable(model) -> model applied to the diffusion model right before
+        sampling (the dashboard upscale uses it to make the sampler cancellable).
 
     Args:
         source_image: torch (1, H, W, 3) float32 — the PIL-converted source image
@@ -755,7 +759,7 @@ def run_florence2_step(
     noise_seed = int(item.get("seed", 0)) + 1  # tiny offset so face pass != base seed exactly
 
     hires_latent_dict, _ = generate_image(
-        patched_model=model_handle,
+        patched_model=model_wrap(model_handle) if model_wrap is not None else model_handle,
         seed=noise_seed,
         steps=int(step_config.get("hires_steps", 15)),
         cfg=float(step_config.get("cfg", 1.5)),

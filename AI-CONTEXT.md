@@ -33,7 +33,8 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `regional_prompt.py` | 327 | `COUPLE` regional prompts: parser, `join_prompt_parts()`/`append_to_base()` (affix text goes into the base), mask builder, `apply_regional_masks()` (called from `generate_image`) |
 | `batch_encoding.py` | 878 | Prompt pre-encode with combinators, `pinned_clip()` (one text-encoder load per pass), `te_batch_size` text-encoder batching |
 | `civitai.py`, `distribution.py` | 40, 107 | Thin facades for the companion plugins (ComfyUI-USCG-CivitAI, ComfyUI-USCG-Distributed). No outbound network code in this package. |
-| `upscale_runner.py` | 642 | Dashboard async upscaling. Background thread loads models, runs pipeline chains, updates manifests, sends progress events. |
+| `upscale_runner.py` | ~730 | Dashboard async upscaling. Background thread loads models, runs pipeline chains, updates manifests, sends progress events. Server-side config validation, cancel at every level (`UpscaleCancelled`, `_cancellable_model`), one job per session. |
+| `comfy_nodes_workflow.py` | ~520 | Roadmap 71: embeds the pure-nodes workflow (Revise graph) into saved PNG/WEBP. Python port of `buildComfyNodesWorkflow`; `stamp_file()` at every image save site. |
 | `config_utils.py` | 1141 | Config expansion (Cartesian products), nested prompt parsing, job preparation, job plan / ordering, `config_fingerprint()` |
 | `model_loader.py` | 907 | Checkpoint/LoRA/VAE/GGUF loading, latent geometry (`get_latent_downscale_ratio`), CLIP type resolution |
 | `model_cache.py` | 935 | 3-tier cache: LoRA files → incremental states → patched models. Async preloading |
@@ -47,7 +48,8 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `web/conf_builder/conf-builder-config-management.js` | 7736 | All config builder UI rendering. Upscaling section, preview fetch |
 | `web/conf_builder/conf-builder-workflow-sweep.js` | 806 | Workflow Sweep UI (load API workflow, axes, dry run, start/pause/cancel) |
 | `resources/logic_utils.js` | 1073 | Dashboard helpers: `exportFavorites()`, `deleteNonFavorites()`, `loadSession()`, `scanDirectory()` |
-| `resources/logic_ui.js` | 2907 | Dashboard DOM: cards, modals, `buildComfyNodesWorkflow()`, analytics |
+| `resources/logic_ui.js` | ~2620 | Dashboard DOM: cards, modals, analytics |
+| `resources/logic_comfynodes.js`, `resources/logic_upscale_edit.js` | small | Pure node-testable helpers: `buildComfyNodesWorkflow()` (moved out of logic_ui.js); upscale step defaults, validation, `moveItem`, `configsEqual`, `presetFromConfig`, `countUpscaleOutputs` |
 | `resources/logic_virtual.js` | 1092 | Virtual scroller: renders only visible cards from thousands |
 | `resources/logic_ratings.js`, `resources/logic_compare.js` | 538, 824 | Pairwise review: pure Bradley-Terry / pairing / scoreboard logic, and the compare overlay that uses it |
 | `resources/logic_analytics.js`, `resources/logic_analytics_panel.js` | new | Settings Stats panel: `computeAnalytics()` (pure) groups items per setting axis (fav/reject rate, time, metrics, rating); the panel is docked, live (hooked into `updateJSONs`), has Copy Markdown |
@@ -167,4 +169,4 @@ Images saved as WebP at `output/benchmarks/{session}/images/img_{id}.webp`
 **Modify dashboard UI:**
 1. Edit files in `resources/` (HTML in `template.html`, JS in `logic_*.js`, CSS in `report.css`)
 2. Remember: changes require HTML regeneration to take effect
-3. JS load order is `html_generator.js_files`: logic_state.js → logic_utils.js → logic_ratings.js → logic_wfparams.js → logic_analytics.js → logic_dragdrop.js → logic_ui.js → logic_upscale_modal.js → logic_virtual.js → logic_pipeline.js → logic_compare.js → logic_analytics_panel.js → logic_events.js → logic_init.js → logic_standalone.js (last). All of them share ONE inlined script scope, so top-level names must be unique
+3. JS load order is `html_generator.js_files`: logic_state.js → logic_utils.js → logic_ratings.js → logic_wfparams.js → logic_analytics.js → logic_dragdrop.js → logic_comfynodes.js → logic_ui.js → logic_upscale_edit.js → logic_upscale_modal.js → logic_virtual.js → logic_pipeline.js → logic_compare.js → logic_analytics_panel.js → logic_events.js → logic_init.js → logic_standalone.js (last). All of them share ONE inlined script scope, so top-level names must be unique

@@ -2111,8 +2111,7 @@ body {
     pointer-events: auto; z-index: 3;
 }
 
-/* ============================================================
-   ANALYTICS PANEL (docked, non-modal Settings Stats)
+/* =====================================================   ANALYTICS PANEL (docked, non-modal Settings Stats)
    ============================================================ */
 
 .ap-panel {
@@ -2171,4 +2170,47 @@ th.analytics-th.ap-sortable:hover { color: #aaa; }
 
 @media (max-width: 800px) {
     .ap-panel { right: 2vw; top: auto; bottom: 8px; max-height: 60vh; }
+/* --- Dashboard upscale modal (Roadmap 93): reorder buttons, validation, phone layout --- */
+.upm-icon-btn { line-height: 1; }
+.upm-icon-btn:disabled { cursor: default; }
+.upm-invalid { border-color: #ff3333 !important; }
+#upscale-validation { margin-bottom: 8px; padding: 6px 8px; background: #1a1a1a; border-radius: 4px; font-size: 11px; }
+#upscale-validation .upm-err { color: #ff6666; }
+#upscale-validation .upm-warn { color: #ffcc55; }
+#upscale-modal-content fieldset:disabled { opacity: 0.6; }
+
+@media (hover: none) and (pointer: coarse) {
+    .upm-icon-btn,
+    #upscale-modal-content button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+    #upscale-modal-content input,
+    #upscale-modal-content select,
+    #upscale-modal-content textarea {
+        font-size: 16px !important;
+    }
+}
+
+@media (max-width: 600px) {
+    /* the inline style on #upscale-modal-content sets a 600px box: override it, full screen on a phone */
+    #upscale-modal-content {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        max-height: 100dvh !important;
+        height: 100dvh;
+        border-radius: 0 !important;
+        padding: 12px !important;
+        box-sizing: border-box;
+    }
+    #upscale-config-box { max-height: none !important; overflow-y: visible !important; }
+    #upscale-actions {
+        position: sticky;
+        bottom: -12px;
+        background: #1e1e1e;
+        padding: 8px 0;
+        margin-top: 8px;
+        flex-wrap: wrap;
+    }
+    #upscale-modal-content .upm-icon-btn { min-width: 44px; }
 }

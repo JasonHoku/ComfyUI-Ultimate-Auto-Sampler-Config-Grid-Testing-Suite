@@ -27,7 +27,7 @@ run_api = _load("run_api", "run_api.py")
 
 EXPECTED_JS = (
     "logic_state.js", "logic_utils.js", "logic_ratings.js", "logic_wfparams.js", "logic_analytics.js", "logic_dragdrop.js",
-    "logic_ui.js", "logic_upscale_modal.js", "logic_virtual.js", "logic_pipeline.js", "logic_compare.js",
+    "logic_comfynodes.js", "logic_ui.js", "logic_upscale_edit.js", "logic_upscale_modal.js", "logic_virtual.js", "logic_pipeline.js", "logic_compare.js",
     "logic_analytics_panel.js", "logic_events.js", "logic_init.js", "logic_standalone.js",
 )
 TOKENS = ("__CSS_TAG__", "__JS_TAG__", "__CSS_CONTENT__", "__JS_CONTENT__", "__TITLE__", "__NODE_ID__",

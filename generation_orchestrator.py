@@ -37,6 +37,7 @@ from .conditioning_cache import ConditioningCache
 from .remote_vae import RemoteVAEDecodeWorker, is_remote_vae_available, get_endpoint_names, INSTALL_INSTRUCTIONS
 from . import distribution
 from . import image_metrics
+from . import comfy_nodes_workflow
 
 try:
     from server import PromptServer
@@ -659,6 +660,9 @@ def run_deferred_upscales(
                                 os.path.join(paths["images"], upscaled_filename),
                                 format="WEBP", quality=95
                             )
+                            comfy_nodes_workflow.stamp_file(
+                                os.path.join(paths["images"], upscaled_filename),
+                                comfy_nodes_workflow.upscaled_item(conf, up_w, up_h, current_seed, actual_positive_prompt, actual_negative_prompt, pipe_w, pipe_h, mode, up_model, up_ratio, up_denoise, pipeline_name))
                     elif isinstance(upscale_result, PILImage.Image):
                         up_metrics_img = upscale_result
                         up_w, up_h = upscale_result.size
@@ -669,6 +673,9 @@ def run_deferred_upscales(
                                 os.path.join(paths["images"], upscaled_filename),
                                 format="WEBP", quality=95
                             )
+                            comfy_nodes_workflow.stamp_file(
+                                os.path.join(paths["images"], upscaled_filename),
+                                comfy_nodes_workflow.upscaled_item(conf, up_w, up_h, current_seed, actual_positive_prompt, actual_negative_prompt, pipe_w, pipe_h, mode, up_model, up_ratio, up_denoise, pipeline_name))
                     else:
                         continue
 
@@ -2295,6 +2302,10 @@ def run_generation_loop(
                                 upscaled_filename = f"img_{upscale_id}.webp"
                                 filepath = os.path.join(paths["images"], upscaled_filename)
                                 step_result["image_pil"].save(filepath, format="WEBP", quality=95)
+                                comfy_nodes_workflow.stamp_file(filepath, comfy_nodes_workflow.upscaled_item(
+                                    conf, step_result["image_width"], step_result["image_height"], current_seed,
+                                    actual_positive_prompt, actual_negative_prompt, w, h,
+                                    "florence2_hires", None, None, None, pipeline_name))
 
                                 upscaled_meta = create_image_metadata(
                                     conf, step_result["image_width"], step_result["image_height"],
@@ -2369,6 +2380,9 @@ def run_generation_loop(
                                 upscaled_filename = f"img_{upscale_id}.webp"
                                 filepath = os.path.join(paths["images"], upscaled_filename)
                                 result_pil.save(filepath, quality=80)
+                                comfy_nodes_workflow.stamp_file(filepath, comfy_nodes_workflow.upscaled_item(
+                                    conf, up_w, up_h, current_seed, actual_positive_prompt, actual_negative_prompt,
+                                    w, h, "seedvr2", sv_config.get("dit_model", ""), None, None, pipeline_name))
                                 # `meta` is not yet assigned at this point in the function
                                 # (same as the Florence2 branch): build via create_image_metadata.
                                 upscaled_meta = create_image_metadata(
@@ -2500,6 +2514,9 @@ def run_generation_loop(
                                         os.path.join(paths["images"], upscaled_filename),
                                         "WEBP", quality=80
                                     )
+                                    comfy_nodes_workflow.stamp_file(
+                                        os.path.join(paths["images"], upscaled_filename),
+                                        comfy_nodes_workflow.upscaled_item(conf, up_w, up_h, current_seed, actual_positive_prompt, actual_negative_prompt, w, h, mode, up_model_name, up_ratio, up_denoise, pipeline_name))
                                 # Feed this latent to the next step in the pipeline
                                 pipe_latent = upscale_result
                                 pipe_w = up_w
@@ -2514,6 +2531,9 @@ def run_generation_loop(
                                         os.path.join(paths["images"], upscaled_filename),
                                         "WEBP", quality=80
                                     )
+                                    comfy_nodes_workflow.stamp_file(
+                                        os.path.join(paths["images"], upscaled_filename),
+                                        comfy_nodes_workflow.upscaled_item(conf, up_w, up_h, current_seed, actual_positive_prompt, actual_negative_prompt, w, h, mode, up_model_name, up_ratio, up_denoise, pipeline_name))
                                 # Encode PIL back to latent for next step in pipeline
                                 import numpy as np_stack
                                 import torch as torch_stack
@@ -3507,6 +3527,23 @@ LTX_LEGACY_COMPANION_ERROR = (
     "LTX video configs in a distributed run are rendered on the master and need an updated "
     "ComfyUI-USCG-Distributed (populate_from_plan). Update the companion, or turn Distribution off for this run."
 )
+def _distributed_pack_nodes_pass(existing_data, pre_ids, images_dir, image_path_for=None):
+    """Embed the nodes workflow into images that workers rendered (they write bare bytes).
+    Runs once on the master after collection, over non-upscaled, non-video items that were not
+    in the manifest before the run. Returns the number of files stamped."""
+    if image_path_for is None:
+        from .metrics_runner import _image_path_for as image_path_for
+    stamped = 0
+    for item in existing_data.get("items", []):
+        if item.get("id") in pre_ids or item.get("upscaled") or item.get("media_type") == "video":
+            continue
+        try:
+            path = image_path_for(item, images_dir)
+        except Exception:
+            continue
+        if path and os.path.exists(path) and comfy_nodes_workflow.stamp_file(path, item, enabled=True):
+            stamped += 1
+    return stamped
 
 
 def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing,
@@ -3541,8 +3578,10 @@ def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, exist
         if preview_on:
             print(f"[GridTester] 🔎 Distributed preview pass: {pv_steps} steps, x{pv_scale} scale")
         _spec = image_metrics.current_spec()
-        manager.populate_from_plan(
-            queued, run_extras={"metrics_builtins": list(_spec.get("builtins") or [])} if _spec else {})
+        _extras = {"metrics_builtins": list(_spec.get("builtins") or [])} if _spec else {}
+        if comfy_nodes_workflow.enabled():
+            _extras["pack_nodes_metadata"] = True   # workers ignore unknown keys; the master stamps after collection
+        manager.populate_from_plan(queued, run_extras=_extras)
         return {"counts": _counts, "ltx_entries": ltx_entries, "queued": queued, "plan_total": len(job_plan)}
     else:
         if any(c.get("model_type") == "ltx_video" for c in (expanded or [])):
@@ -4374,6 +4413,12 @@ def _run_distributed_generation(
             save_manifest(paths["manifest"], existing_data)
             print(f"[Distribution] 📏 measured {_mres['adapters']} worker image(s) on master "
                   f"({_mres['builtins_from_file']} builtins from file)")
+
+    # === Nodes workflow for worker-rendered images (workers send bare bytes) ===
+    if comfy_nodes_workflow.enabled():
+        _nres = _distributed_pack_nodes_pass(existing_data, _pre_ids, paths["images"])
+        if _nres:
+            print(f"[Distribution] 🧩 embedded the nodes workflow into {_nres} worker image(s)")
 
     # === Run deferred upscales on master after all distributed generation is complete ===
     if session_settings and session_settings.get("upscaling", {}).get("enabled", False):

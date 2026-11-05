@@ -133,6 +133,7 @@ class Dashboard:
         self.held = []
         self.bundle_requests = []     # (kind, v) per GET /config_tester/dashboard_bundle_{js,css}
         self.bundle_status = None     # e.g. 500: make the bundle routes fail
+        self.routes = {}              # path -> callable(route, req, body, query); checked before the {} fallback
 
     def release_manifest(self):
         self.hold_manifest = False
@@ -217,6 +218,8 @@ class Dashboard:
             return route.fulfill(status=200, content_type="application/json",
                                  body=json.dumps({"comparisons": self.comparisons,
                                                   "total": len(self.comparisons)}))
+        if path in self.routes:
+            return self.routes[path](route, req, body, query)
         return route.fulfill(status=200, content_type="application/json", body="{}")
 
 

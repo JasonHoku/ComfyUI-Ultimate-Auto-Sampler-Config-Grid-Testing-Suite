@@ -46,6 +46,7 @@ except ImportError:
 
 from .html_generator import get_html_template
 from . import image_metrics
+from . import comfy_nodes_workflow
 
 
 def _workflow_configs(configs_json):
@@ -421,6 +422,7 @@ class SamplerGridTester:
         if metrics_spec:
             print(f"[GridTester] ⚙️ metrics: {metrics_spec['builtins'] + metrics_spec['adapters']}")
         metrics_token = image_metrics.begin_run(metrics_spec)
+        nodes_token = comfy_nodes_workflow.begin_run(bool((session_settings or {}).get("pack_nodes_metadata")))
         try:
             result = run_generation_loop(
                 self,
@@ -436,6 +438,7 @@ class SamplerGridTester:
             )
         finally:
             image_metrics.end_run(metrics_token)
+            comfy_nodes_workflow.end_run(nodes_token)
 
         if mixed_sweep is not None:
             # An interrupt raises out of the loop above, so the sweep is only ever started after a full pass.
