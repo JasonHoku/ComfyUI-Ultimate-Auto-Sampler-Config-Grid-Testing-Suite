@@ -2110,3 +2110,65 @@ body {
     background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 26px; cursor: pointer;
     pointer-events: auto; z-index: 3;
 }
+
+/* ============================================================
+   ANALYTICS PANEL (docked, non-modal Settings Stats)
+   ============================================================ */
+
+.ap-panel {
+    position: fixed;
+    top: 44px;
+    right: 10px;
+    width: min(680px, 96vw);
+    max-height: 75vh;
+    z-index: 450;
+    display: flex;
+    flex-direction: column;
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+}
+
+.ap-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 2px solid #3e8ed0;
+    flex-shrink: 0;
+}
+
+.ap-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #3e8ed0;
+    margin-right: auto;
+}
+
+.ap-head select, .ap-head button {
+    background: #1a1a1a;
+    color: #ccc;
+    border: 1px solid #333;
+    border-radius: 4px;
+    font-size: 10px;
+    padding: 4px 8px;
+    cursor: pointer;
+}
+
+.ap-head button:hover { background: #262626; color: #fff; }
+.ap-panel.ap-collapsed .ap-body,
+.ap-panel.ap-collapsed #analytics-summary,
+.ap-panel.ap-collapsed .ap-foot { display: none; }
+.ap-body { overflow-y: auto; flex: 1; min-height: 0; }
+.ap-table-wrap { overflow-x: auto; }
+th.analytics-th.ap-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.analytics-th.ap-sortable:hover { color: #aaa; }
+.ap-foot { font-size: 10px; color: #777; padding: 6px 12px; border-top: 1px solid #222; flex-shrink: 0; }
+.ap-foot div { margin-top: 2px; }
+.ap-more { font-size: 10px; color: #777; padding: 4px 12px; }
+
+@media (max-width: 800px) {
+    .ap-panel { right: 2vw; top: auto; bottom: 8px; max-height: 60vh; }
+}

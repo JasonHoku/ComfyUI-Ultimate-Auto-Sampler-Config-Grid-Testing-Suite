@@ -40,8 +40,8 @@ ComfyUI-Ultimate-Sampler-Grid/
 │
 ├── generation_orchestrator.py   # The "Conductor" (Loop Logic, job plan, preview pass, 3892 lines)
 ├── image_generation.py          # KSampler & VAE Wrappers (1321 lines)
-├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/...), run context, scorer-pack adapters (ADAPTERS registry: node ids/signatures pinned to pack shas, loader defaults + `prefer`, `scale`, `max_batch`, `vram_mb`; `adapter_status()` reports `problem`) (668 lines)
-├── metrics_runner.py            # Background job: compute metrics for an existing session (CPU, manifest lock) (167 lines)
+├── image_metrics.py             # Optional per-image metrics (sharpness/entropy/sobel/...), run context, scorer-pack adapters (ADAPTERS registry: node ids/signatures pinned to pack shas, loader defaults + `prefer`, `scale`, `max_batch`, `vram_mb`; `adapter_status()` reports `problem`) (668 lines)
+├── metrics_runner.py            # Background job: compute metrics for an existing session; `fill_missing` adds only missing keys (CPU, manifest lock) (182 lines)
 ├── model_loader.py              # Checkpoint/LoRA/VAE/GGUF Loading Logic, latent geometry, CLIP type (907 lines)
 ├── model_cache.py               # 3-Tier Model Caching System (935 lines)
 ├── remote_vae.py                # Remote VAE decode worker + facade for the RemoteVAE companion (314 lines)
@@ -87,6 +87,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_state.js           # State Store (Redux-style: filters, favorites) (149 lines)
 │   ├── logic_utils.js           # Helpers (Export, Scan, Session loading) (1073 lines)
 │   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable) (538 lines)
+│   ├── logic_analytics.js       # Settings stats pure logic: computeAnalytics (one pass, per-axis groups), sortAnalyticsRows, analyticsToMarkdown (node-testable)
 │   ├── logic_wfparams.js        # Workflow Sweep wf_params helpers (keys, numeric detection, match, short labels); Quick/Logic Filter + label overlay use them (pure, node-testable)
 │   ├── logic_dragdrop.js        # Revise-modal image drag/send helpers (issue #22): uscgImageRef, asset-info + uri-list + DownloadURL carriers, annotated `[output]` path (no DOM, node-testable)
 │   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (2907 lines)
@@ -94,6 +95,7 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (1092 lines)
 │   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (831 lines)
 │   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters (824 lines)
+│   ├── logic_analytics_panel.js # Docked Settings Stats panel (DOM): scope, sortable tables, Copy Markdown, live refresh hooks
 │   ├── logic_events.js          # Interaction Handler (Hotkeys, API calls) (101 lines)
 │   ├── logic_init.js            # Bootstrapper (Load JSON, Init State) (112 lines)
 │   └── logic_standalone.js      # Standalone-page mode: own websocket, run-API GENERATE NEW, openStandalone() (loaded last, 170 lines)
@@ -254,7 +256,7 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 | POST | `/config_tester/upscale_images` | `__init__.py` | `{session_name, image_ids, upscale_config: {pipelines: [...]}, all_favorited?}` | Start an async dashboard upscale job; returns `{job_id, total_images}` |
 | GET | `/config_tester/upscale_status` | `__init__.py` | `?job_id=` | Progress of an upscale job |
 | POST | `/config_tester/cancel_upscale` | `__init__.py` | `{job_id}` | Cancel an upscale job; returns `{cancelled}` |
-| POST | `/config_tester/compute_metrics` | `__init__.py` | `{session_name, overwrite?}` | Start the background metrics job for a session; returns `{job_id, total_images}` |
+| POST | `/config_tester/compute_metrics` | `__init__.py` | `{session_name, overwrite?, fill_missing?}` | Start the background metrics job for a session (`fill_missing`: only the metric keys an item lacks, disk values win); returns `{job_id, total_images}` |
 | GET | `/config_tester/metrics_status` | `__init__.py` | `?job_id=` | Metrics job progress |
 | POST | `/config_tester/cancel_metrics` | `__init__.py` | `{job_id}` | Cancel a metrics job; returns `{cancelled}` |
 | POST | `/config_tester/sweep/parse` | `__init__.py` | `{api_json}` | Workflow Sweep: describe an API-format workflow (nodes, outputs, `image_sources`, `video_sources`, `default_output`, suggested bindings) |
@@ -332,7 +334,7 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id, standalone=False, inline_manifest=False)` — reads all `/resources/` files, inlines them into `template.html`. By default the page is a **lazy shell**: `fullManifest` is empty and flagged `__uscg_lazy__`, `manifest_data` is ignored, and the SPA fetches `GET /config_tester/manifest?session=<title>` itself (`inline_manifest=True` restores the old inlined data; used by tests)
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_dragdrop.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_analytics.js` → `logic_dragdrop.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_analytics_panel.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests for code (JS/CSS inlined); the manifest comes from `/config_tester/manifest`
 
@@ -899,7 +901,7 @@ __init__.py
 
 35. **Dynamic-VRAM re-prepare**: on ComfyUI 0.4x (comfy_aimdo) `load_models_gpu` re-runs `ModelPatcherDynamic.load()` on every encode; the repeated "prepared for dynamic VRAM loading" log line is the symptom. TE batching (`te_batch_size`) self-checks batch 1 against a single encode and halves on OOM; non-batchable prompts keep the per-prompt path.
 
-36. **`html_generator.js_files` order is load-bearing** (one shared script scope): `logic_ratings.js` (pure) before `logic_ui.js`, `logic_compare.js` after `logic_pipeline.js`, `logic_standalone.js` LAST (top-level-page overrides). CI assembles the page and syntax-checks it.
+36. **`html_generator.js_files` order is load-bearing** (one shared script scope): `logic_ratings.js` (pure) before `logic_ui.js`, `logic_analytics.js` after `logic_ratings.js` + `logic_wfparams.js`, `logic_compare.js` after `logic_pipeline.js`, `logic_analytics_panel.js` after `logic_compare.js` (uses `cmpEl`/`cmpCopyText`/`cmpRatings`) and `pipelineFilterCtx`/`pipelineMatches` from `logic_pipeline.js`, `logic_standalone.js` LAST (top-level-page overrides). CI assembles the page and syntax-checks it.
 
 37. **Workflow Sweep video outputs.** `workflow_output` carries optional `media: "video"` and (VHS frames) `frames_from: <VHS node id>`; both are emitted only for video, and `fingerprint()` / `template_hash()` add `m`/`f` to the hashed payload only for video, so image fingerprints stay byte-identical (pinned by golden values in `tests/test_workflow_sweep_video.py`; changing the image payload would orphan every old session's resume). VHS frames are converted IN THE GRAPH by a spliced core `CreateVideo` (`build_job_prompt`), never in the collector, so the executor handles cache/hidden inputs. `USCGSweepCollectVideo` saves with `VideoInput.save_to` (SaveVideo itself needs executor-populated hidden inputs). `manifest_utils.append_items(remove_ids=...)` deletes a removed video's `<stem>.preview.png` along with the mp4. No new top-level Builder field, so the rule-5 checklist does not apply.
 
@@ -941,7 +943,7 @@ __init__.py
 | `distribution.py` | `is_distribution_available()`, `create_manager()`, `notify_workers_to_start()`, `stop_all_workers()`, `get_master_url()` (facade; the manager and worker live in the companion) | |
 | `run_api.py` | `build_run_prompt()`, `normalize_configs_payload()`, `resolve_saved_config()`, `summarize_history()`, `RunTracker` | |
 | `image_metrics.py` | `compute_metrics_numpy()`, `compute_metrics_torch()`, `begin_run()`, `end_run()`, `finalize()`, `adapter_status()` | |
-| `metrics_runner.py` | `start_metrics_job()`, `get_metrics_status()`, `cancel_metrics_job()` | |
+| `metrics_runner.py` | `start_metrics_job(session, overwrite, keys, fill_missing)`, `get_metrics_status()`, `cancel_metrics_job()` | |
 | `workflow_sweep.py` | `parse_api_workflow()`, `suggest_bindings()`, `parse_for_ui()` (pure; no torch or server imports) | |
 | `workflow_sweep_runner.py` | `dry_run()`, `api_start()`, `start_sweep()`, `get_status()`, `pause()`, `resume()`, `cancel()`, `ComfyBridge` | |
 
@@ -959,6 +961,9 @@ __init__.py
 | `logic_utils.js` | `loadSession()`, `exportFavorites()`, `scanDirectory()`, `triggerGen()`, `toggleFullscreen()`, `deleteNonFavorites()` |
 | `logic_virtual.js` | `renderDOM()`, `updateVisibleItems()`, `calculateVisibleRange()`, `autoFitZoom()`, `goToImage()` |
 | `logic_pipeline.js` | `updateDataPipeline()`, `executePipeline()`, `processNewData()`, `incrementalFilter()` |
+| `logic_analytics.js` | `computeAnalytics()`, `sortAnalyticsRows()`, `analyticsToMarkdown()` (pure; tests in `tests/js/analytics.test.js`) |
+| `logic_analytics_panel.js` | `openAnalyticsPanel()`, `toggleAnalyticsPanel()`, `closeAnalyticsPanel()`, `renderAnalyticsPanel()`, `analyticsPanelOnDataChanged()` (live refresh hook from `updateJSONs`/`cmpAfterRatingsChanged`), `analyticsPanelMarkdown()` |
+| `logic_pipeline.js` (filters) | `pipelineFilterCtx()`, `pipelineMatches(d, ctx, ignoreVisibility)`: the filter callback of `executePipeline`, shared with the Stats panel |
 | `logic_wfparams.js` | `wfParamKeys()`, `wfParamValue/Number()`, `wfParamMatches()`, `wfShortLabel()`, `wfDisplay()` (pure; tests in `tests/js/wfparams.test.js`) |
 | `logic_ratings.js` | `computeBradleyTerry()`, `buildPairSource()`, `nextPair()`, `axisDiff()`, `computeScoreboard()` (pure; tests in `tests/js/ratings.test.js`, run `node --test tests/js/*.test.js`) |
 | `logic_dragdrop.js` | `uscgImageRef()`, `uscgImageAssetInfo()`, `uscgAnnotatedPath()`, `uscgFillDragData()`, `USCG_DRAG_UPLOAD` (pure; tests in `tests/js/dragdrop.test.js`). Used by `logic_ui.js` (`dragstart` on `#m-img`, `sendModalToLoadImage()`). Parent bridge: iframe posts `uscg_send_to_load_image` {url, filename, subfolder, imageType, upload, node_id}, `web/dashboard.js` fills the selected/only/new LoadImage and answers `uscg_send_to_load_image_result` {ok, message} |

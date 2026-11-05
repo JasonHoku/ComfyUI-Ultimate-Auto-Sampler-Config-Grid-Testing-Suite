@@ -3324,7 +3324,9 @@ def _distributed_metrics_pass(existing_data, pre_ids, images_dir, image_path_for
         have = item.get("metrics") or {}
         need_builtins = bool(spec.get("builtins")) and not have
         need_adapters = any(a not in have for a in adapter_names)
-        if not (need_builtins or need_adapters):
+        # A worker on an older USCG omits builtins it does not know (e.g. sobel): fill just those from the file
+        missing_b = [k for k in (spec.get("builtins") or []) if have and k not in have]
+        if not (need_builtins or need_adapters or missing_b):
             continue
         path = image_path_for(item, images_dir)
         if path is None:
@@ -3339,7 +3341,13 @@ def _distributed_metrics_pass(existing_data, pre_ids, images_dir, image_path_for
             image_metrics.attach(item, pil)
             out["builtins_from_file"] += 1
         else:
-            image_metrics.attach_adapters(item, pil)
+            if missing_b:
+                extra = image_metrics.compute_for_pil(pil, missing_b)
+                cur = item.setdefault("metrics", {})
+                cur.update({k: v for k, v in extra.items() if k not in cur})
+                out["builtins_from_file"] += 1
+            if need_adapters:
+                image_metrics.attach_adapters(item, pil)
         if need_adapters:
             out["adapters"] += 1
     return out

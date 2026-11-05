@@ -40,7 +40,7 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `manifest_utils.py` | 316 | Load/save/merge manifest. `save_manifest()` reloads from disk first to preserve concurrent user edits (favorites, votes, metrics) |
 | `metadata_packer.py` | 561 | PNG metadata embedding for CivitAI. `pack_metadata_into_image()` accepts `workflow_data` kwarg |
 | `run_api.py` | 196 | Pure helpers behind `POST /config_tester/run`, `GET /config_tester/run_status` and `GET /config_tester/manifest` (`load_manifest_for_fetch`) |
-| `image_metrics.py`, `metrics_runner.py` | 668, 167 | Optional per-image metrics at save time; background job that backfills them for old sessions |
+| `image_metrics.py`, `metrics_runner.py` | 668, 167 | Optional per-image metrics at save time (incl. `sobel`); background job that backfills them (and `fill_missing` keys) for old sessions |
 | `workflow_sweep.py`, `workflow_sweep_runner.py`, `workflow_sweep_collect.py` | 1106, 1027, 281 | Workflow Sweep: pure expansion core, in-process queue feeder (never blocks the executor), `USCGSweepCollect` / `USCGSweepCollectVideo` output nodes |
 | `web/conf_builder/conf-builder-main.js` | 779 | Node registration. Default state and its migration blocks define ALL fields including upscaling/cooldown |
 | `web/conf_builder/conf-builder-utilities.js` | 866 | Model-list cache (`LS_CACHE_VERSION`), `getIterationCount()`, LoRA string helpers. No config converter: the preview calls `/configbuilder/preview` |
@@ -50,6 +50,7 @@ Read `ProjectStructure.md` in this directory for the full reference (file struct
 | `resources/logic_ui.js` | 2907 | Dashboard DOM: cards, modals, `buildComfyNodesWorkflow()`, analytics |
 | `resources/logic_virtual.js` | 1092 | Virtual scroller: renders only visible cards from thousands |
 | `resources/logic_ratings.js`, `resources/logic_compare.js` | 538, 824 | Pairwise review: pure Bradley-Terry / pairing / scoreboard logic, and the compare overlay that uses it |
+| `resources/logic_analytics.js`, `resources/logic_analytics_panel.js` | new | Settings Stats panel: `computeAnalytics()` (pure) groups items per setting axis (fav/reject rate, time, metrics, rating); the panel is docked, live (hooked into `updateJSONs`), has Copy Markdown |
 | `resources/logic_wfparams.js`, `resources/logic_dragdrop.js` | 81, small | Pure helpers (node-testable): Workflow Sweep `wf_params` keys/matching/labels; Revise-image drag payload + `[output]` path for Load Image |
 | `resources/logic_standalone.js` | 170 | Standalone-page mode (own websocket, run-API GENERATE NEW); loaded last |
 
@@ -166,4 +167,4 @@ Images saved as WebP at `output/benchmarks/{session}/images/img_{id}.webp`
 **Modify dashboard UI:**
 1. Edit files in `resources/` (HTML in `template.html`, JS in `logic_*.js`, CSS in `report.css`)
 2. Remember: changes require HTML regeneration to take effect
-3. JS load order is `html_generator.js_files`: logic_state.js → logic_utils.js → logic_ratings.js → logic_wfparams.js → logic_dragdrop.js → logic_ui.js → logic_upscale_modal.js → logic_virtual.js → logic_pipeline.js → logic_compare.js → logic_events.js → logic_init.js → logic_standalone.js (last). All of them share ONE inlined script scope, so top-level names must be unique
+3. JS load order is `html_generator.js_files`: logic_state.js → logic_utils.js → logic_ratings.js → logic_wfparams.js → logic_analytics.js → logic_dragdrop.js → logic_ui.js → logic_upscale_modal.js → logic_virtual.js → logic_pipeline.js → logic_compare.js → logic_analytics_panel.js → logic_events.js → logic_init.js → logic_standalone.js (last). All of them share ONE inlined script scope, so top-level names must be unique

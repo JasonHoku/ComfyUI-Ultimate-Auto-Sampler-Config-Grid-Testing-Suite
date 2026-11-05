@@ -34,12 +34,14 @@ def get_html_template(title, manifest_data, node_id, standalone=False, inline_ma
         "logic_utils.js",    # API & Helper functions
         "logic_ratings.js",  # Pairwise review: pure logic (normalisers, Bradley-Terry, pairing, scoreboard)
         "logic_wfparams.js",  # Workflow Sweep: wf_params helpers (pure; must load before logic_ui/logic_pipeline)
+        "logic_analytics.js",  # Settings stats: computeAnalytics/analyticsToMarkdown (pure; after ratings + wfparams)
         "logic_dragdrop.js", # Revise-modal image drag/send helpers (issue #22; pure, node-testable)
         "logic_ui.js",       # DOM Creation, Modals, JSON Bars
         "logic_upscale_modal.js",  # Upscale Modal (preset management, async upscale)
         "logic_virtual.js",  # The Virtual Scroll Engine & Viewport
         "logic_pipeline.js", # Sorting & Filtering Logic
         "logic_compare.js",  # Pairwise review: compare overlay, votes, scoreboard modal
+        "logic_analytics_panel.js",  # Settings stats panel (DOM; uses cmpEl/cmpCopyText/cmpRatings from logic_compare)
         "logic_events.js",   # Event Listeners (Message, Keyboard)
         "logic_init.js",     # Initialization
         "logic_standalone.js"  # Standalone-page mode (own websocket, run API); must stay LAST

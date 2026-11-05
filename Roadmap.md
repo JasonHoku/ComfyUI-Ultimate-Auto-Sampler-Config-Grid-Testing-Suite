@@ -150,10 +150,10 @@ Compute objective quality metrics during generation and store in manifest:
 - **Sobel edge quality** (detail preservation)
 Add as sortable/filterable fields in Dashboard. Enables data-driven parameter selection instead of purely visual comparison. Prior art: SamplerSchedulerMetricsTester (proves the concept, only 9 stars but validates demand).
 
-DONE (11/4/26): built-in metrics (sharpness, entropy, colorfulness, contrast, luma, saturation), Dashboard sort/filter/labels, backfill job for old sessions. Still open: Sobel edge quality, scorer packs.
+DONE (11/4/26): Sobel edge quality (sobel), backfill fills missing keys. Built-in metrics (sharpness, entropy, colorfulness, contrast, luma, saturation, sobel), Dashboard sort/filter/labels, backfill job for old sessions. Still open: scorer packs.
 
 #### **26. Analytics Panel in Dashboard** (transforms tool from "look at pictures" to "data-driven decisions")
-* **Milestone 1:** Aggregate stats bar — avg generation time by sampler/scheduler, favorites rate by model/LoRA
+* **Milestone 1:** Aggregate stats bar — avg generation time by sampler/scheduler, favorites rate by model/LoRA. DONE (11/4/26) Milestone 1: Stats panel (computeAnalytics in resources/logic_analytics.js is the data source for M2).
 * **Milestone 2:** Canvas-based charts — bar charts, scatter plots (steps vs duration, CFG vs quality metrics)
 * **Milestone 3:** Export — downloadable reports with charts + top images
 Pure client-side using canvas API from existing `activeData`. Prior art: W&B dashboards.

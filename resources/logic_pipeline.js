@@ -549,21 +549,8 @@ function updateDataPipeline() {
 // Abort controller for canceling in-progress async pipelines
 let pipelineAbortId = 0;
 
-function executePipeline() {
-    const startTime = performance.now();
-    refreshSupersededFps();
-    if (typeof populateMetricFilterUI === 'function') populateMetricFilterUI();
-    if (typeof populateWfParamFilterUI === 'function') populateWfParamFilterUI();
-    const currentFilterKey = getFilterKey();
-    const filtersChanged = currentFilterKey !== lastFilterKey;
-
-    // Always filter from activeData to prevent data loss from self-filtering
-    console.log(`[Pipeline] ${filtersChanged ? 'Filters changed, full reprocess' : 'Re-applying filters'}`);
-    if (filtersChanged) {
-        lastFilterKey = currentFilterKey;
-    }
-
-    // Check for button filters once to avoid repeated Set.size lookups
+/** Filter context for pipelineMatches(): computed once per pass. */
+function pipelineFilterCtx() {
     const hasButtonFilters = filters.sampler.size > 0 ||
         filters.scheduler.size > 0 ||
         filters.denoise.size > 0 ||
@@ -580,65 +567,92 @@ function executePipeline() {
         (filters.passType && filters.passType.size > 0);
 
     const hasSearchFilters = typeof matchesSearchFilters === 'function' && searchFilters.length > 0;
+    return { hasButtonFilters: hasButtonFilters, hasSearchFilters: hasSearchFilters };
+}
 
-    processedData = activeData.filter(d => {
+/**
+ * Does item d pass the content filters (superseded previews, button, search, logic and quick filters)?
+ * ignoreVisibility = true skips the Favorites / Non-Favorited / Rejected visibility toggles (the Stats panel
+ * counts favorites and rejects even while the grid hides them).
+ */
+function pipelineMatches(d, ctx, ignoreVisibility) {
+    if (!ignoreVisibility) {
         // Apply top-level filters (Favorites/Non-Favorited/Rejected visibility)
         if (d.favorited && !topFilters.showFavorites) return false;
         if (!d.favorited && !d.rejected && !topFilters.showNonFavorited) return false;
         if (d.rejected && !topFilters.showRejected) return false;
-        if (d.preview && isSupersededPreview(d)) return false;
+    }
+    if (d.preview && isSupersededPreview(d)) return false;
 
-        // Apply button filters (skip entirely if none are active)
-        if (hasButtonFilters) {
-            if (filters.sampler.size > 0 && !filters.sampler.has(d.sampler)) return false;
-            if (filters.scheduler.size > 0 && !filters.scheduler.has(d.scheduler)) return false;
-            if (filters.denoise.size > 0 && !filters.denoise.has(d.denoise)) return false;
-            if (filters.lora.size > 0 && !filters.lora.has(d.lora)) return false;
-            if (filters.model.size > 0 && !filters.model.has(d.model || meta.model || "Default")) return false;
-            if (filters.positive.size > 0) {
-                const st = document.getElementById('toggle-triggers')?.checked !== false;
-                const posValue = st ? (d.positive || meta.positive || "") : (d.config_positive || d.positive || meta.positive || "");
-                if (!filters.positive.has(posValue)) return false;
-            }
-            if (filters.negative.size > 0) {
-                const st = document.getElementById('toggle-triggers')?.checked !== false;
-                const negValue = st ? (d.negative || meta.negative || "") : (d.config_negative || d.negative || meta.negative || "");
-                if (!filters.negative.has(negValue)) return false;
-            }
-            if (filters.size.size > 0 && !filters.size.has(`${d.width}x${d.height}`)) return false;
-            if (filters.seed.size > 0 && !filters.seed.has(d.seed)) return false;
-            if (filters.steps.size > 0 && !filters.steps.has(String(d.steps))) return false;
-            if (filters.cfg.size > 0 && !filters.cfg.has(String(d.cfg))) return false;
-            if (filters.upscaleMethod.size > 0) {
-                let upVal;
-                if (!d.upscaled) { upVal = 'No Upscale'; }
-                else {
-                    const mode = d.upscale_mode || '';
-                    const model = d.upscale_model;
-                    const shortModel = model ? String(model).replace(/\\/g, '/').split('/').pop().replace(/\.[^.]+$/, '') : '';
-                    upVal = shortModel ? `${mode} + ${shortModel}` : mode || 'Upscaled';
-                }
-                if (!filters.upscaleMethod.has(upVal)) return false;
-            }
-            if (filters.mediaType.size > 0) {
-                const mt = d.media_type || 'image';
-                if (!filters.mediaType.has(mt)) return false;
-            }
-            if (filters.passType && filters.passType.size > 0) {
-                if (!filters.passType.has(d.preview ? 'Preview' : 'Full')) return false;
-            }
+    // Apply button filters (skip entirely if none are active)
+    if (ctx.hasButtonFilters) {
+        if (filters.sampler.size > 0 && !filters.sampler.has(d.sampler)) return false;
+        if (filters.scheduler.size > 0 && !filters.scheduler.has(d.scheduler)) return false;
+        if (filters.denoise.size > 0 && !filters.denoise.has(d.denoise)) return false;
+        if (filters.lora.size > 0 && !filters.lora.has(d.lora)) return false;
+        if (filters.model.size > 0 && !filters.model.has(d.model || meta.model || "Default")) return false;
+        if (filters.positive.size > 0) {
+            const st = document.getElementById('toggle-triggers')?.checked !== false;
+            const posValue = st ? (d.positive || meta.positive || "") : (d.config_positive || d.positive || meta.positive || "");
+            if (!filters.positive.has(posValue)) return false;
         }
+        if (filters.negative.size > 0) {
+            const st = document.getElementById('toggle-triggers')?.checked !== false;
+            const negValue = st ? (d.negative || meta.negative || "") : (d.config_negative || d.negative || meta.negative || "");
+            if (!filters.negative.has(negValue)) return false;
+        }
+        if (filters.size.size > 0 && !filters.size.has(`${d.width}x${d.height}`)) return false;
+        if (filters.seed.size > 0 && !filters.seed.has(d.seed)) return false;
+        if (filters.steps.size > 0 && !filters.steps.has(String(d.steps))) return false;
+        if (filters.cfg.size > 0 && !filters.cfg.has(String(d.cfg))) return false;
+        if (filters.upscaleMethod.size > 0) {
+            let upVal;
+            if (!d.upscaled) { upVal = 'No Upscale'; }
+            else {
+                const mode = d.upscale_mode || '';
+                const model = d.upscale_model;
+                const shortModel = model ? String(model).replace(/\\/g, '/').split('/').pop().replace(/\.[^.]+$/, '') : '';
+                upVal = shortModel ? `${mode} + ${shortModel}` : mode || 'Upscaled';
+            }
+            if (!filters.upscaleMethod.has(upVal)) return false;
+        }
+        if (filters.mediaType.size > 0) {
+            const mt = d.media_type || 'image';
+            if (!filters.mediaType.has(mt)) return false;
+        }
+        if (filters.passType && filters.passType.size > 0) {
+            if (!filters.passType.has(d.preview ? 'Preview' : 'Full')) return false;
+        }
+    }
 
-        if (hasSearchFilters && !matchesSearchFilters(d)) return false;
+    if (ctx.hasSearchFilters && !matchesSearchFilters(d)) return false;
 
-        // Apply logic filters (numeric comparisons)
-        if (!matchesLogicFilters(d)) return false;
+    // Apply logic filters (numeric comparisons)
+    if (!matchesLogicFilters(d)) return false;
 
-        // Apply quick filters (faceted chip AND logic)
-        if (!matchesQuickFilters(d)) return false;
+    // Apply quick filters (faceted chip AND logic)
+    if (!matchesQuickFilters(d)) return false;
 
-        return true;
-    });
+    return true;
+}
+
+function executePipeline() {
+    const startTime = performance.now();
+    refreshSupersededFps();
+    if (typeof populateMetricFilterUI === 'function') populateMetricFilterUI();
+    if (typeof populateWfParamFilterUI === 'function') populateWfParamFilterUI();
+    const currentFilterKey = getFilterKey();
+    const filtersChanged = currentFilterKey !== lastFilterKey;
+
+    // Always filter from activeData to prevent data loss from self-filtering
+    console.log(`[Pipeline] ${filtersChanged ? 'Filters changed, full reprocess' : 'Re-applying filters'}`);
+    if (filtersChanged) {
+        lastFilterKey = currentFilterKey;
+    }
+
+    const fctx = pipelineFilterCtx();
+
+    processedData = activeData.filter(d => pipelineMatches(d, fctx, false));
 
     // Apply sorting
     // Fast path: for oldest/newest with no secondary sort, activeData is stored newest-first

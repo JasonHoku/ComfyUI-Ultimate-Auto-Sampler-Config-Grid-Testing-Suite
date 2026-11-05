@@ -65,6 +65,6 @@ def test_metrics_info_route_shape(monkeypatch):
     monkeypatch.setattr(cbn.web, "json_response", lambda data, **kw: captured.setdefault("data", data), raising=False)
     asyncio.run(cbn.get_metrics_info(None))
     data = captured["data"]
-    assert data["builtins"] == ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation"]
+    assert data["builtins"] == ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation", "sobel"]
     assert {a["name"] for a in data["adapters"]} >= {"aesthetic", "imagereward"}
     assert all({"name", "label", "installed", "enabled", "pack_hint"} <= set(a) for a in data["adapters"])
