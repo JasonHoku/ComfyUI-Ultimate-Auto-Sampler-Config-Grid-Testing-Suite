@@ -129,6 +129,7 @@ _GEN_ORCH_DEPS = {
     },
     "image_generation": {
         "generate_image": lambda *a, **kw: None,
+        "generate_image_attn_safe": lambda *a, **kw: (None, None, None),
         "flush_batch_with_vae": lambda *a, **kw: None,
         "flush_batch_with_remote_vae": lambda *a, **kw: None,
         "create_image_metadata": lambda *a, **kw: {},

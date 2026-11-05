@@ -196,7 +196,7 @@ If you'd rather build the graph yourself:
 * **Live Dashboard Updates:** Configure `flush_batch_every` to update the dashboard incrementally (e.g., every 4 images) instead of waiting for the entire batch to complete.
 * **Remote VAE Support:** Offload VAE decoding to remote servers (HuggingFace endpoints or local) for 20-30% faster generation and lower VRAM usage.
 * **VAE Selection & Iteration:** Test multiple VAEs per config — add individual VAEs from a searchable dropdown or expand entire VAE folders. Each VAE becomes a dimension in the Cartesian grid.
-* **Attention Mode Testing:** Grid-test different attention implementations (`default`, `sageattn`, `xformers`, etc.) as a combinatorial dimension. Find the optimal attention backend for your hardware.
+* **Attention Mode Testing:** Grid-test different attention implementations (`default`, `sage`, `sage3`, `flash`, `xformers`, etc.) as a combinatorial dimension. Find the optimal attention backend for your hardware.
 * **CLIP Encoding Combinators:** Advanced prompt syntax with `AND`, `CAT`, `AVG(weight)`, and `BREAK` keywords for multi-segment conditioning. `AND` creates separate conditioning entries, `CAT` concatenates token contexts, `AVG(0.5)` blends prompts, and `BREAK` forces new 77-token chunks.
 * **Model-Specific Prompts:** Per-config prompt prefix and suffix fields for model-appropriate quality tags (e.g., prepend `"masterpiece, best quality"` for anime models, append `"4k, photorealistic"` for realistic models).
 * **Recursive Cartesian Prompt Builder:** Visual chip-based prompt editor with `{option1|option2|option3}` syntax that expands into all combinations. Nest multiple groups for exponential prompt variation.
@@ -623,7 +623,7 @@ Config Arrays are the building blocks of your testing grid. Each array defines a
 * **CFG:** Comma-separated list of CFG scale values (e.g., `"6.0, 7.0, 8.0"`).
 * **Samplers Dropdown:** Searchable dropdown auto-populated with all available samplers from the connected sampler node. Select multiple to add them as a comma-separated list.
 * **Schedulers Dropdown:** Searchable dropdown auto-populated with all available schedulers. Works the same as the samplers dropdown.
-* **Attention Mode:** Dropdown selector for attention implementations (`default`, `sageattn`, `xformers`, etc.). Select multiple to test as a grid dimension.
+* **Attention Mode:** Dropdown selector for attention implementations (`default`, `sage`, `sage3`, `flash`, `xformers`, etc.). Select multiple to test as a grid dimension.
 
 #### Iteration Count Display
 
@@ -782,7 +782,7 @@ VAEs are treated as a Cartesian dimension just like samplers or models. If you a
 
 ### Attention Modes
 
-Select which attention backend implementations to test. Available options depend on your system (e.g., `default`, `sageattn`, `xformers`). Like other parameters, you can select multiple modes and they become a grid dimension.
+Select which attention backend implementations to test. Available options depend on your system (e.g., `default`, `xformers`, `pytorch`, `flash`, `sage`, `sage3`, `sub_quad`, `split`; a backend that is not installed is skipped with a warning and the job runs with default attention). If a backend is installed but fails while sampling, the job is retried once with default attention and the item records `attention_fallback` (the mode that failed). Like other parameters, you can select multiple modes and they become a grid dimension.
 
 ### Skip Layer Guidance (DiT models)
 
@@ -1339,7 +1339,7 @@ The Config Builder generates JSON in the exact format required by the Ultimate S
     "lora": "style.safetensors:0.8:0.8 + detail.safetensors:0.5:0.5",
     "model": "base_xl.safetensors",
     "vae": ["vae_v1.safetensors", "vae_v2.safetensors"],
-    "attention_mode": ["default", "sageattn"],
+    "attention_mode": ["default", "sage"],
     "prompt_prefix": "masterpiece, best quality, ",
     "prompt_suffix": ", 4k, detailed",
     "lora_omit_triggers": ["masterpiece", "best quality"],
@@ -1844,7 +1844,7 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 
 ### Update 2/16/26 — Config Builder & Dashboard Overhaul
 * 🎛️ **VAE Selection & Iteration:** Test multiple VAEs per config with searchable dropdown and folder expansion. VAEs are a full Cartesian dimension.
-* 🧠 **Attention Mode Testing:** Grid-test different attention implementations (`default`, `sageattn`, `xformers`) as a combinatorial dimension.
+* 🧠 **Attention Mode Testing:** Grid-test different attention implementations (`default`, `sage`, `xformers`) as a combinatorial dimension.
 * 🔗 **CLIP Encoding Combinators:** `AND`, `CAT`, `AVG(weight)`, and `BREAK` keywords for multi-segment conditioning and prompt blending.
 * 📝 **Model-Specific Prompts:** Per-config prompt prefix and suffix fields for model-appropriate quality tags.
 * 🔄 **Recursive Cartesian Prompt Builder:** Visual chip-based editor with `{option1|option2}` syntax expanding into all combinations.
