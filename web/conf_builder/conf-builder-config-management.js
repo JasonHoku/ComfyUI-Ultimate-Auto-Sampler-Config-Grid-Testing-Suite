@@ -7146,7 +7146,7 @@ export function renderRunSettingsSection(node, container) {
     if (!node.state.metrics || typeof node.state.metrics !== "object") node.state.metrics = { enabled: false, builtins: {}, adapters: {} };
     if (!node.state.metrics.builtins) node.state.metrics.builtins = {};
     if (!node.state.metrics.adapters) node.state.metrics.adapters = {};
-    ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation"].forEach(k => {
+    ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation", "sobel"].forEach(k => {
         if (node.state.metrics.builtins[k] === undefined) node.state.metrics.builtins[k] = true;
     });
 
@@ -7417,6 +7417,7 @@ export function renderRunSettingsSection(node, container) {
             ["contrast", "Contrast", "RMS contrast: standard deviation of luma (0-0.5)."],
             ["luma", "Luma", "Mean brightness (0-1)."],
             ["saturation", "Saturation", "Mean HSV saturation (0-1)."],
+            ["sobel", "Sobel edges", "Mean Sobel gradient magnitude of luma (0-1; a full black-to-white edge reads 1). Higher = more and stronger edges; ignores pixel-level noise better than Sharpness."],
         ];
         const wrap = document.createElement("div");
         wrap.style.cssText = "margin-top: 10px;";
@@ -7427,7 +7428,7 @@ export function renderRunSettingsSection(node, container) {
         label.style.cssText = "font-size: 12px; color: #ccc; white-space: nowrap;";
         const help = document.createElement("span");
         help.textContent = "?";
-        help.title = "Stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image (base images and upscales; not videos) in manifest.json, computed on the decoded image in about 1-5 ms each. Sort and filter by them in the Dashboard. They measure image signal, not taste: noise raises sharpness and entropy.";
+        help.title = "Stores sharpness, entropy, colorfulness, contrast, luma, saturation and Sobel edges for every saved image (base images and upscales; not videos) in manifest.json, computed on the decoded image in about 1-5 ms each. Sort and filter by them in the Dashboard. They measure image signal, not taste: noise raises sharpness and entropy.";
         help.style.cssText = "display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #2a2a2a; color: #8af; font-size: 10px; font-weight: bold; cursor: help; user-select: none;";
         const cb = document.createElement("input");
         cb.type = "checkbox";

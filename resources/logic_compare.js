@@ -295,6 +295,7 @@ async function clearComparisons() {
 }
 
 function cmpAfterRatingsChanged() {
+    if (typeof analyticsPanelOnDataChanged === 'function') analyticsPanelOnDataChanged();
     if (typeof refreshLabelOverlays === 'function') refreshLabelOverlays();
     if ((currentSort === 'rating' || currentSecondarySort === 'rating') && typeof updateDataPipeline === 'function') {
         updateDataPipeline();

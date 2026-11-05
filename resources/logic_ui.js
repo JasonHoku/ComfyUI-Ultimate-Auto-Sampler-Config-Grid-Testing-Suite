@@ -588,7 +588,11 @@ document.addEventListener('keydown', (e) => {
         const filtersPopup = document.getElementById('filters-popup');
         if (filtersPopup && filtersPopup.style.display !== 'none') {
             toggleFiltersPopup();
+            return;
         }
+
+        // Close the docked Stats panel
+        if (typeof closeAnalyticsPanel === 'function' && closeAnalyticsPanel()) return;
     }
 });
 
@@ -1815,6 +1819,7 @@ function updateJSONs(visible) {
 
         // Update button labels with unique counts
         updateJSONButtonLabels(goodUniqueCount, favUniqueCount, rejUniqueCount);
+        if (typeof analyticsPanelOnDataChanged === 'function') analyticsPanelOnDataChanged();
     }, 100); // Reduced from 300ms since we have separate debounce above
 }
 
@@ -3082,7 +3087,7 @@ async function startSessionMetrics() {
     try {
         const resp = await fetch('/config_tester/compute_metrics', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_name: sessionName })
+            body: JSON.stringify({ session_name: sessionName, fill_missing: true })
         });
         const result = await resp.json();
         if (result.error) { if (out) out.textContent = result.error; return; }

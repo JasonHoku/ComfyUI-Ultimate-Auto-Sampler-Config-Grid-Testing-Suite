@@ -217,7 +217,7 @@ app.registerExtension({
                         clear_vram: false
                     },
                     image_format: "webp",
-                    metrics: { enabled: false, builtins: { sharpness: true, entropy: true, colorfulness: true, contrast: true, luma: true, saturation: true }, adapters: {} },
+                    metrics: { enabled: false, builtins: { sharpness: true, entropy: true, colorfulness: true, contrast: true, luma: true, saturation: true, sobel: true }, adapters: {} },
                     overwrite_existing: false,
                     flush_batch_every: 1,
                     lora_triggerwords_mode: "None",
@@ -351,7 +351,7 @@ app.registerExtension({
                             if (!this.state.metrics || typeof this.state.metrics !== "object") this.state.metrics = { enabled: false, builtins: {}, adapters: {} };
                             if (!this.state.metrics.builtins) this.state.metrics.builtins = {};
                             if (!this.state.metrics.adapters) this.state.metrics.adapters = {};
-                            ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation"].forEach(k => {
+                            ["sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation", "sobel"].forEach(k => {
                                 if (this.state.metrics.builtins[k] === undefined) this.state.metrics.builtins[k] = true;
                             });
 

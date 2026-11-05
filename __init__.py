@@ -1479,7 +1479,8 @@ async def compute_metrics(request):
         if not _is_path_within(base_dir, _get_benchmarks_base()):
             return web.json_response({"error": "Forbidden: path outside benchmarks directory"}, status=403)
         from .metrics_runner import start_metrics_job, get_metrics_status
-        job_id, error = start_metrics_job(session_name, overwrite=bool(data.get("overwrite", False)))
+        job_id, error = start_metrics_job(session_name, overwrite=bool(data.get("overwrite", False)),
+                                           fill_missing=bool(data.get("fill_missing", False)))
         if error:
             return web.json_response({"error": error}, status=400)
         return web.json_response({"job_id": job_id, "total_images": get_metrics_status(job_id)["total"]})

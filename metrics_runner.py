@@ -48,7 +48,7 @@ def _image_path_for(item, images_dir):
     return path
 
 
-def start_metrics_job(session_name, overwrite=False, keys=None):
+def start_metrics_job(session_name, overwrite=False, keys=None, fill_missing=False):
     """Start the job. Returns (job_id, error). session_name must already be sanitized by the caller."""
     import folder_paths
     benchmarks_dir = os.path.realpath(os.path.join(folder_paths.get_output_directory(), "benchmarks"))
@@ -67,8 +67,16 @@ def start_metrics_job(session_name, overwrite=False, keys=None):
     with manifest_utils._manifest_lock:
         with open(manifest_path, "r", encoding="utf-8") as f:
             items = json.load(f).get("items", [])
-    targets = [it["id"] for it in items if "id" in it and (overwrite or not it.get("metrics"))
-               and _image_path_for(it, images_dir)]
+    if overwrite:
+        targets = [it["id"] for it in items if "id" in it and _image_path_for(it, images_dir)]
+    elif fill_missing:
+        # Opt-in: items that have SOME metrics but lack a requested key (e.g. Sobel on older sessions)
+        targets = [it["id"] for it in items if "id" in it
+                   and any(k not in (it.get("metrics") or {}) for k in spec["builtins"])
+                   and _image_path_for(it, images_dir)]
+    else:
+        targets = [it["id"] for it in items if "id" in it and not it.get("metrics")
+                   and _image_path_for(it, images_dir)]
     if not targets:
         return None, "Nothing to compute (every image already has metrics, or there are no images)"
     for jid, j in list(_jobs.items()):
@@ -80,7 +88,7 @@ def start_metrics_job(session_name, overwrite=False, keys=None):
            "failed": 0, "error": None, "cancel": threading.Event()}
     _jobs[job_id] = job
     threading.Thread(target=_run_metrics_thread,
-                     args=(job, targets, spec["builtins"], overwrite, manifest_path, images_dir, session_name),
+                     args=(job, targets, spec["builtins"], overwrite, manifest_path, images_dir, session_name, fill_missing),
                      daemon=True).start()
     return job_id, None
 
@@ -100,8 +108,11 @@ def cancel_metrics_job(job_id):
     return False
 
 
-def _flush(manifest_path, results, overwrite):
-    """Merge `results` ({id: metrics}) into the manifest on disk under the lock; atomic replace."""
+def _flush(manifest_path, results, overwrite, merge=False):
+    """Merge `results` ({id: metrics}) into the manifest on disk under the lock; atomic replace.
+
+    merge=True (fill_missing): add only keys the item on disk does not have (disk wins; adapter keys survive).
+    """
     if not results:
         return
     with manifest_utils._manifest_lock:
@@ -109,7 +120,10 @@ def _flush(manifest_path, results, overwrite):
             data = json.load(f)
         for it in data.get("items", []):
             m = results.get(it.get("id"))
-            if m and (overwrite or not it.get("metrics")):
+            if m and merge:
+                cur = it.get("metrics") or {}
+                it["metrics"] = {**cur, **{k: v for k, v in m.items() if k not in cur}}
+            elif m and (overwrite or not it.get("metrics")):
                 it["metrics"] = m
         tmp = manifest_path + ".metrics.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -128,7 +142,7 @@ def _send_progress(job, session_name):
         pass
 
 
-def _run_metrics_thread(job, target_ids, keys, overwrite, manifest_path, images_dir, session_name):
+def _run_metrics_thread(job, target_ids, keys, overwrite, manifest_path, images_dir, session_name, fill_missing=False):
     pending = {}
     try:
         with manifest_utils._manifest_lock:
@@ -144,7 +158,8 @@ def _run_metrics_thread(job, target_ids, keys, overwrite, manifest_path, images_
                     raise ValueError("no image file")
                 with Image.open(path) as im:
                     arr = np.asarray(im.convert("RGB"))
-                m = image_metrics.compute_metrics_numpy(arr, keys)
+                need = [k for k in keys if k not in (it.get("metrics") or {})] if fill_missing else keys
+                m = image_metrics.compute_metrics_numpy(arr, need) if need else {}
                 if m:
                     pending[tid] = m
                 else:
@@ -154,10 +169,10 @@ def _run_metrics_thread(job, target_ids, keys, overwrite, manifest_path, images_
                 print(f"[GridTester] ⚠️ metrics skipped for item {tid}: {e}")
             job["completed"] += 1
             if len(pending) >= FLUSH_EVERY:
-                _flush(manifest_path, pending, overwrite)
+                _flush(manifest_path, pending, overwrite, fill_missing)
                 pending = {}
                 _send_progress(job, session_name)
-        _flush(manifest_path, pending, overwrite)
+        _flush(manifest_path, pending, overwrite, fill_missing)
         job["status"] = "cancelled" if job["cancel"].is_set() else "complete"
         print(f"[GridTester] 📏 metrics job {job['status']}: {job['completed']}/{job['total']} images, {job['failed']} skipped")
     except Exception as e:

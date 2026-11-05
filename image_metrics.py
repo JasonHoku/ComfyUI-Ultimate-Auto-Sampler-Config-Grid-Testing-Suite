@@ -16,6 +16,7 @@ upscale stays comparable with its base and the cost is capped.
   contrast     std of luma (RMS contrast, 0..0.5)
   luma         mean of Y = 0.299 R + 0.587 G + 0.114 B
   saturation   mean HSV saturation
+  sobel        mean Sobel gradient magnitude of luma (0-1 scale, kernels /4: a full step edge = 1)
 
 These measure signal, not taste: noise raises sharpness and entropy.
 ANALYSIS_MAX_SIDE is a versioned constant; changing it breaks comparisons
@@ -28,8 +29,9 @@ import time
 
 import numpy as np
 
-BUILTIN_METRICS = ("sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation")
+BUILTIN_METRICS = ("sharpness", "entropy", "colorfulness", "contrast", "luma", "saturation", "sobel")
 ANALYSIS_MAX_SIDE = 1024
+_SOBEL_SCALE = 0.25
 
 _LUMA_W = (0.299, 0.587, 0.114)
 
@@ -183,6 +185,11 @@ def compute_metrics_numpy(arr, keys=BUILTIN_METRICS):
         mn = a.min(axis=-1)
         s = np.where(mx >= 1e-6, (mx - mn) / np.maximum(mx, np.float32(1e-6)), np.float32(0.0))
         out["saturation"] = float(s.mean(dtype=np.float64))
+    if "sobel" in keys and y.shape[0] >= 3 and y.shape[1] >= 3:
+        two = np.float32(2.0)
+        gx = (y[:-2, 2:] + two * y[1:-1, 2:] + y[2:, 2:]) - (y[:-2, :-2] + two * y[1:-1, :-2] + y[2:, :-2])
+        gy = (y[2:, :-2] + two * y[2:, 1:-1] + y[2:, 2:]) - (y[:-2, :-2] + two * y[:-2, 1:-1] + y[:-2, 2:])
+        out["sobel"] = float((np.sqrt(gx * gx + gy * gy) * np.float32(_SOBEL_SCALE)).mean(dtype=np.float64))
     return {k: _round4(v) for k, v in out.items() if math.isfinite(v)}
 
 
@@ -278,6 +285,12 @@ def compute_metrics_torch(images, keys=BUILTIN_METRICS):
             s = torch.where(mx >= 1e-6, (mx - mn) / mx.clamp_min(1e-6), torch.zeros_like(mx))
             cols.append(s.reshape(B, -1).mean(dim=1))
             names.append("saturation")
+        if "sobel" in keys and H >= 3 and W >= 3:
+            kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]], device=y.device, dtype=y.dtype)
+            k = (torch.stack([kx, kx.t()]) * _SOBEL_SCALE)[:, None]        # [2,1,3,3]
+            gr = torch.nn.functional.conv2d(y[:, None], k)                   # [B,2,H-2,W-2]
+            cols.append(gr.pow(2).sum(dim=1).sqrt().reshape(B, -1).mean(dim=1))
+            names.append("sobel")
         if not cols:
             return [{} for _ in range(B)]
         table = torch.stack([c.float() for c in cols], dim=1).cpu().tolist()   # the one sync

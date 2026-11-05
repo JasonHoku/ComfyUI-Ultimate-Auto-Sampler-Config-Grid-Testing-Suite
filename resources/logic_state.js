@@ -65,14 +65,14 @@ const sortOptionsList = [
 
 // Optional per-image metrics (item.metrics = {sharpness, entropy, ...}); see image_metrics.py.
 // Built-ins come first in this order, unknown keys (scorer packs) follow alphabetically.
-const METRIC_BUILTIN_ORDER = ['sharpness', 'entropy', 'colorfulness', 'contrast', 'luma', 'saturation'];
+const METRIC_BUILTIN_ORDER = ['sharpness', 'entropy', 'colorfulness', 'contrast', 'luma', 'saturation', 'sobel'];
 const METRIC_LABELS = {
     sharpness: 'Sharpness', entropy: 'Entropy', colorfulness: 'Colorful',
-    contrast: 'Contrast', luma: 'Luma', saturation: 'Saturation', aesthetic: 'Aesthetic'
+    contrast: 'Contrast', luma: 'Luma', saturation: 'Saturation', sobel: 'Sobel', aesthetic: 'Aesthetic'
 };
 const METRIC_SHORT = {
     sharpness: 'Shp', entropy: 'Ent', colorfulness: 'Col',
-    contrast: 'Ctr', luma: 'Lum', saturation: 'Sat', aesthetic: 'Aes'
+    contrast: 'Ctr', luma: 'Lum', saturation: 'Sat', sobel: 'Sob', aesthetic: 'Aes'
 };
 
 // --- SEARCH FILTER STATE ---

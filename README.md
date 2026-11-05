@@ -119,6 +119,7 @@ If you'd rather build the graph yourself:
   - [JSON Bars](#json-bars-bottom--horizontal-layout)
   - [Revision Modal](#revision-modal)
   - [Pairwise Review](#pairwise-review-blind-ab-compare--scoreboard)
+  - [Stats Panel](#stats-panel-per-setting-analytics)
   - [Standalone Dashboard](#standalone-dashboard-phone--second-monitor)
 - [Example Workflows](#-example-workflows)
   - [Quick Quality Test](#quick-quality-test-40-images)
@@ -208,7 +209,7 @@ If you'd rather build the graph yourself:
 * **Seed Behavior Settings:** Per-config seed control — `fixed` uses the node seed, `randomize` generates a new seed per image, `full_run_seed` overrides the node seed entirely.
 * **Configurable Label Mode:** Toggle overlay labels on dashboard cards showing model, sampler, scheduler, steps, CFG, and other parameters directly on each image.
 * **GPU Cooldown:** Automatic pause between generations to prevent thermal throttling. Configurable interval, duration, and optional VRAM clearing.
-* **Image Metrics (optional):** Run Settings checkbox that stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image in the manifest (see [Image Metrics](#image-metrics-optional)).
+* **Image Metrics (optional):** Run Settings checkbox that stores sharpness, entropy, colorfulness, contrast, luma, saturation and Sobel edges for every saved image in the manifest (see [Image Metrics](#image-metrics-optional)).
 * **Workflow Sweep:** sweep any ComfyUI workflow exported as API JSON. Bind any input as an axis, dry run it, then pause, resume or cancel; every image lands in a normal USCG session (see [Workflow Sweep](#workflow-sweep-sweep-any-comfyui-workflow)).
 * **Job Order (Minimize reloads):** reorders the whole job list so each model and LoRA stack loads as few times as possible (see [Job Order & Preview Pass](#job-order--preview-pass-run-settings)).
 * **Preview Pass (generator side):** renders the whole grid cheaply first; reject the losers and only the survivors render at full quality (see [Job Order & Preview Pass](#job-order--preview-pass-run-settings)).
@@ -885,12 +886,14 @@ Run Settings has a **Compute Image Metrics** checkbox (default OFF). When it is 
 | `contrast` | Standard deviation of luma (RMS contrast) | 0-0.5 |
 | `luma` | Mean brightness (Rec.601 luma) | 0-1 |
 | `saturation` | Mean HSV saturation | 0-1 |
+| `sobel` | Mean Sobel gradient magnitude of luma (0-1 scale; kernels /4, so a full black-to-white step reads 1) | 0 = flat; most generations land well under 0.2 (measure your own); max ~1.41 |
 
 Notes:
+* `sobel` complements `sharpness`: it responds to real edges and ignores pixel-level noise (a 1-pixel checkerboard reads 0 Sobel but a huge sharpness), so a high Sobel with a moderate sharpness means structure, not grain. It is absent for images smaller than 3 px on a side.
 * Metrics are measured on an "analysis image": the long side is block-averaged down to at most 1024 px (by the smallest integer factor), so a 2x upscale stays comparable with its 1024 base image and the cost is capped. The constant is `ANALYSIS_MAX_SIDE` in `image_metrics.py`; changing it would make old sessions incomparable.
 * They measure image **signal, not taste**: noise raises sharpness and entropy, and a dark moody image is not a worse one. Use them to rank and filter, then look.
 * Upscales are measured again (a derived image never inherits its source's numbers). Dashboard-triggered upscales measure only when the source image had metrics.
-* Items from remote Distributed workers are measured too: the worker computes the built-in metrics on its decoded image, and the master scores the optional scorer packs for every worker image in one pass after collection (so workers do not need the scorer pack installed). An older companion/worker sends no metrics and the master measures the saved file instead.
+* Items from remote Distributed workers are measured too: the worker computes the built-in metrics on its decoded image, and the master scores the optional scorer packs for every worker image in one pass after collection (so workers do not need the scorer pack installed). An older companion/worker sends no metrics and the master measures the saved file instead; workers on an older USCG omit Sobel, and the master measures it from the saved file.
 * Optional scorer packs plug in through `nodes.NODE_CLASS_MAPPINGS` without any import, and their scores are stored next to the built-ins. The Builder lists each pack with `installed`, `installed, but <problem>` (for example "no model file in models/aesthetic") or `not installed (install ...)` (text only, nothing is downloaded); the checkbox is only clickable when the pack is usable. See **Optional scorer packs** below.
 
 **Optional scorer packs**
@@ -903,7 +906,7 @@ Notes:
   USCG passes **one image per call** (the node only scores image 1 of a batch) and rescales the node's integer x100 output. The node reloads CLIP from disk on every call, so expect several seconds per image (measured 7.6 s per image on an RTX 3070 8 GB next to an SDXL 1024x1024 run, about 0.9 GB extra VRAM; the SDXL run itself took 10-16 s per image). USCG asks ComfyUI's memory manager to free VRAM before each call. On a card this small a model may be evicted and reloaded, which is slower but correct. The node hardcodes `cuda`, so CPU/MPS/AMD hosts fail and the adapter switches itself off for the run with one warning (the built-in metrics are unaffected). A per-adapter timing line (`[GridTester] 📏 metric adapter 'aesthetic': N images, mean X ms`) is printed when the run ends.
 * **ImageReward** has a registry entry checked against the source of `ZaneA/ComfyUI-ImageReward@5e9936d` (prompt comes from the item's positive prompt, score is the FLOAT output, roughly -2 to +2 and relative to the prompt, so only compare scores of the same prompt), but it ships **disabled**, and a wave-3 feasibility check (11/4/26) confirmed why: the only PyPI release the pack pins, `image-reward==1.4`, fails to import under transformers 5 (`find_pruneable_heads_and_indices` and `PreTrainedModel.get_head_mask` were removed), so it needs a hand patch of `site-packages/ImageReward/models/BLIP/med.py` on every transformers-5 host; it also pins `timm==0.6.13`, builds `fairscale`, downloads 1.8 GB on first load and may trip `torch.load(weights_only=True)`. On a transformers-4 host that has the pack working, enabling it is a one-word change in `image_metrics.ADAPTERS` (set `enabled` to True); note the score uses only the first ~35 BERT tokens of the prompt, so compare within one prompt only.
 * **In the Dashboard:** once a session has metrics, the Sort popup gains one option per metric (descending, items without the metric sort last, in both the primary and secondary lists), the Logic Filter field list gains a **Metrics** group, and a **Metric range** row adds `>= min` / `<= max` filters in one click (placeholders show the observed range). The label panel has a **Metrics** checkbox that prints `Shp:812 Ent:7.41 Col:41.2 ...` on each card. Logic filters skip items that lack the field, so images without metrics (older items, videos) stay visible; Quick Filter is categorical and does not list metrics, use the Logic Filter for ranges. Sessions without metrics show none of this.
-* **Older sessions:** the cog panel's **IMAGE METRICS** section has **Compute metrics for this session**, a background job (CPU only, no VRAM, about 50 ms per image) that measures every image without metrics, skips videos, shows progress and can be cancelled by clicking the button again. It rewrites only the `metrics` field under the manifest lock, so favorites and notes you change meanwhile survive. Do not run it on a session that is still generating.
+* **Older sessions:** the cog panel's **IMAGE METRICS** section has **Compute metrics for this session**, a background job (CPU only, no VRAM, about 50 ms per image) that measures every image that is missing any metric (for example Sobel on sessions measured before it existed; values already stored are never changed), skips videos, shows progress and can be cancelled by clicking the button again. It rewrites only the `metrics` field under the manifest lock, so favorites and notes you change meanwhile survive. Do not run it on a session that is still generating.
 * The setting is session-level (like GPU Cooldown), so it is NOT a per-config field: it lives in `_session_settings.metrics`, not in `_EXPECTED_CONFIG_KEYS` or `expand_configs`.
 
 ### Workflow Sweep (sweep any ComfyUI workflow)
@@ -1015,6 +1018,17 @@ The star is an absolute signal that says little about which *setting* wins. Comp
 * **Phone:** the lightbox is stacked (preview on top, form below) with a pinned action bar `Prev | Favorite | Reject | Compare | Revise | Next`; **Compare** opens compare mode from the lightbox. On a phone swipe **left = A**, **right = B** (same as the arrow keys); a tap on a pane still votes, a short or mostly-vertical drag does nothing. Videos autoplay muted and inline side by side (a play button appears if the browser refuses autoplay). The standalone page header has a share button (system share sheet, else copies the link) and a session picker button.
 * **Manifest fields:** every upscaled item carries `base_width` / `base_height` (the size of the generated image the upscale started from; compare's Resolution axis uses them, older manifests fall back to an estimate from `upscale_ratio`). Scanned folders get `source_relpath` and **stable ids** (derived from the relative path, in `[2^52, 2^53)`, so they never collide with generated ids), so re-scanning a folder keeps favorites, notes, metrics and votes.
 * **Caveat:** win % across mixed opponents is not a controlled effect size; pair choice is biased by the filter and the low-vote preference. Use it to rank candidates, then confirm with a matched one-axis run.
+
+### Stats Panel (per-setting analytics)
+
+The **bar-chart button** in the header bar (or **SETTINGS STATS (PER AXIS)** in the cog panel's Manifest Analytics section) opens a docked panel in the top-right corner (bottom of the screen on phones). It is not a modal: it stays open while you favorite, reject, filter, vote and while new images arrive, and refreshes itself (at most 4 times per second).
+
+* **One table per setting:** model, LoRA, sampler, scheduler, steps, CFG, denoise, resolution, attention mode, upscale, pass (preview or full), prompt, plus every Workflow Sweep parameter (`wf_params`; parameters with more than 64 distinct values, such as seeds, are skipped). Axes where every item has the same value are folded into a "Same for every item" line.
+* **Columns:** n, Fav % and Rej % (share of that value's items), Avg s (mean generation time), one column per metric the session has (mean over the items that have it) and Rating (mean pairwise rating, only after you voted). Click a header to sort; the choice is remembered.
+* **Small samples:** rows with fewer than 3 items are dimmed and always sorted below the rest; the best Fav % row (3 or more items) is highlighted.
+* **Scope:** *Current filter* applies the Quick/Button/Logic/Search filters but not the Favorites / Non-Favorited / Rejected visibility toggles, so rejects and favorites are still counted when the grid hides them (otherwise Reject % would always read 0). *Whole session* counts everything except superseded previews.
+* **Copy Markdown** copies every table for the current scope and sort, ready to paste into an issue or chat.
+* Press `Escape` (after the Filters popup) or the X to close; the panel can also be collapsed to its title bar.
 
 ### Standalone Dashboard (phone / second monitor)
 
@@ -1572,7 +1586,7 @@ Bot pattern: `POST /run`, post `dashboard_url` to the channel, poll `run_status`
 | GET | `/config_tester/manifest` | A session's manifest as compact JSON `?session=<name>` (gzip, ETag / 304); what the Dashboard fetches |
 | POST | `/config_tester/save_comparisons` | Append / remove Pairwise Review votes `{session_name, append, remove}` |
 | POST | `/config_tester/clear_comparisons` | Delete every vote of a session `{session_name}` |
-| POST | `/config_tester/compute_metrics` | Start the background metrics job for a session `{session_name, overwrite?}`; returns `{job_id, total_images}` |
+| POST | `/config_tester/compute_metrics` | Start the background metrics job for a session `{session_name, overwrite?, fill_missing?}`; returns `{job_id, total_images}` |
 | GET | `/config_tester/metrics_status` | Progress of a metrics job, `?job_id=` |
 | POST | `/config_tester/cancel_metrics` | Cancel a metrics job `{job_id}` |
 | POST | `/config_tester/sweep/parse` | Workflow Sweep: describe an API-format workflow `{api_json}` |
@@ -1631,7 +1645,7 @@ ComfyUI/output/benchmarks/model-data/
 | `+/-` | Zoom in/out |
 | `0` | Reset zoom to 1:1 |
 | `F` | Auto-fit first row to viewport width |
-| `Escape` | Close active modal/popup (priority: Revision > Scoreboard > Analytics > Settings > Filters) |
+| `Escape` | Close active modal/popup (priority: Revision > Scoreboard > Analytics > Settings > Filters > Stats panel) |
 | `C` | Open Compare mode (blind pairwise review, see [Pairwise Review](#pairwise-review-blind-ab-compare--scoreboard)) |
 
 ### Dashboard: Compare mode (blind pairwise review)
@@ -1850,10 +1864,12 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 
 ### Update 11/4/26: Standalone dashboard, pairwise review, image metrics, preview pass, workflow sweeps
 * ⚡ **Dashboard loads from cached bundles:** the dashboard page shrank from ~527 KB to ~70 KB. Its JavaScript and CSS are served once as content-hashed, immutable files (`/config_tester/dashboard_bundle_js` and `_css`), so a repeat load or a second dashboard costs only a small 304, and each run's result message (which carries the page) is ~450 KB lighter. Edit-and-reload of `resources/` still works. `USCG_INLINE_DASHBOARD_ASSETS=1` restores the single-file page.
+* 📊 **Stats panel:** header button (and cog entry) opens a live, docked panel with favorites rate, reject rate, mean time, mean metrics and mean rating per sampler, scheduler, model, LoRA, steps, CFG, resolution, pass and every workflow-sweep parameter, with a Copy Markdown button (see [Stats Panel](#stats-panel-per-setting-analytics)).
+* 🔲 **Sobel edge metric:** new built-in image metric `sobel` (mean Sobel gradient of luma, 0-1) next to Sharpness; "Compute metrics for this session" now also fills in metrics that older items are missing, without changing stored values.
 * 🧩 **Regional prompts (`COUPLE`):** `base COUPLE left | right` (or `COUPLE(rows)`, 2-4 regions, per-region `:w` weight) gives each part of the image its own prompt using native masked conditioning. Triggers, model prefix/suffix and HiRes "Append to end" text go into the base; works with HiRes, tiled HiRes and Florence2 crops. The conditioning cache on disk now keeps every entry (AND prompts included), so older cache files are re-encoded once. See [Prompt Combinators & Regional Prompts (COUPLE)](#prompt-combinators--regional-prompts-couple).
 * 📱 **Standalone Dashboard + Run API:** open the dashboard as a normal web page at `/config_tester/dashboard?session=<name>` (phone, second monitor) with live updates over its own websocket. `POST /config_tester/run` and `GET /config_tester/run_status` start and track headless runs (Discord bot, curl) without any workflow JSON.
 * ⚖️ **Pairwise Review:** blind A/B compare mode (`C` key) with matched, same-settings, one-axis and random pairing, Bradley-Terry ratings (Sort by Rating) and a per-setting scoreboard with 95% intervals. Votes are stored in the session manifest under `comparisons`.
-* 📏 **Image Metrics (optional):** a Run Settings checkbox stores sharpness, entropy, colorfulness, contrast, luma and saturation for every saved image. Sort, filter and label by them in the Dashboard, or compute them for older sessions from the cog panel.
+* 📏 **Image Metrics (optional):** a Run Settings checkbox stores sharpness, entropy, colorfulness, contrast, luma, saturation and Sobel edges for every saved image. Sort, filter and label by them in the Dashboard, or compute them for older sessions from the cog panel.
 * 🧭 **Job Order & Preview Pass:** `Minimize model/LoRA reloads` reorders the whole job list so each model and LoRA stack loads as few times as possible. Preview Pass renders the whole grid cheaply first; reject the losers and only the survivors render at full quality (PREVIEW badge, Pass filter, "Full pass for survivors" button).
 * 🔀 **Workflow Sweep:** sweep any ComfyUI workflow exported as API JSON. Bind any input as an axis (prompts, LoRAs, resolution, seeds, any widget), dry run it, then pause, resume or cancel; every image lands in a normal USCG session.
 * ⚡ **Faster prompt encoding:** the text encoder now loads once per pre-encode pass instead of once per prompt, and the new `te_batch_size` setting encodes several prompts per pass for MOSS-Image, Krea 2 and Qwen-Image (off by default, self-checked, OOM-safe).

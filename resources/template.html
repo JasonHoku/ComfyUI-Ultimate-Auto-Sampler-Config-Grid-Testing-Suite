@@ -50,6 +50,10 @@
             </svg>
         </button>
 
+        <button class="fs-btn" id="analytics-open-btn" onclick="toggleAnalyticsPanel()" title="Stats per setting (favorites rate, time, metrics)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="12"></line><line x1="12" y1="20" x2="12" y2="6"></line><line x1="18" y1="20" x2="18" y2="9"></line></svg>
+        </button>
+
         <button class="fs-btn" onclick="loadSession()" title="Reload Session (R)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="23 4 23 10 17 10"></polyline>
@@ -253,12 +257,12 @@
                 <div class="cog-panel-section-title">IMAGE METRICS</div>
                 <button class="session-action-btn" id="compute-metrics-btn"
                     style="background: #2b5f9e; width: 100%; font-size: 11px; padding: 10px;"
-                    onclick="startSessionMetrics()" title="Measure sharpness, entropy, colorfulness, contrast, luma and saturation for every image that has no metrics yet (CPU only)">
+                    onclick="startSessionMetrics()" title="Measure sharpness, entropy, colorfulness, contrast, luma, saturation and Sobel edges for every image that is missing any of them (CPU only)">
                     COMPUTE METRICS FOR THIS SESSION
                 </button>
                 <div id="compute-metrics-progress" style="display: none; margin-top: 6px; font-size: 10px; color: #9ab;"></div>
                 <div style="font-size: 9px; color: #666; margin-top: 6px;">
-                    Adds sortable/filterable metrics to older sessions. Skips videos and images that already have metrics. Do not run it while this session is still generating.
+                    Fills in metrics missing from older items (for example Sobel on sessions measured before it existed). Never changes values already stored. Skips videos. Do not run it while this session is still generating.
                 </div>
             </div>
 
@@ -427,8 +431,13 @@
             <div class="cog-panel-section">
                 <div class="cog-panel-section-title">MANIFEST ANALYTICS</div>
                 <div style="font-size: 9px; color: #666; margin-bottom: 8px;">
-                    Analyze favorited items in the current session manifest.
+                    Per-setting favorites rate, time and metrics (live), or usage counts of favorited items.
                 </div>
+                <button class="session-action-btn"
+                    style="background: #3e8ed0; width: 100%; font-size: 11px; padding: 10px; margin-bottom: 6px;"
+                    onclick="openAnalyticsPanel()" title="Favorites rate, rejects, time and metrics per setting value (live panel)">
+                    SETTINGS STATS (PER AXIS)
+                </button>
                 <button class="session-action-btn"
                     style="background: #8b5cf6; width: 100%; font-size: 11px; padding: 10px; margin-bottom: 6px;"
                     onclick="runManifestAnalysis('lora')" title="Count LoRA usage across favorited items">
