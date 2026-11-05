@@ -8,6 +8,7 @@ We stub those out here so pytest can collect and run unit tests without ComfyUI.
 import sys
 import types
 import os
+import threading
 
 # Try to import real torch first — some tests (crop/paste, integration) need it.
 # If torch isn't installed in the active Python, fall through to the stub loop below.
@@ -106,6 +107,7 @@ _GEN_ORCH_DEPS = {
         "encode_pair_cached": lambda *a, **kw: (None, None),
     },
     "manifest_utils": {
+        "_manifest_lock": threading.Lock(),
         "load_existing_manifest": lambda *a, **kw: {},
         "save_manifest": lambda *a, **kw: None,
         "preserve_disk_comparisons": lambda *a, **kw: None,
@@ -138,6 +140,7 @@ _GEN_ORCH_DEPS = {
         "pil_to_image_array": lambda *a, **kw: None,
         "calculate_eta": lambda *a, **kw: 0.0,
         "print_generation_progress": lambda *a, **kw: None,
+        "format_eta_str": lambda seconds: f"{int(seconds)}s",
     },
     "html_generator": {
         "get_html_template": lambda *a, **kw: "",

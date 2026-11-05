@@ -867,7 +867,7 @@ Limitations: no per-region LoRAs, equal splits only (no ratios), hard region edg
 ### Job Order & Preview Pass (Run Settings)
 Both live in the **Run Settings** section of the Config Builder and default to the old behaviour.
 
-* **Job Order:** `As written (default)` runs one resolution pass after another, exactly as before. `Minimize model/LoRA reloads` re-groups the job list by model, LoRA stack, VAE and resolution. `As written` is already grouped by model (and Builder per-config resolutions stay inside their model group), so Minimize only changes anything when LoRA folders or random LoRA picks expand into different stacks (e.g. a model with 2 LoRA folders alternating A1 B1 A2 B2 becomes A1 A2 B1 B2), or when a batched latent is connected (one pass per latent). LoRA stacks are grouped before VAEs, so a model with several VAEs and several LoRA stacks can switch VAE more often than as written. The log prints the model/LoRA/VAE switch counts before and after and says when nothing changed. **Start At Job #** numbers follow the chosen order. In distributed mode the master computes the order and queues jobs to workers in it (see **Distributed parity** below); Start At Job is not applied there.
+* **Job Order:** `As written (default)` runs one resolution pass after another, exactly as before. `Minimize model/LoRA reloads` re-groups the job list by model, LoRA stack, VAE and resolution. `As written` is already grouped by model (and Builder per-config resolutions stay inside their model group), so Minimize only changes anything when LoRA folders or random LoRA picks expand into different stacks (e.g. a model with 2 LoRA folders alternating A1 B1 A2 B2 becomes A1 A2 B1 B2), or when a batched latent is connected (one pass per latent). LoRA stacks are grouped before VAEs, so a model with several VAEs and several LoRA stacks can switch VAE more often than as written. The log prints the model/LoRA/VAE switch counts before and after and says when nothing changed. **Start At Job #** numbers follow the chosen order. In distributed mode the master computes the order and queues jobs to workers in it (see **Distributed parity** below); Start At Job skips the earlier plan positions there too, and they count as done in the progress bar.
 * **Preview Pass:** renders every cell cheaply first (fewer **Preview Steps**, smaller image via **Preview Scale** x0.25/0.33/0.5/0.75 snapped to the model's latent grid, optional **Preview CFG Override**, upscaling skipped) so you see the whole grid in a fraction of the time. Preview images carry a `PREVIEW` badge on the Dashboard. Reject the losers, then **untick Preview Pass and queue again**: only the surviving cells render at full quality, and each full image replaces its preview in the default Dashboard view. Interrupted preview passes resume (previews already done are skipped), and a preview pass skips cells that already have a full image. Not used when a latent input is connected; LTX video configs always render normally. Works in distributed mode too (the master decides which cells to render and stamps every preview, whichever machine rendered it).
 * **Skip Rejected Previews** (default on) and **Only Favorited Previews**: apply when Preview Pass is OFF. Cells whose preview you rejected are skipped, including after **Delete Rejected** (the rejection is remembered in `meta.rejected_preview_fps`). With *Only Favorited*, a cell that has a preview is rendered only if that preview is favorited; cells with no preview are still rendered. `Overwrite Existing` does not override a rejection.
 * A cell is identified by a **config fingerprint** (model, LoRA stack, VAE, text encoders, sampler, scheduler, CFG, denoise, seed, raw prompts, full resolution, plus advanced-sampling/SLG/deep-shrink settings; *not* steps). Cells whose seed is re-randomised on every run (`random_before`, extra random seeds) cannot be matched to a preview and simply render again.
@@ -1706,13 +1706,22 @@ The master decides everything stateful and workers stay plain renderers:
 * Every item records which machine rendered it in `dist_worker` (`master` or the worker id). It is bookkeeping, not a setting: the pairwise review ignores it when deciding whether two images differ.
 * Rejected-preview tombstones, job order and the run-API session settings now survive a distributed run (they used to be overwritten).
 * Needs **ComfyUI-USCG-Distributed with `populate_from_plan`** on the master and an updated USCG on every worker (the worker needs `config_utils.preview_dims` for previews). With an older companion the master logs a warning and falls back to the old behaviour (job order and previews ignored). A preview job answered by a worker that ignored the render override is rejected and re-queued, never saved as a mislabelled full-size image.
-* Not covered yet: re-checking rejects made while a distributed run is in progress, claim affinity (a worker preferring jobs for the model it already loaded), Start At Job #, LTX video on workers.
+* **Rejects made during the run:** a full pass re-reads the dashboard's reject state when a job is claimed (at most every 2 s, only when the manifest changed). A preview you reject while the run is going is dropped at claim time (log: `dropped at claim: rejected_preview`) and counts as skipped in the progress bar. Not applied to the preview pass itself, or when optional model/conditioning inputs are connected. Needs the updated companion (`set_claim_filter`).
+* **Claim affinity:** a worker (and the master) is preferably handed the next job for the model and LoRA stack it already has loaded, so a mixed run reloads far fewer checkpoints. Jobs stay in the master's plan order otherwise.
+* **Start At Job #:** the first N-1 plan positions are skipped before any other check and counted as skipped.
+* **LTX video** always renders on the master (workers cannot load it): the master renders the videos while the workers render the images, and an LTX job is never skipped as "already exists". With an older companion that has no `populate_from_plan`, a run containing LTX configs stops with an error asking you to update the companion.
+* **Live progress and ETA:** the dashboard bar shows `Job x/y (p%) | ETA ... | Ns/job | N machine(s)` and updates whenever a worker returns a result. The ETA divides the remaining jobs by the combined throughput of every machine that is currently working (rolling average of the last 10 jobs each).
+* Needs the updated **ComfyUI-USCG-Distributed** for the features above; with the old companion the master simply skips them.
 
 ### Model Sync
 
 When enabled, the master automatically transfers checkpoint and LoRA files to workers that don't have them.
 
 **Enable:** Toggle "Sync Models to Workers" in Distribution Settings.
+
+**What is synced:** the checkpoint, the LoRAs, the VAE and the text encoders / diffusion models a job needs, into the matching folder on the worker (sub-folders are kept; model names with backslashes work between Windows and Linux). A file is downloaded once per worker even when several jobs need it. A VAE of `None` means the model's own VAE and is never requested.
+
+**Slow downloads:** the master waits for workers for the Distribution **wait timeout** (default: the larger of 600 s and the Claim Timeout; set `wait_timeout` in the distribution config to change it). When it is over, the master reclaims the jobs still claimed by workers and renders them itself, so a long model download no longer loses images; a late result from the worker is discarded as a duplicate.
 
 ### Distribution Troubleshooting
 
@@ -1721,6 +1730,8 @@ When enabled, the master automatically transfers checkpoint and LoRA files to wo
 * **Duplicate images:** If a worker times out but actually completes the job, duplicates may appear. Increase claim timeout to prevent this.
 * **Workers not using pre-encoded prompts:** Ensure "Use Master Text Encoding" is enabled. Check worker console for `"Using master pre-encoded conditionings"` log message.
 * **Model sync failing:** Ensure both master and worker have sufficient disk space. Check worker console for download errors.
+* **Master says "rendering N reclaimed job(s) on the master":** the workers did not finish within the wait timeout (usually a big model download). The master took those jobs over; raise `wait_timeout` or sync the model once beforehand.
+* **"LTX video configs ... need an updated ComfyUI-USCG-Distributed":** update the companion on the master, or turn Distribution off for the run.
 
 ---
 
@@ -1820,7 +1831,7 @@ __init__.py
 |---|---|---|---|
 | `ultimate_grid.update` | `generation_orchestrator.py` | `{session_name, node, manifest, meta, new_items}` | New images generated |
 | `ultimate_grid.update_data` | `generation_orchestrator.py`, `upscale_runner.py` | per-item replacement payload | An existing item changed (for example a preview replaced by its full image) |
-| `ultimate_grid.progress` | `generation_orchestrator.py` | `{session_name, progress_pct, eta_str, ...}` | ETA/progress updates. Optional `phase`: `upscaling` (deferred upscales) or `sweep` (Workflow Sweep, which adds `sweep_id, state, errors`) |
+| `ultimate_grid.progress` | `generation_orchestrator.py` | `{session_name, progress_pct, eta_str, ...}` | ETA/progress updates. Optional `phase`: `upscaling` (deferred upscales), `distributed` (distributed run, adds `workers` = machines currently working) or `sweep` (Workflow Sweep, which adds `sweep_id, state, errors`) |
 | `ultimate_grid.next_run_seeds` | `generation_orchestrator.py` | `{node, seeds}` | Seeds the next run will use |
 | `ultimate_grid.metrics_progress` | `metrics_runner.py` | `{session_name, job_id, status, completed, total}` | Progress of a "compute metrics for this session" job |
 | `ultimate_grid.distribution_status` | `generation_orchestrator.py` | `{session_name, workers, stats}` | Distribution status |

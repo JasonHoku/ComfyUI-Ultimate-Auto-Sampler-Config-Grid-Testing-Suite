@@ -28,7 +28,8 @@ from .model_loader import (
 from .lora_utils import expand_lora_folder
 from .image_generation import (
     generate_image, generate_image_attn_safe, flush_batch_with_vae, flush_batch_with_remote_vae,
-    create_image_metadata, decode_latent_with_vae, pil_to_image_array, calculate_eta, print_generation_progress
+    create_image_metadata, decode_latent_with_vae, pil_to_image_array, calculate_eta, print_generation_progress,
+    format_eta_str
 )
 from .config_utils import sanitize_session_name
 from .html_generator import get_html_template
@@ -1665,64 +1666,18 @@ def run_generation_loop(
             except:
                 pass
 
+        # ==== START AT JOB # (skip earlier jobs; LTX jobs too) ====
+        if start_at_job > 0 and current_job < start_at_job:
+            skipped_count += 1
+            continue
+
         # LTX Video dispatch — must run BEFORE any image-gen-specific code that
         # accesses conf['sampler']/conf['steps'] (LTX configs use sampler_stage1/2).
         if conf.get("model_type") == "ltx_video":
-            from .ltx_video_generation import preflight_ltx, load_ltx_models, ltx_video_generate
-
-            if has_regions(conf.get("positive", "")) or has_regions(conf.get("negative", "")):
-                print("[GridTester] ⚠️ COUPLE regional prompts are not supported for LTX video; text is encoded literally")
-
-            # Pre-flight on first LTX config of this run (idempotent — cached check internally)
-            if not _ltx_preflight_done[0]:
-                try:
-                    preflight_ltx(conf)
-                    _ltx_preflight_done[0] = True
-                    # Free image-gen caches to make room for LTX VRAM
-                    try:
-                        from . import model_cache as mc
-                        if hasattr(mc, "clear_image_caches"):
-                            mc.clear_image_caches()
-                    except Exception:
-                        pass
-                except RuntimeError as e:
-                    print(f"[GridTester] LTX preflight FAILED: {e}")
-                    raise
-
-            # Override conf width/height with the current loop's resolution.
-            # The loop's `w, h` comes from the sampler node's resolutions widget
-            # (or a per-config override). LTX configs don't have width/height in
-            # their builder UI yet, so the cartesian-expansion defaults (446x576)
-            # would otherwise stick.
-            conf["width"] = w
-            conf["height"] = h
-
-            # Filename uses gen index + timestamp suffix to guarantee uniqueness
-            # per run. Skip-on-exists is intentionally NOT enabled for LTX (v1) —
-            # the resume/match logic image-gen uses doesn't yet understand LTX
-            # config fields (sigmas, strengths, audio_mode, etc.) so it produced
-            # false-positive skips on real config changes (e.g., LoRA strength,
-            # seed). Until we have a proper LTX-aware manifest match, every LTX
-            # gen runs fresh. Users can manually delete unwanted mp4s.
-            _ts_suffix = str(int(time.time() * 1000) % 10_000_000)
-            ltx_output_filename = f"{conf_idx:06d}_seed{conf.get('seed', 0)}_{w}x{h}_dur{conf.get('duration_seconds', 5)}s_{conf.get('frame_rate', 25)}fps_{_ts_suffix}"
-            ltx_output_path = os.path.join(paths["images"], ltx_output_filename + ".mp4")
-
             progress_pct = int((current_job / total_jobs) * 100)
             print(f"[GridTester] 📊 {current_job}/{total_jobs} ({progress_pct}%) | "
-                  f"LTX {conf.get('duration_seconds', 5)}s @ {conf.get('frame_rate', 25)}fps | {conf.get('width')}x{conf.get('height')}")
-
-            try:
-                ltx_models = load_ltx_models(conf)
-                gen_result = ltx_video_generate(conf, ltx_models, ltx_output_path)
-            except Exception as e:
-                print(f"[GridTester] LTX gen FAILED for config {conf_idx}: {e}")
-                raise
-
-            # Build manifest entry and persist
-            item = _build_ltx_manifest_entry(conf, gen_result, ltx_output_filename, gen_index=conf_idx, session_name=session_name)
-            existing_data["items"].insert(0, item)
-            save_manifest(paths["manifest"], existing_data)
+                  f"LTX {conf.get('duration_seconds', 5)}s @ {conf.get('frame_rate', 25)}fps | {w}x{h}")
+            _render_ltx_job(conf, w, h, conf_idx, paths, existing_data, session_name, _ltx_preflight_done)
 
             # Skip the standard image-gen path
             continue
@@ -1742,11 +1697,6 @@ def run_generation_loop(
         )
         actual_negative_prompt = conf["negative"]
             
-        # ==== START AT JOB # (skip earlier jobs) ====
-        if start_at_job > 0 and current_job < start_at_job:
-            skipped_count += 1
-            continue
-
         # ==== PREVIEW PROMOTION SKIP ====
         # Full run: skip cells whose preview was rejected (or not favorited). Preview run: skip cells
         # that already have a full image. A rejection is an explicit user signal, so overwrite_existing
@@ -3171,8 +3121,219 @@ def _preencode_all_conditionings(
     return encoded_all
 
 
+def _render_ltx_job(conf, w, h, conf_idx, paths, existing_data, session_name, preflight_state,
+                    dist_worker=None):
+    """Render ONE LTX video job on this machine and record it in the manifest.
+
+    Shared by the normal loop and the distributed master (LTX never runs on workers). ``preflight_state``
+    is a one-element list used as a mutable flag so the preflight + image-cache clear run once per run.
+    Returns the manifest item (already inserted at index 0 and saved). Raises on failure.
+    """
+    from .ltx_video_generation import preflight_ltx, load_ltx_models, ltx_video_generate
+
+    if has_regions(conf.get("positive", "")) or has_regions(conf.get("negative", "")):
+        print("[GridTester] ⚠️ COUPLE regional prompts are not supported for LTX video; text is encoded literally")
+
+    # Pre-flight on first LTX config of this run (idempotent — cached check internally)
+    if not preflight_state[0]:
+        try:
+            preflight_ltx(conf)
+            preflight_state[0] = True
+            # Free image-gen caches to make room for LTX VRAM
+            try:
+                from . import model_cache as mc
+                if hasattr(mc, "clear_image_caches"):
+                    mc.clear_image_caches()
+            except Exception:
+                pass
+        except RuntimeError as e:
+            print(f"[GridTester] LTX preflight FAILED: {e}")
+            raise
+
+    # Override conf width/height with the current loop's resolution.
+    # The loop's `w, h` comes from the sampler node's resolutions widget
+    # (or a per-config override). LTX configs don't have width/height in
+    # their builder UI yet, so the cartesian-expansion defaults (446x576)
+    # would otherwise stick.
+    conf["width"] = w
+    conf["height"] = h
+
+    # Filename uses gen index + timestamp suffix to guarantee uniqueness
+    # per run. Skip-on-exists is intentionally NOT enabled for LTX (v1) —
+    # the resume/match logic image-gen uses doesn't yet understand LTX
+    # config fields (sigmas, strengths, audio_mode, etc.) so it produced
+    # false-positive skips on real config changes (e.g., LoRA strength,
+    # seed). Until we have a proper LTX-aware manifest match, every LTX
+    # gen runs fresh. Users can manually delete unwanted mp4s.
+    _ts_suffix = str(int(time.time() * 1000) % 10_000_000)
+    ltx_output_filename = f"{conf_idx:06d}_seed{conf.get('seed', 0)}_{w}x{h}_dur{conf.get('duration_seconds', 5)}s_{conf.get('frame_rate', 25)}fps_{_ts_suffix}"
+    ltx_output_path = os.path.join(paths["images"], ltx_output_filename + ".mp4")
+
+    try:
+        ltx_models = load_ltx_models(conf)
+        gen_result = ltx_video_generate(conf, ltx_models, ltx_output_path)
+    except Exception as e:
+        print(f"[GridTester] LTX gen FAILED for config {conf_idx}: {e}")
+        raise
+
+    # Build manifest entry and persist
+    item = _build_ltx_manifest_entry(conf, gen_result, ltx_output_filename, gen_index=conf_idx, session_name=session_name)
+    if dist_worker:
+        item["dist_worker"] = dist_worker
+    existing_data["items"].insert(0, item)
+    save_manifest(paths["manifest"], existing_data)
+    return item
+
+
+def _dist_wait_timeout(distribution_config):
+    """Seconds the master waits on remote workers before taking their claimed jobs over."""
+    claim_timeout = distribution_config.get("claim_timeout", 600)
+    return int(distribution_config.get("wait_timeout", max(600, claim_timeout)))
+
+
+def _force_reclaim_remote(manager, JobState):
+    """Move every job claimed by a remote worker back to pending (the master renders them itself).
+    Returns how many jobs were moved."""
+    n = 0
+    with manager._lock:
+        for job in manager._jobs.values():
+            if job.state == JobState.CLAIMED and job.worker_id != "master":
+                job.state = JobState.PENDING
+                job.worker_id = None
+                job.claimed_at = None
+                manager._pending_queue.append(job.job_id)
+                n += 1
+    return n
+
+
+def _make_reject_recheck(manifest_path, existing_data, *, skip_rejected, only_favorited,
+                         min_interval=2.0, clock=time.monotonic):
+    """Build ``check(extra, config) -> reason | None`` for the manager's claim filter.
+
+    A preview rejected in the dashboard while a distributed full pass is running must still stop its full
+    render. The manifest on disk is the source of truth (save_changes writes it); it is re-read at most
+    once per ``min_interval`` seconds and only when (mtime_ns, size) changed. Preview jobs and jobs without
+    a stamped fingerprint are never dropped. A read/parse failure keeps the previous index and retries on
+    the next call.
+
+    Lock order: this runs with the manager lock held and takes manifest_utils._manifest_lock, so nothing
+    may take the manager lock while holding the manifest lock.
+    """
+    from .config_utils import build_preview_index, should_skip_for_previews
+    from . import manifest_utils
+
+    def _tombstones(meta):
+        return list((meta or {}).get("rejected_preview_fps", []) or [])
+
+    state = {
+        "key": None, "next": None,
+        "pindex": build_preview_index(existing_data.get("items", []),
+                                      _tombstones(existing_data.get("meta"))),
+    }
+
+    def _refresh():
+        now = clock()
+        if state["next"] is not None and now < state["next"]:
+            return
+        state["next"] = now + min_interval
+        try:
+            st = os.stat(manifest_path)
+        except OSError:
+            return
+        key = (st.st_mtime_ns, st.st_size)
+        if key == state["key"]:
+            return
+        try:
+            with manifest_utils._manifest_lock:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    disk = json.load(f)
+            if not isinstance(disk, dict):
+                return
+            tombs = set(_tombstones(disk.get("meta"))) | set(_tombstones(existing_data.get("meta")))
+            state["pindex"] = build_preview_index(disk.get("items", []) or [], tombs)
+            state["key"] = key
+        except Exception:
+            return  # keep the old index; retry on the next call
+
+    def check(extra, config):
+        extra = extra or {}
+        if extra.get("render"):
+            return None
+        fp = (extra.get("stamp") or {}).get("config_fp")
+        if not fp:
+            return None
+        _refresh()
+        return should_skip_for_previews(fp, state["pindex"], skip_rejected, only_favorited)
+
+    return check
+
+
+def _install_claim_filter(manager, paths, existing_data, *, preview_on, has_optional_inputs,
+                          skip_rejected, only_favorited):
+    """Install the reject re-check on the manager when it applies (full pass, no optional inputs, a
+    skip rule is on) and the companion supports it. Returns True when installed."""
+    if preview_on or has_optional_inputs or not (skip_rejected or only_favorited):
+        return False
+    if not hasattr(manager, "set_claim_filter"):
+        print("[Distribution] ℹ️ Rejects made during the run are not re-checked at claim time: update "
+              "ComfyUI-USCG-Distributed to enable it")
+        return False
+    manager.set_claim_filter(_make_reject_recheck(
+        paths["manifest"], existing_data, skip_rejected=skip_rejected, only_favorited=only_favorited))
+    return True
+
+
+def _distributed_progress_payload(status, eta, base, unique_id, session_name):
+    """The ``ultimate_grid.progress`` payload for a distributed run (pure)."""
+    done = (base["pre_skipped"] + base["ltx_done"] + status.get("completed", 0)
+            + status.get("skipped", 0) + status.get("failed", 0))
+    total = base["plan_total"]
+    pct = min(100, int(done * 100 / total)) if total else 0
+    secs = (eta or {}).get("eta_seconds")
+    if secs is None:
+        eta_str, finish = "—", ""
+    else:
+        eta_str = format_eta_str(secs)
+        finish = time.strftime("%H:%M:%S", time.localtime(time.time() + secs))
+    avg = (eta or {}).get("avg_duration")
+    return {
+        "node": unique_id,
+        "session_name": session_name,
+        "current_job": done,
+        "total_jobs": total,
+        "progress_pct": pct,
+        "eta_str": eta_str,
+        "finish_time": finish,
+        "avg_duration": round(avg, 1) if avg else 0,
+        "last_duration": 0,
+        "phase": "distributed",
+        "workers": (eta or {}).get("active_workers") or 0,
+    }
+
+
+def _emit_distributed_progress(manager, base, unique_id, session_name, status=None):
+    """Send the distributed progress event to the dashboard; never raises."""
+    try:
+        if PromptServer is None:
+            return
+        if status is None:
+            status = manager.get_status()
+        eta = None
+        if hasattr(manager, "get_eta"):
+            try:
+                eta = manager.get_eta()
+            except Exception:
+                eta = None
+        PromptServer.instance.send_sync(
+            "ultimate_grid.progress",
+            _distributed_progress_payload(status, eta, base, unique_id, session_name))
+    except Exception:
+        pass
+
+
 def _send_distribution_status(manager):
     """Send distribution status update to the dashboard."""
+    status = None
     try:
         status = manager.get_status()
         status["active"] = manager.is_active
@@ -3184,10 +3345,17 @@ def _send_distribution_status(manager):
         })
     except Exception:
         pass
+    cb = getattr(manager, "on_status", None)
+    if cb is not None and status is not None:
+        try:
+            cb(status)
+        except Exception:
+            pass
 
 
 def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, has_optional_inputs,
-                              lora_triggerwords_mode, preview=None, skip_rejected=True, only_favorited=False):
+                              lora_triggerwords_mode, preview=None, skip_rejected=True, only_favorited=False,
+                              start_at_job=0):
     """Turn the (already ordered) job plan into the entries the distributed manager queues.
 
     The master decides everything stateful here, with the same rules and order as the normal loop
@@ -3197,7 +3365,9 @@ def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, ha
     ``preview`` is None (full pass) or ``{"steps", "scale", "cfg"}`` (cfg may be None = keep).
     Returns ``(entries, counts)``; an entry is ``{"config", "input_job", "extra"}`` where ``extra`` holds
     ``stamp`` (manifest fields the master adds on collection), optional ``render`` (``preview_scale``) and
-    optional ``seed`` (survivor seed to re-render). ``counts`` = {"exists", "promotion", "full_exists"}.
+    optional ``seed`` (survivor seed to re-render); every entry also carries ``conf_idx``. ``counts`` =
+    {"exists", "promotion", "full_exists"} plus "start_at" when ``start_at_job`` > 1. ``start_at_job`` N > 1 skips plan positions 1..N-1
+    (1-based, like the normal loop) before any other check; LTX entries are never skipped as "existing".
     """
     from .config_utils import (
         config_fingerprint, build_preview_index, build_full_fp_set, should_skip_for_previews
@@ -3208,8 +3378,13 @@ def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, ha
     full_fps = build_full_fp_set(items) if preview else set()
     entries = []
     counts = {"exists": 0, "promotion": 0, "full_exists": 0}
+    if start_at_job > 1:
+        counts["start_at"] = 0  # only present when Start At Job is in effect
 
-    for pj in job_plan:
+    for pos, pj in enumerate(job_plan, 1):
+        if start_at_job > 1 and pos < start_at_job:
+            counts["start_at"] += 1
+            continue
         conf, w, h, batch_idx = pj["conf"], pj["w"], pj["h"], pj["batch_idx"]
         is_ltx = conf.get("model_type") == "ltx_video"
         is_pv = bool(preview) and not is_ltx
@@ -3241,7 +3416,7 @@ def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, ha
 
         # A randomized seed never matches an old item (the normal loop rolls a fresh one before the check),
         # except a survivor's approved seed.
-        if not overwrite_existing and (not randomize or survivor_seed is not None):
+        if not is_ltx and not overwrite_existing and (not randomize or survivor_seed is not None):
             pos_, _ = build_prompt_with_triggers(conf, lora_triggerwords_mode)
             if check_if_job_completed(
                 items, eff_conf, survivor_seed if survivor_seed is not None else conf["seed"],
@@ -3270,6 +3445,7 @@ def _distributed_plan_entries(job_plan, existing_data, *, overwrite_existing, ha
             "input_job": {"label": pj["job"].get("label", f"{w}x{h}"), "width": w, "height": h,
                           "batch_idx": batch_idx},
             "extra": extra,
+            "conf_idx": pj["conf_idx"],
         })
     return entries, counts
 
@@ -3319,39 +3495,62 @@ def _distributed_metrics_pass(existing_data, pre_ids, images_dir, image_path_for
     return out
 
 
+LTX_LEGACY_COMPANION_ERROR = (
+    "LTX video configs in a distributed run are rendered on the master and need an updated "
+    "ComfyUI-USCG-Distributed (populate_from_plan). Update the companion, or turn Distribution off for this run."
+)
+
+
 def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing,
                                   has_optional_inputs, lora_triggerwords_mode, *, job_order="as_written",
                                   preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
-                                  skip_rejected=True, only_favorited=False):
+                                  skip_rejected=True, only_favorited=False, start_at_job=0):
     """Queue the run on the distributed manager: the master's own plan when the companion supports it
-    (populate_from_plan), else the companion's legacy nested loop (job order / preview ignored)."""
+    (populate_from_plan), else the companion's legacy nested loop (job order / preview ignored).
+
+    Returns ``{"counts", "ltx_entries", "queued", "plan_total"}``. LTX entries are NOT queued: the master
+    renders them itself. With the legacy companion ``counts`` is {} and ``plan_total``/``queued`` are None.
+    """
     if job_plan is not None and hasattr(manager, "populate_from_plan"):
         # The master decides order, skips, preview promotion and fingerprints; workers just render.
         _pv = {"steps": pv_steps, "scale": pv_scale, "cfg": pv_cfg} if preview_on else None
         entries, _counts = _distributed_plan_entries(
             job_plan, existing_data, overwrite_existing=overwrite_existing,
             has_optional_inputs=has_optional_inputs, lora_triggerwords_mode=lora_triggerwords_mode,
-            preview=_pv, skip_rejected=skip_rejected, only_favorited=only_favorited
+            preview=_pv, skip_rejected=skip_rejected, only_favorited=only_favorited,
+            start_at_job=start_at_job
         )
-        print(f"[Distribution] 📋 Plan: {len(entries)} job(s) to render | skipped: {_counts['exists']} already exist, "
+        ltx_entries = [e for e in entries if e["config"].get("model_type") == "ltx_video"]
+        queued = [e for e in entries if e["config"].get("model_type") != "ltx_video"]
+        print(f"[Distribution] 📋 Plan: {len(queued)} job(s) to render | skipped: {_counts['exists']} already exist, "
               f"{_counts['promotion']} rejected/unfavorited previews, {_counts['full_exists']} already full")
+        if start_at_job > 1:
+            print(f"[Distribution] ⏭️ Start At Job #{start_at_job}: {start_at_job - 1} job(s) skipped")
+        if ltx_entries:
+            print(f"[Distribution] 🎬 {len(ltx_entries)} LTX job(s) render on the master")
         if job_order != "as_written":
             print(f"[Distribution] 🧭 Job order {job_order}: jobs are claimed in the master's plan order")
         if preview_on:
             print(f"[GridTester] 🔎 Distributed preview pass: {pv_steps} steps, x{pv_scale} scale")
         _spec = image_metrics.current_spec()
         manager.populate_from_plan(
-            entries, run_extras={"metrics_builtins": list(_spec.get("builtins") or [])} if _spec else {})
+            queued, run_extras={"metrics_builtins": list(_spec.get("builtins") or [])} if _spec else {})
+        return {"counts": _counts, "ltx_entries": ltx_entries, "queued": queued, "plan_total": len(job_plan)}
     else:
+        if any(c.get("model_type") == "ltx_video" for c in (expanded or [])):
+            raise RuntimeError(LTX_LEGACY_COMPANION_ERROR)
         if (job_order != "as_written" or preview_on
                 or any(it.get("preview") is True for it in existing_data.get("items", []))):
             print(f"[GridTester] ⚠️ job_order / preview pass / preview promotion need an updated ComfyUI-USCG-Distributed "
                   f"companion - ignored in distributed mode")
+        if start_at_job > 1:
+            print(f"[GridTester] ⚠️ Start At Job needs an updated ComfyUI-USCG-Distributed companion - "
+                  f"ignored in distributed mode")
         manager.populate_jobs(
             expanded, input_jobs, existing_data,
             overwrite_existing, has_optional_inputs, lora_triggerwords_mode
         )
-
+        return {"counts": {}, "ltx_entries": [], "queued": None, "plan_total": None}
 
 
 def _standard_run_meta(existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
@@ -3449,6 +3648,7 @@ def _run_distributed_generation(
 
     worker_urls = distribution_config.get("worker_urls", [])
     claim_timeout = distribution_config.get("claim_timeout", 600)
+    dist_wait_timeout = _dist_wait_timeout(distribution_config)
 
     # Inject trigger word mode into configs so workers can use it
     for conf in expanded:
@@ -3487,12 +3687,32 @@ def _run_distributed_generation(
             pv_scale, pv_cfg, meta_run)
 
     _pre_ids = {it.get("id") for it in existing_data.get("items", [])}
-    _populate_distributed_manager(
+    pop = _populate_distributed_manager(
         manager, job_plan, expanded, input_jobs, existing_data, overwrite_existing, has_optional_inputs,
         lora_triggerwords_mode, job_order=job_order, preview_on=preview_on, pv_steps=pv_steps,
         pv_scale=pv_scale, pv_cfg=pv_cfg, skip_rejected=skip_rejected_previews,
-        only_favorited=only_favorited_previews
+        only_favorited=only_favorited_previews,
+        start_at_job=int((session_settings or {}).get("start_at_job", 0) or 0)
     )
+    if not isinstance(pop, dict):
+        pop = {"counts": {}, "ltx_entries": [], "queued": None, "plan_total": None}
+    _ltx_entries = pop.get("ltx_entries") or []
+    _pop_total = manager.get_status()["total"]
+    # Progress accounting for the dashboard: everything the plan resolved without a worker render
+    # (skipped / start-at / LTX done on the master) plus what the manager reports.
+    prog_base = {
+        "pre_skipped": sum((pop.get("counts") or {}).values()),
+        "ltx_done": 0,
+        "plan_total": pop["plan_total"] if pop.get("plan_total") is not None else _pop_total,
+    }
+    try:
+        manager.on_status = lambda st: _emit_distributed_progress(
+            manager, prog_base, unique_id, session_name, st)
+    except Exception:
+        pass
+    _install_claim_filter(
+        manager, paths, existing_data, preview_on=preview_on, has_optional_inputs=has_optional_inputs,
+        skip_rejected=skip_rejected_previews, only_favorited=only_favorited_previews)
 
     # A legacy companion (no populate_from_plan) ignores the preview pass, so its workers render FULL
     # images: the master must still upscale them, with the settings from before the preview override.
@@ -3515,7 +3735,8 @@ def _run_distributed_generation(
         print(f"[Distribution] 🧠 MASTER PRE-ENCODING: Encoding all unique prompts for workers...")
 
         encoded_conditionings = _preencode_all_conditionings(
-            expanded, lora_triggerwords_mode, ckpt_name, use_remote_vae,
+            [c for c in expanded if c.get("model_type") != "ltx_video"],
+            lora_triggerwords_mode, ckpt_name, use_remote_vae,
             optional_model, optional_clip, optional_vae,
             optional_positive, optional_negative, model_cache
         )
@@ -3530,7 +3751,7 @@ def _run_distributed_generation(
 
     # Early exit if all jobs were already completed (resume with nothing to do)
     initial_status = manager.get_status()
-    if initial_status["total"] == 0:
+    if initial_status["total"] == 0 and not _ltx_entries:
         print(f"[Distribution] ⏭️ All jobs already completed, nothing to distribute")
         manager.deactivate()
         distribution.clear_active_manager()
@@ -3541,19 +3762,25 @@ def _run_distributed_generation(
         html = get_html_template(session_name, existing_data, unique_id)
         return (html,)
 
+    # First progress event: the plan's skipped jobs count as done, ETA unknown yet
+    _emit_distributed_progress(manager, prog_base, unique_id, session_name, initial_status)
+
     # === Notify remote workers ===
-    master_url = distribution.get_master_url()
-    print(f"[Distribution] 🌐 Master URL: {master_url}")
-    print(f"[Distribution] 🌐 Notifying {len(worker_urls)} worker(s)...")
+    if initial_status["total"] == 0:
+        print(f"[Distribution] 🎬 Only LTX job(s) in this run: they render on the master, workers are not needed")
+    else:
+        master_url = distribution.get_master_url()
+        print(f"[Distribution] 🌐 Master URL: {master_url}")
+        print(f"[Distribution] 🌐 Notifying {len(worker_urls)} worker(s)...")
 
-    sync_models = distribution_config.get("sync_models_to_workers", False)
-    if sync_models:
-        manager.sync_models_to_workers = True
-        print(f"[Distribution] ☁️ Model sync enabled — workers will download missing models from master")
+        sync_models = distribution_config.get("sync_models_to_workers", False)
+        if sync_models:
+            manager.sync_models_to_workers = True
+            print(f"[Distribution] ☁️ Model sync enabled — workers will download missing models from master")
 
-    worker_results = distribution.notify_workers_to_start(worker_urls, master_url, session_name, sync_models_to_workers=sync_models)
-    successful_workers = sum(1 for _, ok, _ in worker_results if ok)
-    print(f"[Distribution] ✅ {successful_workers}/{len(worker_urls)} workers started")
+        worker_results = distribution.notify_workers_to_start(worker_urls, master_url, session_name, sync_models_to_workers=sync_models)
+        successful_workers = sum(1 for _, ok, _ in worker_results if ok)
+        print(f"[Distribution] ✅ {successful_workers}/{len(worker_urls)} workers started")
 
     # === Master local processing state ===
     loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -3608,7 +3835,42 @@ def _run_distributed_generation(
     # Master claims jobs from its own distribution manager and processes them
     # using the same model loading, encoding, and generation code paths as the
     # normal (non-distributed) generation loop.
+    ltx_failed = 0
+    _legacy_ltx_pf = [False]
+    _idle_since = None
+    _idle_passes = 0
     try:
+        # --- LTX phase: video jobs always render on the master (workers cannot load them). Workers
+        # were already notified, so they render the image jobs in parallel.
+        if _ltx_entries:
+            _ltx_pf = [False]
+            for _le in _ltx_entries:
+                try:
+                    import comfy.model_management as mm
+                    if mm.processing_interrupted():
+                        print(f"\n[Distribution/Master] 🛑 INTERRUPTED")
+                        raise InterruptProcessingException()
+                except InterruptProcessingException:
+                    raise
+                except:
+                    pass
+                _lc, _lj = _le["config"], _le["input_job"]
+                print(f"[Distribution/Master] 🎬 LTX job {prog_base['ltx_done'] + 1}/{len(_ltx_entries)} "
+                      f"| {_lj['width']}x{_lj['height']}")
+                try:
+                    _render_ltx_job(_lc, _lj["width"], _lj["height"], _le.get("conf_idx", 0), paths,
+                                    existing_data, session_name, _ltx_pf, dist_worker="master")
+                except InterruptProcessingException:
+                    raise
+                except Exception as e:
+                    ltx_failed += 1
+                    print(f"[Distribution/Master] ❌ LTX job failed: {e}")
+                prog_base["ltx_done"] += 1
+                _emit_distributed_progress(manager, prog_base, unique_id, session_name)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         while True:
             # Check for interrupt
             try:
@@ -3624,7 +3886,44 @@ def _run_distributed_generation(
             # Claim next job from manager
             batch = manager.claim_batch_for_local(1)
             if not batch:
-                break  # No more pending jobs for master
+                # Nothing for the master right now: finish its own batch first, then stay and wait for
+                # the workers (their results are collected by the routes). After the wait timeout the
+                # master takes the still-claimed jobs over instead of throwing the workers' images away.
+                if pending_batch:
+                    _flush_pending_batch(
+                        pending_batch, current_vae_is_remote, current_remote_vae_url,
+                        per_config_remote_workers, use_remote_vae, remote_vae_worker,
+                        loaded_vae, paths, existing_data, session_name,
+                        paths["manifest"], unique_id,
+                        config_overrides_vae=config_overrides_vae, image_format=image_format
+                    )
+                    for jid in pending_job_ids:
+                        manager.complete_job(jid)
+                    pending_batch = []
+                    pending_job_ids = []
+                    _send_distribution_status(manager)
+                if not manager.has_pending_or_claimed:
+                    break
+                if _idle_since is None:
+                    _idle_since = time.time()
+                    _idle_passes = 0
+                manager.release_timed_out_jobs()
+                if time.time() - _idle_since > dist_wait_timeout:
+                    n_rec = _force_reclaim_remote(manager, JobState)
+                    print(f"[Distribution] ⏰ Wait timeout ({dist_wait_timeout}s): rendering {n_rec} reclaimed "
+                          f"job(s) on the master")
+                    _idle_since = None
+                    continue
+                time.sleep(2)
+                _send_distribution_status(manager)
+                _idle_passes += 1
+                if _idle_passes % 5 == 0:
+                    _st = manager.get_status()
+                    print(f"[Distribution] ⏳ Waiting for workers - Pending: {_st['pending']}, "
+                          f"Claimed: {_st['claimed']}, Completed: {_st['completed']}/{_st['total']}")
+                continue
+            _idle_since = None
+            _job_t0 = time.time()
 
             claimed_job = batch[0]
             conf = claimed_job["config"]
@@ -3642,6 +3941,19 @@ def _run_distributed_generation(
             elif conf.get("seed_behavior") == "randomize":
                 import random
                 current_seed = random.randint(0, 2**63 - 1)
+
+            if conf.get("model_type") == "ltx_video":
+                # Only reachable with a queue built outside the plan split: render it here.
+                try:
+                    _render_ltx_job(conf, w, h, claimed_job.get("gen_index", master_jobs_processed), paths,
+                                    existing_data, session_name, _legacy_ltx_pf, dist_worker="master")
+                    manager.complete_job(job_id)
+                except InterruptProcessingException:
+                    raise
+                except Exception as e:
+                    print(f"[Distribution/Master] ❌ LTX job failed: {e}")
+                    manager.fail_job(job_id, str(e))
+                continue
 
             master_jobs_processed += 1
             completed_total = manager.total_completed
@@ -3818,7 +4130,25 @@ def _run_distributed_generation(
                 )
 
                 job_durations.append(duration)
+                if hasattr(manager, "record_duration"):
+                    try:
+                        manager.record_duration("master", time.time() - _job_t0)
+                    except Exception:
+                        pass
                 eta_info = calculate_eta(job_durations, completed_total + 1, dist_total)
+                if hasattr(manager, "get_eta"):
+                    try:
+                        _ge = manager.get_eta()
+                    except Exception:
+                        _ge = None
+                    if _ge and _ge.get("eta_seconds") is not None:
+                        _es = int(_ge["eta_seconds"])
+                        eta_info = {
+                            "hours": _es // 3600, "minutes": (_es % 3600) // 60, "seconds": _es % 60,
+                            "finish_time": time.time() + _es,
+                            "finish_formatted": time.strftime("%H:%M:%S", time.localtime(time.time() + _es)),
+                            "avg_duration": _ge.get("avg_duration") or duration,
+                        }
                 if eta_info:
                     print_generation_progress(
                         completed_total + 1, dist_total, conf, w, h, duration, eta_info
@@ -3926,7 +4256,6 @@ def _run_distributed_generation(
     # === Wait for remote workers to finish ===
     # Max wait timeout prevents infinite loops if workers crash without cleanup.
     # After timeout, remaining claimed jobs are reclaimed and processed on master.
-    dist_wait_timeout = distribution_config.get("wait_timeout", 600)  # Default 10 minutes
     if manager.has_pending_or_claimed:
         print(f"[Distribution] ⏳ Waiting for remote workers to finish (timeout: {dist_wait_timeout}s)...")
         wait_start = time.time()
@@ -3941,13 +4270,7 @@ def _run_distributed_generation(
                 remaining = status['pending'] + status['claimed']
                 print(f"[Distribution] ⏰ Wait timeout ({dist_wait_timeout}s) reached with {remaining} jobs remaining — reclaiming for master")
                 # Force-reclaim all remaining claimed jobs
-                with manager._lock:
-                    for job in manager._jobs.values():
-                        if job.state == JobState.CLAIMED and job.worker_id != "master":
-                            job.state = JobState.PENDING
-                            job.worker_id = None
-                            job.claimed_at = None
-                            manager._pending_queue.append(job.job_id)
+                _force_reclaim_remote(manager, JobState)
                 break
 
             # Check for interrupt while waiting
@@ -4102,6 +4425,13 @@ def _run_distributed_generation(
         print(f"[Distribution] ⏱️  {total_hours}h {total_minutes}m {total_seconds}s total")
         if final_status.get('failed', 0) > 0:
             print(f"[Distribution] ❌ {final_status['failed']} jobs failed permanently")
+        if final_status.get('skipped', 0) > 0:
+            print(f"[Distribution] ⏭️ {final_status['skipped']} dropped at claim (preview rejected during the run)")
+        if pop.get("counts", {}).get("start_at", 0) > 0:
+            print(f"[Distribution] ⏭️ {pop['counts']['start_at']} skipped by Start At Job")
+        if _ltx_entries:
+            print(f"[Distribution] 🎬 LTX: {len(_ltx_entries) - ltx_failed}/{len(_ltx_entries)} rendered on the master"
+                  + (f", {ltx_failed} failed" if ltx_failed else ""))
 
         # Per-worker breakdown
         workers = final_status.get("workers", {})
@@ -4126,7 +4456,7 @@ def _run_distributed_generation(
         if PromptServer is not None:
             try:
                 PromptServer.instance.send_sync("ultimate_grid.progress", _completion_payload(
-                    unique_id, session_name, dist_total, avg_per_job,
+                    unique_id, session_name, (prog_base.get("plan_total") or dist_total), avg_per_job,
                     f"{total_hours}h {total_minutes}m {total_seconds}s",
                     final_status.get("completed", total_generated), next_phase))
             except Exception:
