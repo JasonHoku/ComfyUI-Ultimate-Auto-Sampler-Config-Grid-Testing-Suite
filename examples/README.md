@@ -82,6 +82,16 @@ Times are approximate on an RTX 5060 Ti 16 GB, not counting the first model load
 * **Time:** TBD
 * **Notes:** SLG uses the official recipe, single block 22 for the first 0-50 % of the steps. Compare the two images to see what it does. CLIP type `moss_image`. A smaller `flux2-vae_small.safetensors` VAE also exists and can be picked in the Builder instead. The 9B text encoder is large; on a 16 GB card expect model swapping.
 
+## Workflow Sweep on your own graph (`uscg-workflow-sweep-sdxl.json`)
+
+| File | Folder |
+|---|---|
+| `sd_xl_base_1.0.safetensors` | `models/checkpoints/` |
+
+* **What the grid tests:** one Workflow Sweep array that wraps a complete SDXL text-to-image graph (Load Checkpoint, two CLIP Text Encode, Empty Latent 1024x1024, KSampler, VAE Decode, Save Image) and sweeps three things on it: KSampler `cfg` 5 and 7 x `sampler_name` euler and dpmpp_2m x 2 positive prompts (one shared negative). **8 images**
+* **Time:** TBD
+* **Notes:** unlike the other examples, the Builder does not build the pipeline here. The sweep runs your exact exported graph once per job, changing only the inputs you bound, and collects the result into the Dashboard like any other run. This is how to grid-test a workflow the three-node grid cannot express, such as reference-image conditioning, ControlNet, multi-stage or custom-node graphs. To use your own: in ComfyUI use Export (API), open the Config Builder's **Workflow Sweep** section, load that file, pick the output image, and choose the inputs to sweep. Any API-format export works, for example the Flux.2 example in this folder could be exported and swept the same way. The embedded SDXL graph here is only a stand-in so the example runs with one checkpoint.
+
 ## Make your own
 
 * Edit the Builder: add LoRAs or a whole LoRA folder, more samplers, schedulers, step counts, cfg values, resolutions or prompts. Every list is multiplied together.

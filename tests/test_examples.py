@@ -29,6 +29,7 @@ EXPECTED_IMAGES = {
     "uscg-krea2-turbo.json": 2,
     "uscg-flux2-klein-9b.json": 4,  # Advanced Sampling on + off (expand_configs grids both)
     "uscg-moss-image.json": 2,
+    "uscg-workflow-sweep-sdxl.json": 8,  # Workflow Sweep: 2 cfg x 2 samplers x 2 prompts
 }
 
 # Every top-level key of the Builder's new-state object (web/conf_builder/conf-builder-main.js,
@@ -49,6 +50,7 @@ ALLOWED_FILES = {
     "uscg-krea2-turbo.json": {"krea2_turbo_fp8_scaled.safetensors", "qwen3vl_4b_fp8_scaled.safetensors", "qwen_image_vae.safetensors"},
     "uscg-flux2-klein-9b.json": {"flux-2-klein-9b-fp8.safetensors", "qwen_3_8b_fp8mixed.safetensors", "flux2-vae.safetensors"},
     "uscg-moss-image.json": {"moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae.safetensors"},
+    "uscg-workflow-sweep-sdxl.json": {"sd_xl_base_1.0.safetensors"},
 }
 
 
@@ -146,6 +148,10 @@ def test_no_local_paths_and_known_filenames(path):
     state = _state(_load(path))
     used = set()
     for a in state["config_arrays"]:
+        if a.get("kind") == "workflow":  # files live inside the embedded API graph
+            used.update(n["inputs"]["ckpt_name"] for n in a["workflow"]["api_prompt"].values()
+                        if n["class_type"] == "CheckpointLoaderSimple")
+            continue
         for m in a["models"]:
             used.add(m["path"] if isinstance(m, dict) else m)
         used.update(a["text_encoders"])
@@ -183,3 +189,14 @@ def test_family_settings():
     assert moss[0]["clip_type"] == "moss_image"
     assert moss[0]["use_slg"] is True and moss[0]["slg_single_layers"] == "22"
     assert moss[1]["use_slg"] is False
+
+
+def test_workflow_sweep_example():
+    cfg = _cfgs("uscg-workflow-sweep-sdxl.json")
+    assert len(cfg) == 1 and cfg[0]["model_type"] == "workflow"
+    assert cfg[0]["workflow_output"] == {"node_id": "8", "output_index": 0}
+    import workflow_sweep as ws
+    jobs = ws.expand_workflow_entry(cfg[0], 0, None, None)
+    assert len(jobs) == 8 and len({j["wf_fingerprint"] for j in jobs}) == 8
+    assert {j["wf_params"]["KSampler.cfg"] for j in jobs} == {5, 7}
+    assert {j["wf_params"]["KSampler.sampler_name"] for j in jobs} == {"euler", "dpmpp_2m"}
