@@ -138,6 +138,44 @@ def pil_to_image_array(pil_image):
 # NOTE: torch.inference_mode() decorator — see module docstring above for why
 # this is REQUIRED on all out-of-graph inference entry points. Removing it
 # will reintroduce the same 6× VRAM blowup we fixed in May 2026.
+def make_attention_override(attn_func, name=""):
+    """Wrap a registered ComfyUI attention function as an `optimized_attention_override`.
+
+    ComfyUI's wrap_attn() calls the override as `override(original_func, q, k, v, heads, ...)`
+    (the ORIGINAL attention function comes first), whereas the functions in
+    REGISTERED_ATTENTION_FUNCTIONS take `(q, k, v, heads, ...)`. Installing the registered
+    function directly made q the original function ("'function' object has no attribute
+    'shape'", issue #16). Drop the leading function and forward the rest.
+    """
+    def _override(func, *args, **kwargs):
+        return attn_func(*args, **kwargs)
+    _override.uscg_attention = name
+    return _override
+
+
+def generate_image_attn_safe(*args, attention_mode="default", **kwargs):
+    """generate_image() with a one-shot fallback to the default attention.
+
+    A non-default attention backend can fail at sample time (not installed for this
+    torch/CUDA build, unsupported head dim, ...). Instead of losing the job, print one
+    clear line and retry it once with attention_mode="default".
+
+    Returns (latent, duration, fallback_from) where fallback_from is the attention mode
+    that failed, or None when the requested mode worked.
+    """
+    try:
+        latent, duration = generate_image(*args, attention_mode=attention_mode, **kwargs)
+        return latent, duration, None
+    except Exception as e:
+        if not attention_mode or attention_mode == "default" or type(e).__name__ == "InterruptProcessingException":
+            raise
+        print(f"[GridTester] ❌ Attention mode '{attention_mode}' failed ({type(e).__name__}: {e}): "
+              f"check that the backend is installed for this torch/CUDA build; "
+              f"this job will be retried with the default attention")
+        latent, duration = generate_image(*args, attention_mode="default", **kwargs)
+        return latent, duration, attention_mode
+
+
 @torch.inference_mode()
 def generate_image(
     patched_model,
@@ -229,7 +267,7 @@ def generate_image(
                 original_attn_override = patched_model.model_options.get("transformer_options", {}).get("optimized_attention_override")
                 if "transformer_options" not in patched_model.model_options:
                     patched_model.model_options["transformer_options"] = {}
-                patched_model.model_options["transformer_options"]["optimized_attention_override"] = attn_func
+                patched_model.model_options["transformer_options"]["optimized_attention_override"] = make_attention_override(attn_func, attention_mode)
             else:
                 print(f"[GridTester] ⚠️ Attention mode '{attention_mode}' not available, using default")
         except Exception as e:

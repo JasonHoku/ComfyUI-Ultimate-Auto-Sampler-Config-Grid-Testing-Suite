@@ -26,7 +26,7 @@ from .model_loader import (
 )
 from .lora_utils import expand_lora_folder
 from .image_generation import (
-    generate_image, flush_batch_with_vae, flush_batch_with_remote_vae,
+    generate_image, generate_image_attn_safe, flush_batch_with_vae, flush_batch_with_remote_vae,
     create_image_metadata, decode_latent_with_vae, pil_to_image_array, calculate_eta, print_generation_progress
 )
 from .config_utils import sanitize_session_name
@@ -2091,6 +2091,7 @@ def run_generation_loop(
             latent_in = make_empty_latent(latent_channels, gen_w, gen_h, latent_ratio)
             
         result_latent = None
+        attn_fallback = None
         try:
             attention_mode = conf.get("attention_mode", "default")
             if attention_mode != "default":
@@ -2107,7 +2108,7 @@ def run_generation_loop(
             if extra_opts:
                 print(f"[GridTester] ⚙️ Extra options: {', '.join(extra_opts)}")
 
-            result_latent, duration = generate_image(
+            result_latent, duration, attn_fallback = generate_image_attn_safe(
                 patched_model, current_seed, eff_conf["steps"], eff_conf["cfg"],
                 conf["sampler"], conf["scheduler"], final_positive, final_negative,
                 latent_in, conf["denoise"], attention_mode=attention_mode,
@@ -2732,6 +2733,9 @@ def run_generation_loop(
                     gen_index=gen_index_offset + total_generated
                 )
                 meta["config_fp"] = job_fp
+                if attn_fallback:
+                    meta["attention_mode"] = "default"
+                    meta["attention_fallback"] = attn_fallback
                 if _is_pv:
                     meta.update({
                         "preview": True, "preview_of": job_fp,
@@ -3758,7 +3762,7 @@ def _run_distributed_generation(
                 if extra_opts:
                     print(f"[GridTester] ⚙️ Extra options: {', '.join(extra_opts)}")
 
-                result_latent, duration = generate_image(
+                result_latent, duration, attn_fallback = generate_image_attn_safe(
                     patched_model, current_seed, conf["steps"], conf["cfg"],
                     conf["sampler"], conf["scheduler"], final_positive, final_negative,
                     latent_in, conf["denoise"], attention_mode=attention_mode,
@@ -3802,6 +3806,9 @@ def _run_distributed_generation(
                 if ux.get("stamp"):
                     meta.update(ux["stamp"])
                 meta["dist_worker"] = "master"
+                if attn_fallback:
+                    meta["attention_mode"] = "default"
+                    meta["attention_fallback"] = attn_fallback
 
                 pending_batch.append((result_latent["samples"].clone(), meta))
                 pending_job_ids.append(job_id)
