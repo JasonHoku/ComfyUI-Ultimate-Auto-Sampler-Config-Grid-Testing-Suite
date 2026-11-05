@@ -74,13 +74,13 @@ ProjectStructure.md has notes to assist AI in developing this project
 
 ## ~~Small bug, centering zoom doesn't perfectly fit the images into the canvas, I think it doesnt account for the topbar and bottom smartjson bar sizes.~~ DONE
 
-## Vae settings in the Builder UI passed to sampler gen orchestrator through the config_json need to override the hf_remote setting in the sampler node input selection. All settings should be override from the Builder UI config_json, it should take first priority over any setting in the sampler node as we are phasing out the sampler node settings completely eventually. (Already implemented — needs testing)
+## ~~Vae settings in the Builder UI passed to sampler gen orchestrator through the config_json need to override the hf_remote setting in the sampler node input selection.~~ DONE — verified by tests/test_roadmap_verify.py: a non-Default Builder VAE (local file or `remote:URL`) always decodes with that VAE and beats the sampler node's remote_vae_endpoint; Default falls back to the node endpoint. Fixed: a config VAE of "None"/"" on a GGUF/diffusion model skipped the "no VAE source" pre-check (now `normalize_config_vae` is used everywhere).
 
 ## ~~Issue: If running a job in one tab and reviewing images from a past session with the Dashboard in another tab, the Dashboard receives updates across all tabs and force-loads the Dashboard to the currently running session.~~ DONE — auto-load only when no session loaded yet
 
-## The batch encoding step lost its ability to stop everything during its run loop. (Already implemented — interrupt check before each encoding. Needs testing)
+## ~~The batch encoding step lost its ability to stop everything during its run loop.~~ DONE — verified (tests/test_roadmap_verify.py): `batch_encode_with_cache` checks the interrupt before every prompt (also across batch boundaries) and raises InterruptProcessingException with no further prompts encoded.
 
-## Feature: Drag and drop re-organzie loras, models, text encoders, vaes. This would make changing their run order and lora_tag append order much easier to control. (needs more testing/fixing)
+## Feature: Drag and drop re-organzie loras, models, text encoders, vaes. This would make changing their run order and lora_tag append order much easier to control. (Partly verified: the reorder maths is now a pure `moveItem`/`reorderTarget` with node tests, the new order is proven to reach configs_json (model list order, LoRA stack/tag order); fixed a doubled handle glyph on text-encoder rows and drops from non-handle drags. STILL needs a real-browser pass: dragover/dragleave flicker over child elements, no auto-scroll while dragging in a long list, no touch support (HTML5 DnD), and the full-UI rebuild after each drop.)
 
 ## ~~Jobs don't generate prompts in the order they're written in the array, it's mildly inconvenient. Lets fix that and make it run in order from top to bottom of the array.~~ DONE
 
@@ -88,7 +88,7 @@ ProjectStructure.md has notes to assist AI in developing this project
 
 ## Batch Encoding could use with implementing the smart, look ahead, caching system we built for lora swapping.
 
-## bug fix, the Builder UI is very slow to update when first starting, adding models, adding loras, a few other things, we need to check it and optimize it to load and respond faster. (Needs more improvement)
+## bug fix, the Builder UI is very slow to update when first starting, adding models, adding loras, a few other things, we need to check it and optimize it to load and respond faster. (Needs more improvement. Static review done; section-preset GETs are now cached. Remaining hotspots: (1) first start blocks on the multi-MB `/object_info` fetch for LoRAs/checkpoints (conf-builder-utilities.js `_getObjectInfo`), (2) every add/remove/reorder rebuilds the WHOLE UI via `renderUI` (`innerHTML = getStyles() + ...`, conf-builder-config-management.js ~7494) although a partial `rerenderConfigSection` exists, (3) `saveState` pretty-prints the whole state on every keystroke (conf-builder-main.js ~267).)
 
 ## NEW: Dashboard Upscale Feature — Upscale single images or all favorites directly from the dashboard with preset management. Phase 1 DONE. Phase 2 (inline pipeline editing, cancel) TODO.
 
@@ -101,15 +101,15 @@ Builder UI could have a + button right next to model strength text input (on its
 
 
 
-## Bug Fix: Batch Encoding Runs Before Job Skip/Continue/Resume check. (Already implemented — prompts are now filtered to only encode for jobs that need work. Optional input tracking still TODO. Needs testing)
+## ~~Bug Fix: Batch Encoding Runs Before Job Skip/Continue/Resume check.~~ DONE — verified (tests/test_roadmap_verify.py): `configs_needing_work()` (extracted from the loop) keeps only configs with at least one still-todo plan entry, so finished jobs' prompts are not encoded; all-done encodes nothing. STILL TODO (optional input tracking): with optional model/clip/vae/conditioning/latent inputs connected, `check_if_job_completed` returns -1 and skip is disabled entirely, because the fingerprint knows nothing about upstream nodes. It would need a content hash of each connected input (model/clip/vae weights id, conditioning tensors, latent tensor) stored in the manifest items and compared in the skip check.
 
 
 #### **7. CivitAI Download Integration** (low priority)
 A button in the builder UI to pack short sha256 into config with an explanation that it can be used to share or move an Ultimate Sampler Config Tester workflow and allow for downloading all models and loras in the workflow from civitAI with a few simple easy clicks. lora_utils has calculate civit model has function in it. dropdown configurable options for where to store each file type.
 
-#### **9. Tag/Token-Based Omit Logic** (Needs testing)
+#### ~~**9. Tag/Token-Based Omit Logic**~~ DONE — verified (tests/test_roadmap_verify.py): word-boundary token matching ("blue" omits "blue eyes" not "blueberry"), case/whitespace/trailing-comma normalised. Fixed two bugs: terms starting/ending in punctuation such as "(masterpiece)" never matched, and a blank omit term omitted EVERY trigger.
 
-#### **10. Validation Warning (Omit vs Lookup) - Warn user if omits are added but lookup is off** (low priority) (Needs testing)
+#### ~~**10. Validation Warning (Omit vs Lookup) - Warn user if omits are added but lookup is off**~~ DONE — the Builder warning now fires exactly when omits exist and Run Settings "LoRA Triggerwords Mode" is None (it used to key on per-LoRA append settings, a false positive in every other mode) and updates live when the mode changes; the run also prints a console warning (`omit_without_lookup_warning`). Tests: tests/test_roadmap_verify.py, tests/js/roadmap_verify.test.js.
 
 
 #### **11. Model-Specific Prompts** (Needs improvement)

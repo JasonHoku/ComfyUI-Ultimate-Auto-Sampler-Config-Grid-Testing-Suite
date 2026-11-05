@@ -96,6 +96,7 @@ _GEN_ORCH_DEPS = {
         "collect_unique_prompts_with_triggers": lambda *a, **kw: [],
         "build_prompt_with_triggers": lambda *a, **kw: ("", ""),
         "clear_trigger_caches": lambda *a, **kw: None,
+        "omit_without_lookup_warning": lambda *a, **kw: None,
     },
     "batch_encoding": {
         "batch_encode_prompts": lambda *a, **kw: None,

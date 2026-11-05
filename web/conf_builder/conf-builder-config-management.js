@@ -240,16 +240,44 @@ function rerenderConfigSection(node, arrayIdx) {
 // arrayIdx: which config array this belongs to
 // itemIdx: the index of this item in the array
 // node: the config builder node (for saveState/renderUI)
+// Pure helpers (unit-tested in tests/js/roadmap_verify.test.js).
+// Where a dragged item ends up: `itemIdx` is the card it was dropped on, `after` = dropped on its lower half.
+// Returns the index to splice the removed item back in at, or -1 for "no change".
+function reorderTarget(fromIdx, itemIdx, after, length) {
+    if (!Number.isInteger(fromIdx) || fromIdx < 0 || fromIdx >= length) return -1;
+    let toIdx = after ? itemIdx + 1 : itemIdx;
+    if (fromIdx < toIdx) toIdx--;   // removing the source shifts everything after it down by one
+    if (toIdx === fromIdx) return -1;
+    return Math.max(0, Math.min(toIdx, length - 1));
+}
+
+function moveItem(list, fromIdx, itemIdx, after) {
+    const toIdx = reorderTarget(fromIdx, itemIdx, after, list.length);
+    if (toIdx < 0) return false;
+    const [item] = list.splice(fromIdx, 1);
+    list.splice(toIdx, 0, item);
+    return true;
+}
+
+// Omit-list warning: the omit list only does anything when trigger lookup is on (mode != "None").
+function omitWarningVisible(configArray, loraTriggerwordsMode) {
+    const hasOmits = !!(configArray && configArray.lora_omit_triggers && configArray.lora_omit_triggers.length > 0);
+    return hasOmits && (loraTriggerwordsMode || "None") === "None";
+}
+
 function setupDragReorder(cardDiv, headerBar, stateArrayGetter, itemIdx, node) {
     headerBar.draggable = true;
     headerBar.style.cursor = "grab";
 
-    // Drag handle icon prepended to header
-    const handle = document.createElement("span");
-    handle.textContent = "⠿";
-    handle.style.cssText = "color: #666; font-size: 14px; margin-right: 6px; cursor: grab; user-select: none;";
-    handle.className = "cb-drag-handle";
-    headerBar.insertBefore(handle, headerBar.firstChild);
+    // Drag handle icon prepended to header (the text-encoder rows pass their own handle as the header;
+    // adding another glyph inside it showed a doubled handle)
+    if (!headerBar.classList.contains("cb-drag-handle")) {
+        const handle = document.createElement("span");
+        handle.textContent = "⠿";
+        handle.style.cssText = "color: #666; font-size: 14px; margin-right: 6px; cursor: grab; user-select: none;";
+        handle.className = "cb-drag-handle";
+        headerBar.insertBefore(handle, headerBar.firstChild);
+    }
 
     headerBar.addEventListener("dragstart", (e) => {
         e.stopPropagation();
@@ -296,24 +324,17 @@ function setupDragReorder(cardDiv, headerBar, stateArrayGetter, itemIdx, node) {
         const sourceListId = e.dataTransfer.getData("application/x-cb-list-id");
         if (sourceListId && sourceListId !== (cardDiv.parentElement?.id || "")) return;
 
-        const fromIdx = parseInt(e.dataTransfer.getData("text/plain"));
+        // A drag that did not start on a reorder handle (selected text, a file) carries no list id
+        if (!sourceListId) return;
+        const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
         if (isNaN(fromIdx) || fromIdx === itemIdx) return;
 
-        // Determine insert position based on mouse position
+        // Insert position from the mouse position relative to the card centre
         const rect = cardDiv.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        let toIdx = e.clientY < midY ? itemIdx : itemIdx + 1;
-        // Adjust for removal shifting indices
-        if (fromIdx < toIdx) toIdx--;
-
-        if (fromIdx === toIdx) return;
+        const after = e.clientY >= rect.top + rect.height / 2;
 
         const arr = stateArrayGetter();
-        if (!arr || fromIdx >= arr.length) return;
-
-        // Splice: remove from old position, insert at new
-        const [item] = arr.splice(fromIdx, 1);
-        arr.splice(toIdx, 0, item);
+        if (!arr || !moveItem(arr, fromIdx, itemIdx, after)) return;
 
         node.saveState();
         debouncedRenderUI(node);
@@ -2795,6 +2816,18 @@ async function showEditTriggersModal(node, arrayIdx, loraName) {
 
 
 // --- SECTION PRESET UI HELPER ---
+// Presets per section are fetched ONCE per page load (shared promise) instead of once per row per render:
+// every renderUI rebuilt each section's preset row, firing one GET per row.
+const _sectionPresetCache = new Map();   // sectionName -> Promise<presets[]>
+function _getSectionPresets(sectionName) {
+    if (!_sectionPresetCache.has(sectionName)) {
+        _sectionPresetCache.set(sectionName,
+            fetch(`/configbuilder/section_presets?section=${sectionName}`).then(r => r.json())
+                .then(data => data.presets || [])
+                .catch(() => { _sectionPresetCache.delete(sectionName); return []; }));
+    }
+    return _sectionPresetCache.get(sectionName);
+}
 // Creates a compact preset dropdown row (Load/Save/Delete) for any section
 function createSectionPresetRow(sectionName, getData, applyData, node) {
     const row = document.createElement("div");
@@ -2808,13 +2841,13 @@ function createSectionPresetRow(sectionName, getData, applyData, node) {
     sel._presets = [];
 
     // Fetch presets
-    fetch(`/configbuilder/section_presets?section=${sectionName}`).then(r => r.json()).then(data => {
-        (data.presets || []).forEach((p, i) => {
+    _getSectionPresets(sectionName).then(presets => {
+        presets.forEach((p, i) => {
             const opt = document.createElement("option");
             opt.value = i; opt.textContent = p.name;
             sel.appendChild(opt);
         });
-        sel._presets = data.presets || [];
+        sel._presets = presets.slice();
     }).catch(() => {});
 
     const loadBtn = document.createElement("button");
@@ -2846,6 +2879,7 @@ function createSectionPresetRow(sectionName, getData, applyData, node) {
             body: JSON.stringify({ presets })
         }).then(() => {
             sel._presets = presets;
+            _sectionPresetCache.set(sectionName, Promise.resolve(presets.slice()));
             // Refresh dropdown
             while (sel.options.length > 1) sel.remove(1);
             presets.forEach((p, i) => {
@@ -2869,6 +2903,7 @@ function createSectionPresetRow(sectionName, getData, applyData, node) {
             method: "POST", headers: {"Content-Type": "application/json"},
             body: JSON.stringify({ presets: sel._presets })
         });
+        _sectionPresetCache.set(sectionName, Promise.resolve(sel._presets.slice()));
         sel.remove(idx + 1);
         sel.value = "";
     };
@@ -4858,16 +4893,19 @@ function renderOmitTriggersSection(node, div, configArray, arrayIdx) {
     // Warning element for when omits are set but no trigger append settings exist
     const warningEl = document.createElement("div");
     warningEl.style.cssText = "display: none; background: #3d2e00; border: 1px solid #cc6600; border-radius: 4px; padding: 6px 10px; margin-bottom: 8px; font-size: 11px; color: #ffaa00;";
-    warningEl.textContent = "⚠️ Omit list is active, but no LoRAs have trigger word append settings configured. Make sure the Sampler node's \"lora_triggerwords_mode\" is not set to \"None\", or omits will have no effect.";
+    warningEl.textContent = "⚠️ Omit list is active, but LoRA Triggerwords Mode (Run Settings) is \"None\", so no trigger words are looked up and the omit list has no effect. Choose Append To End / Append To Start / Read From Config.";
     omitSection.appendChild(warningEl);
 
     const updateOmitWarning = () => {
-        const hasOmits = configArray.lora_omit_triggers && configArray.lora_omit_triggers.length > 0;
-        const appendSettings = configArray.lora_triggerwords_append_settings || {};
-        const hasAppendSettings = Object.values(appendSettings).some(v => v === "start" || v === "end");
-        // Show warning if omits exist but no per-lora append settings are configured
-        warningEl.style.display = (hasOmits && !hasAppendSettings) ? "block" : "none";
+        // Show warning if omits exist but trigger lookup is off (Run Settings > LoRA Triggerwords Mode = None)
+        warningEl.style.display = omitWarningVisible(configArray, node.state.lora_triggerwords_mode) ? "block" : "none";
     };
+    // Mode changes in Run Settings re-evaluate the warning without a full re-render
+    const onModeChanged = () => {
+        if (!warningEl.isConnected) { window.removeEventListener("cb-lora-mode-changed", onModeChanged); return; }
+        updateOmitWarning();
+    };
+    window.addEventListener("cb-lora-mode-changed", onModeChanged);
 
     const renderChips = () => {
         chipsContainer.innerHTML = "";
@@ -7134,6 +7172,7 @@ export function renderRunSettingsSection(node, container) {
     };
     if (_twModeSelect) {
         _twModeSelect.addEventListener('change', _updateTwModeNotice);
+        _twModeSelect.addEventListener('change', () => window.dispatchEvent(new CustomEvent("cb-lora-mode-changed")));
     }
     _updateTwModeNotice();  // initial check on render
 
