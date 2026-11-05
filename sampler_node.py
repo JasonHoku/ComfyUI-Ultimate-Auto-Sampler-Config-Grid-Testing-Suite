@@ -113,7 +113,9 @@ class SamplerGridTester:
 
         # Workflow Sweep configs: a re-queue must restart/resume the sweep (finished jobs are skipped by
         # fingerprint), never hit ComfyUI's node cache
-        if _workflow_configs(kwargs.get("configs_json")):
+        # ComfyUI calls IS_CHANGED with outputs=None, so a LINKED configs_json (wired from the Builder, the
+        # normal setup) is absent from kwargs: treat "absent" as "linked" and never cache.
+        if "configs_json" not in kwargs or _workflow_configs(kwargs.get("configs_json")):
             return float("NaN")
 
         # Check if any optional input is connected (not None and present in kwargs)

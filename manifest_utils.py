@@ -301,11 +301,15 @@ def append_items(manifest_path, items, remove_ids=(), session_name=None, default
     with _manifest_lock:
         data = None
         if os.path.exists(manifest_path):
+            # An unreadable existing manifest (half-written by a dashboard save, say) must NOT be replaced by a
+            # fresh one holding only the new item: that wipes every earlier item/favourite/note. Fail the job.
             try:
                 with open(manifest_path, "r") as f:
                     data = json.load(f)
             except Exception as e:
-                print(f"[GridTester] ⚠️ Could not read manifest before append: {e}")
+                raise RuntimeError(f"could not read the manifest {manifest_path} before appending (left untouched): {e}") from e
+            if not isinstance(data, dict):
+                raise RuntimeError(f"the manifest {manifest_path} is not a JSON object (left untouched)")
         if not isinstance(data, dict):
             data = {"session_name": session_name or "default", "items": []}
         data.setdefault("items", [])
@@ -334,10 +338,7 @@ def append_items(manifest_path, items, remove_ids=(), session_name=None, default
                     kept.append(it)
             data["items"] = kept
         os.makedirs(os.path.dirname(os.path.abspath(manifest_path)), exist_ok=True)
-        tmp = manifest_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=4)
-        os.replace(tmp, manifest_path)
+        _atomic_write_json(manifest_path, data)
         return data
 
 

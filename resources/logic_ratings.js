@@ -24,10 +24,10 @@ var CMP_EXCLUDED_KEYS = new Set([
     // per-image outcomes / bookkeeping, not settings
     'config_fp', 'base_fp', 'metrics', 'preview_of', 'source_relpath', 'dist_worker',
     'florence2_bbox', 'florence2_detection_count', 'florence2_no_detection',
-    // workflow-sweep per-job bookkeeping (wf_params are the settings and stay in)
+    // workflow-sweep per-job bookkeeping (all wf_* keys are also dropped by CMP_EXCLUDED_RE: they differ for every pair)
     'wf_fingerprint', 'wf_sweep_id', 'wf_job_index', 'poster'
 ]);
-var CMP_EXCLUDED_RE = /^upscale_|^hires_prompt_|_hash$|^worker|^_/;
+var CMP_EXCLUDED_RE = /^upscale_|^hires_prompt_|^wf_|_hash$|^worker|^_/;
 
 // Phone swipe-to-vote: which side a finger gesture picks (same mapping as ArrowLeft = A, ArrowRight = B).
 var CMP_SWIPE = { minPx: 60, frac: 0.15, ratio: 1.5, maxMs: 800 };

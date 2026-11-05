@@ -122,12 +122,13 @@ def test_append_items_remove_ids_deletes_item_and_file(manifest_utils, tmp_path)
     assert outside.exists()  # never deletes outside <session>/images
 
 
-def test_append_items_tolerates_corrupt_manifest(manifest_utils, tmp_path):
+def test_append_items_refuses_corrupt_manifest(manifest_utils, tmp_path):
     mp = tmp_path / "s" / "manifest.json"
     mp.parent.mkdir()
     mp.write_text("{not json")
-    d = manifest_utils.append_items(str(mp), [{"id": 1}], session_name="s")
-    assert d["items"] == [{"id": 1}]
+    with pytest.raises(RuntimeError):   # never replace an unreadable manifest with a fresh one (wipes the session)
+        manifest_utils.append_items(str(mp), [{"id": 1}], session_name="s")
+    assert mp.read_text() == "{not json"
 
 
 def test_session_paths_sanitises_name(monkeypatch, tmp_path):

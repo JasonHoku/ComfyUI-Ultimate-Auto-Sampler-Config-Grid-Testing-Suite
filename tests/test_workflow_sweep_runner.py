@@ -379,7 +379,7 @@ def test_overwrite_existing_reruns_and_carries_replace_ids(env):
 
 def test_start_at_job_skips_first_n(env):
     sw = make(env, [entry((1, 2, 3, 4))], {"start_at_job": 2})
-    assert [j["status"] for j in sw.jobs] == ["skipped", "skipped", "pending", "pending"]
+    assert [j["status"] for j in sw.jobs] == ["skipped", "pending", "pending", "pending"]   # job #2 is the first to run (N-1 skipped)
     assert sw.skipped_existing == 0
 
 
@@ -646,6 +646,10 @@ def _cfg_body(configs, session):
 
 def test_same_sweep_attaches_and_queues_nothing(env):
     sw = runner.start_sweep([entry()], {"session_name": "wf_test"}, "n1", None, env.bridge, class_info=None)
+    for _ in range(200):            # the feeder thread enqueues job 1 asynchronously: wait for it (race-free count)
+        if env.bridge.enqueued:
+            break
+        time.sleep(0.01)
     n = len(env.bridge.enqueued)
     again = runner.start_sweep([entry()], {"session_name": "wf_test"}, "n2", None, env.bridge, class_info=None)
     assert again is sw

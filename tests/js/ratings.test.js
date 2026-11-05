@@ -305,7 +305,7 @@ test('cmpSwipeSide decisions', () => {
     assert.strictEqual(R.cmpSwipeSide(-250, 0, 200, 1600), 'a');
 });
 
-test('sweep per-job bookkeeping is excluded from the compare ctx (wf_params stay in)', () => {
+test('sweep per-job bookkeeping is excluded from the compare ctx (all wf_* keys via CMP_EXCLUDED_RE)', () => {
     for (const k of ['wf_fingerprint', 'wf_sweep_id', 'wf_job_index', 'poster']) assert.ok(R.CMP_EXCLUDED_KEYS.has(k), k);
-    assert.ok(!R.CMP_EXCLUDED_KEYS.has('wf_params'));
+    assert.ok(R.CMP_EXCLUDED_RE.test('wf_params'));
 });

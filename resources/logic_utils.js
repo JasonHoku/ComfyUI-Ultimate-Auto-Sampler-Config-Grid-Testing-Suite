@@ -455,8 +455,11 @@ function exportFavoritesAsConfigJSON() {
     // single values for sampler, scheduler, model, etc. (NOT arrays).
     var flatConfigs = [];
     var seen = {};
+    var skippedWorkflow = 0;
     for (var fi = 0; fi < favorites.length; fi++) {
         var d = favorites[fi];
+        // Workflow-sweep items have no template: a config built from them would be routed to start_sweep and fail
+        if (d.model_type === 'workflow') { skippedWorkflow++; continue; }
 
         // Build the flat config from the manifest item's actual fields
         var flatConfig = {
@@ -512,10 +515,19 @@ function exportFavoritesAsConfigJSON() {
         flatConfigs.push(flatConfig);
     }
 
+    if (flatConfigs.length === 0 && skippedWorkflow) {
+        alert(skippedWorkflow + ' workflow-sweep item' + (skippedWorkflow !== 1 ? 's' : '') + ' skipped: they have no template. Nothing to export.');
+        return;
+    }
+
     // Wrap in the format the sampler node expects: {"configs": [...]}
     var configOutput = {
         configs: flatConfigs
     };
+
+    var wfNote = skippedWorkflow
+        ? '\n\n' + skippedWorkflow + ' workflow-sweep item' + (skippedWorkflow !== 1 ? 's' : '') + ' skipped: they have no template.'
+        : '';
 
     // Check for GGUF/diffusion models that need a VAE connected
     var needsVaeWarning = flatConfigs.some(function(c) {
@@ -528,7 +540,7 @@ function exportFavoritesAsConfigJSON() {
     // Copy to clipboard
     var jsonStr = JSON.stringify(configOutput, null, 2);
     navigator.clipboard.writeText(jsonStr).then(function() {
-        alert('Config JSON copied to clipboard! (' + favorites.length + ' favorites \u2192 ' + flatConfigs.length + ' config' + (flatConfigs.length !== 1 ? 's' : '') + ')\n\nPaste into the Sampler Grid node\'s configs_json input.' + vaeNote);
+        alert('Config JSON copied to clipboard! (' + favorites.length + ' favorites \u2192 ' + flatConfigs.length + ' config' + (flatConfigs.length !== 1 ? 's' : '') + ')\n\nPaste into the Sampler Grid node\'s configs_json input.' + vaeNote + wfNote);
     }).catch(function() {
         // Fallback: show in a prompt dialog
         prompt('Copy this Config JSON:', jsonStr);
@@ -816,6 +828,11 @@ function selectJSON(id) {
 async function triggerGen(btn) {
     // Build a complete config from the modal fields + the original item's metadata.
     const d = activeData ? activeData.find(x => x.id === window.currentModalId) : null;
+
+    if (d && d.model_type === 'workflow') {
+        alert('Workflow-sweep items cannot be regenerated here: they have no template.');
+        return;
+    }
 
     const config = {
         sampler: document.getElementById('f-smp').value,
