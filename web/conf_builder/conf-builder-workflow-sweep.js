@@ -100,6 +100,14 @@ function nodeTitle(prompt, id) {
     return (n && ((n._meta && n._meta.title) || n.class_type)) || String(id);
 }
 
+/** The fps of a frame-sink node (VHS frame_rate, or SaveWEBM / SaveAnimatedWEBP / SaveAnimatedPNG fps) when it is a number. */
+export function framesFps(prompt, id) {
+    const inputs = prompt && prompt[id] && prompt[id].inputs;
+    if (!inputs) return undefined;
+    const v = inputs.frame_rate !== undefined ? inputs.frame_rate : inputs.fps;
+    return typeof v === "number" ? v : undefined;
+}
+
 /** Stable <option> value of a collectable socket: `node:index:media:frames_from` (media defaults to image). */
 export function outputKey(o) {
     return `${o.node_id}:${o.output_index || 0}:${o.media || "image"}:${o.frames_from || ""}`;
@@ -373,7 +381,7 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
         addGroup("Images", sources, s => `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} output ${s.output_index}` + (s.picked_from ? ` (feeds ${nodeTitle(wf.api_prompt, s.picked_from)} #${s.picked_from})` : ""));
         addGroup("Video", videos, s => {
             if (s.kind === "frames") {
-                const fps = wf.api_prompt && wf.api_prompt[s.frames_from] && wf.api_prompt[s.frames_from].inputs && wf.api_prompt[s.frames_from].inputs.frame_rate;
+                const fps = framesFps(wf.api_prompt, s.frames_from);
                 return `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} frames (feeds ${nodeTitle(wf.api_prompt, s.frames_from)} #${s.frames_from}${typeof fps === "number" ? `, fps ${fps}` : ""})`;
             }
             return `${nodeTitle(wf.api_prompt, s.node_id)} #${s.node_id} output ${s.output_index}` + (s.picked_from ? ` (feeds ${nodeTitle(wf.api_prompt, s.picked_from)} #${s.picked_from})` : "");
@@ -663,7 +671,7 @@ export function renderWorkflowSweepSection(node, arrayElement, configArray, arra
         mk("⏯ Resume", "", () => control("resume"), state !== "paused");
         mk("⏹ Cancel", "danger", () => control("cancel"), !active);
         box.appendChild(row);
-        box.appendChild(el("div", { textContent: "Start runs every Workflow Sweep config of this Builder. Or queue the Generator node: it starts the same sweep. Jobs go through ComfyUI's own queue, so you can keep using ComfyUI." }, "font-size: 10px; color: #888;"));
+        box.appendChild(el("div", { textContent: "Start runs only the Workflow Sweep arrays. Queue the Generator to run the standard configs first and then this sweep, into the same session (Start At Job counts standard jobs first)." }, "font-size: 10px; color: #888;"));
 
         statusLine = el("div", {}, "font-size: 12px; color: #ccc; white-space: pre-wrap;");
         box.appendChild(statusLine);

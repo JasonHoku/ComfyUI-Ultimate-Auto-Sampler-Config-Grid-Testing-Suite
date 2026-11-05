@@ -325,6 +325,18 @@ def _same_sweep(busy, session, fingerprints, start_at=0, overwrite=False):
             and bool(busy.settings.get("overwrite_existing", False)) == bool(overwrite))
 
 
+def busy_conflict(session, fingerprints):
+    """The active Sweep that would refuse a run of `fingerprints` in `session`, or None.
+    An identical running sweep (same session + ordered fingerprints) is NOT a conflict: it attaches.
+    start_at_job / overwrite are ignored here; start_sweep still runs the full check."""
+    busy = _active_sweep()
+    if busy is None:
+        return None
+    if busy.session == session and [j["fingerprint"] for j in busy.jobs] == list(fingerprints):
+        return None
+    return busy
+
+
 def _find(sweep_id=None, session=None):
     with _registry_lock:
         if sweep_id:
@@ -516,6 +528,18 @@ def start_sweep(configs, session_settings=None, origin_node=None, client_id=None
         print(f"[GridTester] 🔁 Same workflow sweep already running ({e.sweep.id}, session "
               f"'{e.sweep.session}'): attaching, nothing re-queued")
         return e.sweep
+
+
+def preflight_sweep(configs, session_settings=None, origin_node=None, bridge=None,
+                    class_info=wfs.comfy_class_info):
+    """Plan + validate job 1 + busy check WITHOUT registering or launching anything. Raises ValueError
+    (invalid workflow) or SweepBusy (another sweep is active). For a NON-loop thread."""
+    sw = prepare_sweep(configs, session_settings, origin_node, None, bridge, class_info, check_busy=False)
+    busy = busy_conflict(sw.session, [j["fingerprint"] for j in sw.jobs])
+    if busy is not None:
+        raise SweepBusy(busy.id, sweep=busy)
+    sw.bridge.run_on_loop(validate_first(sw))
+    return {"total": len(sw.jobs), "to_run": sw.to_run, "warnings": list(sw.warnings)}
 
 
 # --------------------------------------------------------------------------- feeder thread

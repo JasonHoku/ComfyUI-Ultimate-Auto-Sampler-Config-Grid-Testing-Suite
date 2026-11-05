@@ -17,6 +17,7 @@ import comfy.utils
 import comfy.sd
 import comfy.samplers
 import comfy.model_management
+from comfy.model_management import InterruptProcessingException
 from PIL import Image
 import numpy as np
 
@@ -59,6 +60,16 @@ def _workflow_configs(configs_json):
     if isinstance(configs, list) and any(isinstance(c, dict) and c.get("model_type") == "workflow" for c in configs):
         return configs
     return None
+
+
+def _split_configs(configs):
+    """(standard_list, workflow_list) of a configs list/dict-with-"configs", each in Builder order."""
+    if isinstance(configs, dict):
+        configs = configs.get("configs")
+    std, wf = [], []
+    for c in (configs if isinstance(configs, list) else []):
+        (wf if isinstance(c, dict) and c.get("model_type") == "workflow" else std).append(c)
+    return std, wf
 
 
 class SamplerGridTester:
@@ -353,24 +364,56 @@ class SamplerGridTester:
         # immediately. The sweep prompts go through ComfyUI's own queue AFTER this prompt finishes, so
         # this node never waits on them (a node waiting on a prompt it queued would deadlock the executor).
         wf_configs = _workflow_configs(configs_json)
+        mixed_sweep = None
         if wf_configs is not None:
-            if any(x is not None for x in (optional_model, optional_clip, optional_vae,
-                                           optional_positive, optional_negative, optional_latent)):
-                print("[GridTester] ⚠️ Workflow Sweep ignores the optional_* inputs (the workflow has its own loaders)")
-            from .workflow_sweep_runner import start_sweep, SweepBusy
-            from .workflow_sweep import read_manifest_items, session_paths
-            settings = dict(session_settings or {})
-            settings["session_name"] = session_name
-            settings["overwrite_existing"] = overwrite_existing
-            settings["add_random_seeds_to_gens"] = add_random_seeds_to_gens
+            has_optional = any(x is not None for x in (optional_model, optional_clip, optional_vae,
+                                                       optional_positive, optional_negative, optional_latent))
+            std_configs, _wf_only = _split_configs(wf_configs)
+            if std_configs:
+                # Mixed run: the standard configs run first (below), the Workflow Sweep follows after the loop
+                mixed_sweep = (std_configs, _wf_only, wf_configs)
+                if has_optional:
+                    print("[GridTester] ⚠️ optional inputs apply to the standard configs only")
+                _pv = (session_settings or {}).get("preview_pass") or {}
+                if _pv.get("enabled"):
+                    print("[GridTester] ℹ️ Preview pass does not apply to Workflow Sweep configs - they render normally after the standard jobs")
+            else:
+                if has_optional:
+                    print("[GridTester] ⚠️ Workflow Sweep ignores the optional_* inputs (the workflow has its own loaders)")
+                from .workflow_sweep_runner import start_sweep, SweepBusy
+                from .workflow_sweep import read_manifest_items, session_paths
+                settings = dict(session_settings or {})
+                settings["session_name"] = session_name
+                settings["overwrite_existing"] = overwrite_existing
+                settings["add_random_seeds_to_gens"] = add_random_seeds_to_gens
+                try:
+                    sweep = start_sweep(wf_configs, settings, origin_node=unique_id)
+                except SweepBusy as e:
+                    raise RuntimeError(str(e))
+                manifest = read_manifest_items(session_paths(sweep.session)["manifest"])
+                manifest.setdefault("session_name", sweep.session)
+                manifest.setdefault("meta", {})
+                return (get_html_template(sweep.session, manifest, unique_id),)
+
+        run_info = {}
+        loop_extra = {}
+        if mixed_sweep is not None:
+            from .workflow_sweep_runner import preflight_sweep, SweepBusy
+            std_configs, wf_only, full_configs = mixed_sweep
+            sweep_settings = dict(session_settings or {})
+            sweep_settings["session_name"] = session_name
+            sweep_settings["overwrite_existing"] = overwrite_existing
+            sweep_settings["add_random_seeds_to_gens"] = add_random_seeds_to_gens
+            # Fail BEFORE minutes of standard work: validate sweep job 1 and check for a conflicting sweep
             try:
-                sweep = start_sweep(wf_configs, settings, origin_node=unique_id)
+                preflight_sweep(wf_only, sweep_settings, origin_node=unique_id)
             except SweepBusy as e:
                 raise RuntimeError(str(e))
-            manifest = read_manifest_items(session_paths(sweep.session)["manifest"])
-            manifest.setdefault("session_name", sweep.session)
-            manifest.setdefault("meta", {})
-            return (get_html_template(sweep.session, manifest, unique_id),)
+            except ValueError as e:
+                raise ValueError(f"Workflow Sweep config is invalid; nothing ran: {e}")
+            loop_extra = {"meta_configs_json": json.dumps(full_configs, indent=2, ensure_ascii=False),
+                          "next_phase": "sweep", "run_info": run_info}
+            configs_json = json.dumps(std_configs, indent=2, ensure_ascii=False)
 
         # Optional per-image metrics (Builder "Compute image metrics"). The run context is
         # token based so end_run() only ever closes the context THIS run opened.
@@ -379,7 +422,7 @@ class SamplerGridTester:
             print(f"[GridTester] ⚙️ metrics: {metrics_spec['builtins'] + metrics_spec['adapters']}")
         metrics_token = image_metrics.begin_run(metrics_spec)
         try:
-            return run_generation_loop(
+            result = run_generation_loop(
                 self,
                 ckpt_name, positive_text, negative_text, seed, denoise, vae_batch_size,
                 overwrite_existing, flush_batch_every, configs_json, resolutions_json,
@@ -388,10 +431,30 @@ class SamplerGridTester:
                 optional_model, optional_clip, optional_vae,
                 optional_positive, optional_negative, optional_latent,
                 distribution_config=dist_config,  # Extracted from configs_json
-                session_settings=session_settings  # Extracted from configs_json
+                session_settings=session_settings,  # Extracted from configs_json
+                **loop_extra
             )
         finally:
             image_metrics.end_run(metrics_token)
+
+        if mixed_sweep is not None:
+            # An interrupt raises out of the loop above, so the sweep is only ever started after a full pass.
+            # Numbering is global: standard jobs 1..N, sweep jobs N+1.. (Start At Job counts across both).
+            _pi = getattr(comfy.model_management, "processing_interrupted", None)
+            if _pi is not None and _pi():
+                raise InterruptProcessingException()
+            from .workflow_sweep_runner import start_sweep, SweepBusy
+            n_std = int(run_info.get("total_jobs", 0) or 0)
+            try:
+                sa = int((session_settings or {}).get("start_at_job", 0) or 0)
+            except (TypeError, ValueError):
+                sa = 0
+            sweep_settings["start_at_job"] = sa - n_std if sa > n_std else 0
+            try:
+                start_sweep(wf_only, sweep_settings, origin_node=unique_id)
+            except (SweepBusy, ValueError) as e:
+                raise RuntimeError(f"Standard jobs finished and were saved; the workflow sweep was NOT started: {e}")
+        return result
 
 
 # Node class mappings for ComfyUI

@@ -41,7 +41,10 @@ def test_every_run_generation_loop_meta_block_records_extras():
     with open(os.path.join(_ROOT, "generation_orchestrator.py"), encoding="utf-8") as f:
         src = f.read()
     body = src[src.index("def run_generation_loop"):src.index("def _conditioning_to_serializable")]
-    blocks = re.findall(r'existing_data\["meta"\] = \{(.*?)\n\s*\}\n', body, flags=re.S)
+    # the four exit paths all build meta through _standard_run_meta(..., _meta_run), which spreads the extras
+    blocks = re.findall(r'existing_data\["meta"\] = _standard_run_meta\((.*?)\)\n', body, flags=re.S)
     assert len(blocks) == 4
     for b in blocks:
-        assert "**_meta_run" in b
+        assert b.rstrip().endswith("_meta_run")
+    helper = src[src.index("def _standard_run_meta"):src.index("def _completion_payload")]
+    assert "**(meta_run or {})" in helper

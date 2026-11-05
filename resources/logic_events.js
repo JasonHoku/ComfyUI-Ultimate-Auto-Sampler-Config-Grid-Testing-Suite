@@ -46,6 +46,19 @@ function applyManifestReplace(manifest, newMeta) {
     updateDataPipeline();
 }
 
+var _etaHideTimer = null;
+
+/** The ETA bar text for one progress event (pure). */
+function formatProgressText(p) {
+    if (p.complete) {
+        if (p.next_phase === 'sweep') return `Standard jobs complete: ${p.total_generated} images in ${p.total_elapsed}. Workflow sweep next…`;
+        return `Complete! ${p.total_generated} images in ${p.total_elapsed} (${p.avg_duration}s/job)`;
+    }
+    const phaseLabel = p.phase === 'upscaling' ? 'Upscaling' : (p.phase === 'sweep' ? 'Sweep job' : 'Job');
+    const finishPart = p.finish_time ? ` | ~${p.finish_time}` : '';
+    return `${phaseLabel} ${p.current_job}/${p.total_jobs} (${p.progress_pct}%) | ETA: ${p.eta_str}${finishPart} | ${p.avg_duration}s/job${p.errors ? ` | ${p.errors} error${p.errors === 1 ? '' : 's'}` : ''}${(p.state === 'paused' || p.state === 'cancelled') ? ` | ${p.state}` : ''}`;
+}
+
 // WebSocket Listener - OPTIMIZED
 window.addEventListener('message', (event) => {
     // Handle real-time ETA/progress updates
@@ -57,21 +70,13 @@ window.addEventListener('message', (event) => {
             etaBar.style.display = 'flex';
             const etaText = document.getElementById('eta-text');
             const etaProgress = document.getElementById('eta-progress');
-            if (p.complete) {
-                // Generation complete
-                if (etaText) etaText.textContent = `Complete! ${p.total_generated} images in ${p.total_elapsed} (${p.avg_duration}s/job)`;
-                if (etaProgress) etaProgress.style.width = '100%';
-                // Auto-hide after 30 seconds
-                setTimeout(() => { if (etaBar) etaBar.style.display = 'none'; }, 30000);
-            } else {
-                if (etaText) {
-                    const phaseLabel = p.phase === 'upscaling' ? 'Upscaling' : (p.phase === 'sweep' ? 'Sweep job' : 'Job');
-                    const finishPart = p.finish_time ? ` | ~${p.finish_time}` : '';
-                    etaText.textContent = `${phaseLabel} ${p.current_job}/${p.total_jobs} (${p.progress_pct}%) | ETA: ${p.eta_str}${finishPart} | ${p.avg_duration}s/job${p.errors ? ` | ${p.errors} error${p.errors === 1 ? '' : 's'}` : ''}${(p.state === 'paused' || p.state === 'cancelled') ? ` | ${p.state}` : ''}`;
-                }
-                if (etaProgress) {
-                    etaProgress.style.width = `${p.progress_pct}%`;
-                }
+            if (!p.complete || p.next_phase) { clearTimeout(_etaHideTimer); _etaHideTimer = null; }
+            if (etaText) etaText.textContent = formatProgressText(p);
+            if (etaProgress) etaProgress.style.width = p.complete ? '100%' : `${p.progress_pct}%`;
+            if (p.complete && !p.next_phase) {
+                // Generation complete: auto-hide after 30 seconds (any later progress event cancels it)
+                clearTimeout(_etaHideTimer);
+                _etaHideTimer = setTimeout(() => { if (etaBar) etaBar.style.display = 'none'; }, 30000);
             }
         }
         return;

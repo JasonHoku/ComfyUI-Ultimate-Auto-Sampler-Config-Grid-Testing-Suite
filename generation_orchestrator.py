@@ -976,9 +976,16 @@ def run_generation_loop(
     optional_model, optional_clip, optional_vae,
     optional_positive, optional_negative, optional_latent,
     distribution_config=None,
-    session_settings=None
+    session_settings=None,
+    meta_configs_json=None,
+    next_phase=None,
+    run_info=None
 ):
-    """Main generation loop orchestrator."""
+    """Main generation loop orchestrator.
+
+    meta_configs_json: the full configs string recorded in meta.configs_json when this loop only runs the
+    standard part of a mixed run (the Workflow Sweep entries follow after the loop). next_phase: announced on
+    the completion event so the dashboard keeps its bar. run_info: out-dict, receives total_jobs."""
 
     # Clear stale trigger word caches from previous runs (within same ComfyUI session).
     # Without this, @lru_cache and _build_prompt_cache can serve outdated results
@@ -1127,6 +1134,9 @@ def run_generation_loop(
     configs_with_res = sum(1 for c in expanded if c.get("resolution") is not None)
     configs_without_res = len(expanded) - configs_with_res
     total_jobs = configs_with_res + (configs_without_res * len(input_jobs))
+    _meta_cfg = meta_configs_json or configs_json
+    if run_info is not None:
+        run_info["total_jobs"] = total_jobs
 
     # ==== FLAT JOB PLAN (+ optional reload-minimising order) ====
     # One entry per job, in exactly the order the old nested loop visited them
@@ -1210,7 +1220,7 @@ def run_generation_loop(
             self, distribution_config, expanded, input_jobs, existing_data,
             overwrite_existing, has_optional_inputs, lora_triggerwords_mode,
             session_name, paths, unique_id, total_jobs, seed, ckpt_name,
-            positive_text, negative_text, vae_batch_size, configs_json,
+            positive_text, negative_text, vae_batch_size, _meta_cfg,
             resolutions_json, flush_batch_every, use_remote_vae,
             remote_vae_endpoint, save_conditioning_cache_to_file,
             enable_model_cache, optional_model, optional_clip, optional_vae,
@@ -1219,7 +1229,8 @@ def run_generation_loop(
             job_order=job_order, preview_on=preview_on, pv_steps=pv_steps, pv_scale=pv_scale,
             pv_cfg=pv_cfg, meta_run=_meta_run, job_plan=job_plan,
             skip_rejected_previews=skip_rejected_previews, only_favorited_previews=only_favorited_previews,
-            upscale_session_settings=session_settings_full
+            upscale_session_settings=session_settings_full,
+            next_phase=next_phase
         )
 
     # The schedule above used `expanded`; the main loop walks job_plan, so the smart cache needs
@@ -1597,20 +1608,10 @@ def run_generation_loop(
                     remote_vae_worker.wait_completion()
                     remote_vae_worker.stop()
 
-                existing_data["meta"] = {
-                    "positive": positive_text,
-                    "negative": negative_text,
-                    "model": ckpt_name,
-                    "seed": seed,
-                    "vae_batch_size": vae_batch_size,
-                    "configs_json": configs_json,
-                    "resolutions_json": resolutions_json,
-                    "image_format": image_format,
-                    "job_order": job_order,
-                    "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
-                    **_meta_run
-                }
+                existing_data["meta"] = _standard_run_meta(
+                    existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+                    _meta_cfg, resolutions_json, image_format, job_order, preview_on, pv_steps,
+                    pv_scale, pv_cfg, _meta_run)
                 save_manifest(paths["manifest"], existing_data)
 
                 loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -1954,20 +1955,10 @@ def run_generation_loop(
                             remote_vae_worker.wait_completion()
                             remote_vae_worker.stop()
 
-                        existing_data["meta"] = {
-                            "positive": positive_text,
-                            "negative": negative_text,
-                            "model": ckpt_name,
-                            "seed": seed,
-                            "vae_batch_size": vae_batch_size,
-                            "configs_json": configs_json,
-                            "resolutions_json": resolutions_json,
-                            "image_format": image_format,
-                            "job_order": job_order,
-                            "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                            "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
-                            **_meta_run
-                        }
+                        existing_data["meta"] = _standard_run_meta(
+                            existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+                            _meta_cfg, resolutions_json, image_format, job_order, preview_on, pv_steps,
+                            pv_scale, pv_cfg, _meta_run)
                         save_manifest(paths["manifest"], existing_data)
 
                         loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -2795,20 +2786,10 @@ def run_generation_loop(
                     remote_vae_worker.wait_completion()
                     remote_vae_worker.stop()
 
-                existing_data["meta"] = {
-                    "positive": positive_text,
-                    "negative": negative_text,
-                    "model": ckpt_name,
-                    "seed": seed,
-                    "vae_batch_size": vae_batch_size,
-                    "configs_json": configs_json,
-                    "resolutions_json": resolutions_json,
-                    "image_format": image_format,
-                    "job_order": job_order,
-                    "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-                    "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
-                    **_meta_run
-                }
+                existing_data["meta"] = _standard_run_meta(
+                    existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+                    _meta_cfg, resolutions_json, image_format, job_order, preview_on, pv_steps,
+                    pv_scale, pv_cfg, _meta_run)
                 save_manifest(paths["manifest"], existing_data)
 
                 loaded_model, loaded_clip, loaded_vae = None, None, None
@@ -2905,20 +2886,10 @@ def run_generation_loop(
         except Exception:
             pass
 
-    existing_data["meta"] = {
-        "positive": positive_text,
-        "negative": negative_text,
-        "model": ckpt_name,
-        "seed": seed,
-        "vae_batch_size": vae_batch_size,
-        "configs_json": configs_json,
-        "resolutions_json": resolutions_json,
-        "image_format": image_format,
-        "job_order": job_order,
-        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
-        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
-        **_meta_run
-    }
+    existing_data["meta"] = _standard_run_meta(
+        existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+        _meta_cfg, resolutions_json, image_format, job_order, preview_on, pv_steps,
+        pv_scale, pv_cfg, _meta_run)
     save_manifest(paths["manifest"], existing_data)
 
     print(f"[GridTester] 🧹 Cleaning up...")
@@ -2948,20 +2919,9 @@ def run_generation_loop(
         # Send completion event to dashboard
         if PromptServer is not None:
             try:
-                PromptServer.instance.send_sync("ultimate_grid.progress", {
-                    "node": unique_id,
-                    "session_name": session_name,
-                    "current_job": total_jobs,
-                    "total_jobs": total_jobs,
-                    "progress_pct": 100,
-                    "eta_str": "Done",
-                    "finish_time": time.strftime("%H:%M:%S"),
-                    "avg_duration": round(avg_per_job, 1),
-                    "last_duration": 0,
-                    "complete": True,
-                    "total_elapsed": f"{total_hours}h {total_minutes}m {total_seconds}s",
-                    "total_generated": total_generated
-                })
+                PromptServer.instance.send_sync("ultimate_grid.progress", _completion_payload(
+                    unique_id, session_name, total_jobs, avg_per_job,
+                    f"{total_hours}h {total_minutes}m {total_seconds}s", total_generated, next_phase))
             except Exception:
                 pass
     
@@ -3380,6 +3340,49 @@ def _populate_distributed_manager(manager, job_plan, expanded, input_jobs, exist
 
 
 
+def _standard_run_meta(existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
+                       configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
+                       pv_scale, pv_cfg, meta_run):
+    """Manifest meta written by every exit path of the loop. `configs_json` is the FULL configs string
+    (for a mixed run: standard + Workflow Sweep entries in Builder order, so Load Session restores both)."""
+    return {
+        "positive": positive_text,
+        "negative": negative_text,
+        "model": ckpt_name,
+        "seed": seed,
+        "vae_batch_size": vae_batch_size,
+        "configs_json": configs_json,
+        "resolutions_json": resolutions_json,
+        "image_format": image_format,
+        "job_order": job_order,
+        "preview_pass": {"enabled": preview_on, "steps": pv_steps, "scale": pv_scale, "cfg_override": pv_cfg},
+        "rejected_preview_fps": list((existing_data.get("meta") or {}).get("rejected_preview_fps", [])),
+        **(meta_run or {})
+    }
+
+
+def _completion_payload(unique_id, session_name, total_jobs, avg_per_job, total_elapsed, total_generated,
+                        next_phase=None):
+    """Final 'ultimate_grid.progress' event; next_phase ('sweep') tells the dashboard more work follows."""
+    payload = {
+        "node": unique_id,
+        "session_name": session_name,
+        "current_job": total_jobs,
+        "total_jobs": total_jobs,
+        "progress_pct": 100,
+        "eta_str": "Done",
+        "finish_time": time.strftime("%H:%M:%S"),
+        "avg_duration": round(avg_per_job, 1),
+        "last_duration": 0,
+        "complete": True,
+        "total_elapsed": total_elapsed,
+        "total_generated": total_generated
+    }
+    if next_phase:
+        payload["next_phase"] = next_phase
+    return payload
+
+
 def _distributed_run_meta(existing_data, positive_text, negative_text, ckpt_name, seed, vae_batch_size,
                           configs_json, resolutions_json, image_format, job_order, preview_on, pv_steps,
                           pv_scale, pv_cfg, meta_run):
@@ -3411,7 +3414,8 @@ def _run_distributed_generation(
     session_settings=None,
     job_order="as_written", preview_on=False, pv_steps=8, pv_scale=0.5, pv_cfg=None,
     meta_run=None, job_plan=None, skip_rejected_previews=True, only_favorited_previews=False,
-    upscale_session_settings=None
+    upscale_session_settings=None,
+    next_phase=None
 ):
     """
     Run generation in distributed mode.
@@ -4109,20 +4113,10 @@ def _run_distributed_generation(
         # Send completion event to dashboard
         if PromptServer is not None:
             try:
-                PromptServer.instance.send_sync("ultimate_grid.progress", {
-                    "node": unique_id,
-                    "session_name": session_name,
-                    "current_job": dist_total,
-                    "total_jobs": dist_total,
-                    "progress_pct": 100,
-                    "eta_str": "Done",
-                    "finish_time": time.strftime("%H:%M:%S"),
-                    "avg_duration": round(avg_per_job, 1),
-                    "last_duration": 0,
-                    "complete": True,
-                    "total_elapsed": f"{total_hours}h {total_minutes}m {total_seconds}s",
-                    "total_generated": final_status.get("completed", total_generated)
-                })
+                PromptServer.instance.send_sync("ultimate_grid.progress", _completion_payload(
+                    unique_id, session_name, dist_total, avg_per_job,
+                    f"{total_hours}h {total_minutes}m {total_seconds}s",
+                    final_status.get("completed", total_generated), next_phase))
             except Exception:
                 pass
 

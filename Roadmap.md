@@ -129,7 +129,7 @@ A button in the builder UI to pack short sha256 into config with an explanation 
 * **Problem:** Can only load full sessions, not merge snippets.
 
 
-#### **23. Pseudo-JSON Nodes (Recursion)** (low priority) - STARTED: v1 is the **Workflow Sweep** (Builder: Add Workflow Sweep): any API-format workflow runs as-is with chosen inputs swept (see README, 'Workflow Sweep'). Still open: inserting nodes into the USCG pipeline itself, mixed workflow + standard runs (video outputs shipped 11/4/26). (v1 shipped 11/4/26)
+#### **23. Pseudo-JSON Nodes (Recursion)** (low priority) - STARTED: v1 is the **Workflow Sweep** (Builder: Add Workflow Sweep): any API-format workflow runs as-is with chosen inputs swept (see README, 'Workflow Sweep'). Still open: inserting nodes into the USCG pipeline itself (video outputs and mixed workflow + standard runs shipped 11/4/26). (v1 shipped 11/4/26)
 * **Problem:** Advanced. Running a raw JSON workflow as a sub-node. Inserting any node into any part of the genereation would make this tool have an immense customizability increase.
 More info needed on how this could work, would like to see a visual interface for it in the builder UI eventaully. (big job, very low priority)
 
@@ -191,4 +191,4 @@ Verify the node ids of the optional aesthetic / reward scorer packs against the 
 
 #### **32. Workflow Sweep: video outputs and mixed runs**
 Allow video outputs from a sweep and sweep + standard configs in one Generator run (both are v1 limits).
-DONE (11/4/26): video outputs (SaveVideo / CreateVideo VIDEO sockets, VHS_VideoCombine frames via a spliced CreateVideo, `USCGSweepCollectVideo`). Still open: mixed sweep + standard runs in one Generator run; SaveWEBM / SaveAnimatedWEBP / SaveAnimatedPNG as frame sources (same CreateVideo splice); several outputs per job.
+DONE (11/4/26): video outputs (SaveVideo / CreateVideo VIDEO sockets, VHS_VideoCombine frames via a spliced CreateVideo, `USCGSweepCollectVideo`). DONE (11/4/26, `feat/sweep-mixed`): mixed sweep + standard runs in one Generator run (standard configs first, then the sweep, one session, global Start At Job numbering); SaveWEBM / SaveAnimatedWEBP / SaveAnimatedPNG as frame sources (same CreateVideo splice, fps clamped to 1-120). Still open: several outputs per job.

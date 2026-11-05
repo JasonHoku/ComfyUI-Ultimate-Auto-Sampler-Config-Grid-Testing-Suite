@@ -28,6 +28,13 @@ import random
 COLLECTOR_CLASS = "USCGSweepCollect"
 COLLECTOR_VIDEO_CLASS = "USCGSweepCollectVideo"
 VHS_COMBINE_CLASS = "VHS_VideoCombine"
+FRAME_SINKS = {  # class -> how the CreateVideo splice reads it (table order = find_video_sources order)
+    "VHS_VideoCombine": {"fps": "frame_rate", "audio": "audio", "default_fps": 8.0},
+    "SaveWEBM":         {"fps": "fps", "audio": None, "default_fps": 24.0},
+    "SaveAnimatedWEBP": {"fps": "fps", "audio": None, "default_fps": 6.0},
+    "SaveAnimatedPNG":  {"fps": "fps", "audio": None, "default_fps": 6.0},
+}
+CREATE_VIDEO_FPS = (1.0, 120.0)  # CreateVideo.fps MIN/MAX
 MAX_JOBS = 50000
 
 # input name -> manifest field (class-agnostic; see plan section 4.4)
@@ -269,7 +276,8 @@ def find_output_nodes(prompt, class_info=None):
     for nid in sorted(prompt, key=_node_sort_key):
         ct = prompt[nid].get("class_type", "")
         info = _info(class_info, ct)
-        is_out = bool(info and info.get("output_node")) or ct.startswith(("SaveImage", "PreviewImage", "PreviewAny", "SaveVideo"))
+        is_out = bool(info and info.get("output_node")) or ct.startswith(
+            ("SaveImage", "PreviewImage", "PreviewAny", "SaveVideo", "SaveWEBM", "SaveAnimated", "VHS_VideoCombine"))
         if not is_out:
             continue
         src = None
@@ -282,8 +290,10 @@ def find_output_nodes(prompt, class_info=None):
     return outs
 
 
-def _vhs_unsupported(node):
-    """Why a VHS_VideoCombine node cannot be a frames source, or None when it can."""
+def _frames_unsupported(node):
+    """Why a frame-sink node cannot be a frames source, or None when it can (only VHS has restrictions)."""
+    if (node or {}).get("class_type") != VHS_COMBINE_CLASS:
+        return None
     inputs = (node or {}).get("inputs") or {}
     if is_link(inputs.get("vae")):
         return "it has a `vae` link (latent input): decode the latents before VHS Video Combine"
@@ -292,11 +302,37 @@ def _vhs_unsupported(node):
     return None
 
 
+_vhs_unsupported = _frames_unsupported
+
+
+def _sink_fps_raw(node):
+    """The raw fps input of a frame-sink node (a link, a number or the sink's default)."""
+    sink = FRAME_SINKS.get((node or {}).get("class_type"), FRAME_SINKS[VHS_COMBINE_CLASS])
+    fps = ((node or {}).get("inputs") or {}).get(sink["fps"], sink["default_fps"])
+    if is_link(fps):
+        return [str(fps[0]), int(fps[1])]
+    try:
+        return float(fps)
+    except (TypeError, ValueError):
+        return float(sink["default_fps"])
+
+
+def _sink_fps(node):
+    """(value_or_link, clamped) for the CreateVideo fps: a link is forwarded unchanged, a literal is
+    clamped to CreateVideo's 1-120."""
+    fps = _sink_fps_raw(node)
+    if isinstance(fps, list):
+        return fps, False
+    lo, hi = CREATE_VIDEO_FPS
+    clamped = min(max(fps, lo), hi)
+    return clamped, clamped != fps
+
+
 def find_video_sources(prompt, class_info=None, warnings=None):
     """
     Every socket a video collector could be fed from, best candidate first:
       1. feeders of SaveVideo*.video            (kind "video", VIDEO socket)
-      2. feeders of VHS_VideoCombine.images     (kind "frames", IMAGE socket, converted with a CreateVideo)
+      2. feeders of VHS_VideoCombine / SaveWEBM / SaveAnimatedWEBP / SaveAnimatedPNG .images (kind "frames", IMAGE socket, converted with a CreateVideo)
       3. any node whose class advertises a VIDEO output (CreateVideo, LoadVideo, ...)
     Returns [{node_id, output_index, type, media:"video", kind, frames_from?, picked_from?}].
     Unsupported VHS nodes are skipped with an entry in `warnings` (when a list is given).
@@ -320,18 +356,19 @@ def find_video_sources(prompt, class_info=None, warnings=None):
         v = (prompt[nid].get("inputs") or {}).get("video")
         if ct.startswith("SaveVideo") and is_link(v):
             add(v[0], v[1], "VIDEO", "video", picked_from=nid)
-    for nid in sorted(prompt, key=_node_sort_key):
-        if prompt[nid].get("class_type") != VHS_COMBINE_CLASS:
-            continue
-        v = (prompt[nid].get("inputs") or {}).get("images")
-        if not is_link(v):
-            continue
-        why = _vhs_unsupported(prompt[nid])
-        if why:
-            if warnings is not None:
-                warnings.append(f"{node_title(prompt, nid)} (#{nid}) was skipped as a video source: {why}.")
-            continue
-        add(v[0], v[1], "IMAGE", "frames", picked_from=nid, frames_from=nid)
+    for sink_class in FRAME_SINKS:
+        for nid in sorted(prompt, key=_node_sort_key):
+            if prompt[nid].get("class_type") != sink_class:
+                continue
+            v = (prompt[nid].get("inputs") or {}).get("images")
+            if not is_link(v):
+                continue
+            why = _frames_unsupported(prompt[nid])
+            if why:
+                if warnings is not None:
+                    warnings.append(f"{node_title(prompt, nid)} (#{nid}) was skipped as a video source: {why}.")
+                continue
+            add(v[0], v[1], "IMAGE", "frames", picked_from=nid, frames_from=nid)
     for nid in sorted(prompt, key=_node_sort_key):
         ct = prompt[nid].get("class_type")
         info = _info(class_info, ct)
@@ -654,18 +691,13 @@ def build_job_prompt(template, subs, output, collector_inputs, media="image", fr
         return prompt, cid
     source = [str(output[0]), int(output[1])]
     if frames_from is not None and str(frames_from) in prompt:
-        vhs_inputs = prompt[str(frames_from)].get("inputs") or {}
+        sink_node = prompt[str(frames_from)]
+        sink = FRAME_SINKS.get(sink_node.get("class_type"), FRAME_SINKS[VHS_COMBINE_CLASS])
+        vhs_inputs = sink_node.get("inputs") or {}
         images = vhs_inputs.get("images")
         cv_inputs = {"images": [str(images[0]), int(images[1])] if is_link(images) else source}
-        fps = vhs_inputs.get("frame_rate", 8)
-        if is_link(fps):
-            cv_inputs["fps"] = [str(fps[0]), int(fps[1])]
-        else:
-            try:
-                cv_inputs["fps"] = float(fps)
-            except (TypeError, ValueError):
-                cv_inputs["fps"] = 8.0
-        audio = vhs_inputs.get("audio")
+        cv_inputs["fps"] = _sink_fps(sink_node)[0]
+        audio = vhs_inputs.get(sink["audio"]) if sink["audio"] else None
         if is_link(audio):
             cv_inputs["audio"] = [str(audio[0]), int(audio[1])]
         cv_id = collector_node_id(prompt)
@@ -991,6 +1023,7 @@ def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=N
             base["wf_frames_from"] = frames_from
 
     jobs = []
+    clamped_fps = []  # raw out-of-range literal fps values of a frame sink (a swept fps can give several)
     for combo in itertools.product(*[range(len(a.options)) for a in axes]):
         subs, fields, params = [], {}, {}
         for a, oi in zip(axes, combo):
@@ -1000,6 +1033,12 @@ def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=N
             params[a.label] = opt["display"]
             params.update(opt.get("extra_params") or {})
         substituted = apply_subs(prompt, subs)
+        if frames_from is not None and frames_from in substituted:
+            _fps, _was_clamped = _sink_fps(substituted[frames_from])
+            if _was_clamped:
+                _raw = _sink_fps_raw(substituted[frames_from])
+                if _raw not in clamped_fps:
+                    clamped_fps.append(_raw)
         conf = dict(base)
         conf.update(known_fields(substituted, sources, encoders, lora_nodes))
         conf.update(fields)
@@ -1010,6 +1049,13 @@ def plan_workflow_entry(entry, extra_seeds=None, pos_prompts=None, neg_prompts=N
         conf["wf_fingerprint"] = fingerprint(substituted, (out_id, out_idx), media, frames_from)
         jobs.append(conf)
 
+    if clamped_fps:
+        lo, hi = CREATE_VIDEO_FPS
+        used = sorted({min(max(f, lo), hi) for f in clamped_fps})
+        warnings.append(f"{node_title(prompt, frames_from)} (#{frames_from}) fps "
+                        f"{', '.join(f'{f:g}' for f in clamped_fps)} "
+                        f"{'is' if len(clamped_fps) == 1 else 'are'} outside CreateVideo's 1–120; "
+                        f"the collected mp4 uses {' / '.join(f'{u:g}' for u in used)}.")
     return {
         "jobs": jobs,
         "axes": [{"label": a.label, "count": len(a.options), "order": i} for i, a in enumerate(axes)],
@@ -1030,8 +1076,8 @@ def plan_workflow_configs(configs, extra_seeds=None, pos_prompts=None, neg_promp
     jobs, templates, axes, warnings = [], {}, [], []
     for ci, entry in enumerate(configs):
         if not isinstance(entry, dict) or entry.get("model_type") != "workflow":
-            raise ValueError("Workflow sweeps cannot be mixed with standard configs in one Generator run. "
-                             "Use one Builder for the workflow sweep and another for standard configs.")
+            raise ValueError("Workflow sweeps cannot be mixed with standard configs in one sweep plan "
+                             "(queue the Generator: it runs the standard configs first, then the sweep).")
         plan = plan_workflow_entry(entry, extra_seeds, pos_prompts, neg_prompts, class_info)
         jobs.extend(plan["jobs"])
         templates[plan["template"]["hash"]] = plan["template"]
