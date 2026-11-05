@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from . import image_metrics
+from . import comfy_nodes_workflow
 try:
     from diffusers.image_processor import VaeImageProcessor
 except ImportError as e:
@@ -222,6 +223,7 @@ class RemoteVAEDecodeWorker:
                     img.save(filepath, format="JPEG", quality=95)
                 else:
                     img.save(filepath, quality=80)
+                comfy_nodes_workflow.stamp_file(filepath, meta)
 
                 meta.update({
                     "file": f"/view?filename={filename}&type=output&subfolder=benchmarks/{self.session_name}/images",

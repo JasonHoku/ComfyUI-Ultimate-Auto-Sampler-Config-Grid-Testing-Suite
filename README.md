@@ -234,10 +234,22 @@ If you'd rather build the graph yourself:
 * **Upscale Model Discovery:** Automatically detects installed upscale models from ComfyUI's `upscale_models` folder with a searchable dropdown in the Config Builder.
 * **Tiled VAE Support:** Enable tiled VAE decoding for upscaled images to handle large resolutions without running out of VRAM.
 * **Only Final Output Saved:** When upscaling is enabled, only the upscaled version is saved — the intermediate base image is automatically skipped, keeping your session clean.
+* **Dashboard Upscale:** upscale one image or every favorite straight from the Dashboard, with a full pipeline editor, presets and a real Cancel — see [Dashboard Upscale](#dashboard-upscale).
+
+### Dashboard Upscale
+The up-arrow button (⬆) on a card opens the upscale modal for that image, or for all favorited images.
+
+* **Presets:** pick one from the list; the badge shows `Preset: X`, `Preset: X (modified)` after you edit it, or `Unsaved config`. **Update preset** overwrites the loaded preset, **Save as…** stores the edits under a new name, **Revert** drops the edits, **Delete** removes the preset. Presets are shared with the Config Builder (same file), and every save re-reads the file first so a preset someone else added meanwhile is never lost.
+* **Inline editing:** add, remove, switch off and **reorder** pipelines and steps with the ▲ ▼ buttons (buttons, not drag and drop, so it works on a phone). Mode, ratios, denoise, steps, tiled sampling / VAE, upscale models, SeedVR2 and Florence2 options are all editable.
+* **Validation:** a field that cannot work (`1.5,x` as ratios, denoise above 1, no upscale model for a model mode, empty Florence2 text, ...) is outlined in red, listed under the editor, and **Run** stays disabled until it is fixed. Warnings (an upscale model that is not installed, several denoise values for Florence2) do not block. The server validates again and answers `400` with the list if something slips through.
+* **Run vs Run once:** **Run** appears when the config equals the loaded preset; once you change anything it reads **Run once (unsaved)**. Either way the config is sent as it is and nothing is written to the presets file unless you press Update / Save as. A line under the editor says how many images and outputs the run will produce.
+* **Cancel:** **Cancel job** is only shown while a job runs (the editor is locked meanwhile). The job stops between images, pipelines, steps and combinations, and *inside* the sampler within one step (a cancel-aware copy of the model; ComfyUI's global interrupt is never used, so a Generator run in the queue is unaffected). SeedVR2 runs in an external node and can only stop between steps. Outputs finished before the cancel are kept and appear exactly once; the status line reads `Cancelled: 3/10 images done, 5 new images kept`. **Close** only hides the modal: reopen it (or reload the page) and it re-attaches to the running job. One job per session at a time (a second start answers `409`).
+* **Phone:** below 600 px wide the modal fills the screen, buttons are 44 px touch targets, inputs are 16 px and Run / Cancel stay pinned to the bottom.
+* **Note:** upscaled files are saved in the session's image format, and carry the nodes workflow when the session was generated with *Embed ComfyUI Nodes Workflow*.
 
 ### 📦 Favorites Export & Workflow Packing
 * **Pack Full ComfyUI Workflow:** Embed the entire current ComfyUI graph into exported favorite images as PNG metadata. Drag the exported image back into ComfyUI to restore the full workflow.
-* **Pack Config Data as Nodes Workflow:** Generate a per-image pure-nodes workflow from each image's specific config (sampler, scheduler, steps, CFG, model, LoRA, prompt). Each exported image gets its own workflow matching exactly how it was generated.
+* **Pack Config Data as Nodes Workflow:** Generate a per-image pure-nodes workflow from each image's specific config (sampler, scheduler, steps, CFG, model, LoRA, prompt). Each exported image gets its own workflow matching exactly how it was generated. Images the Dashboard sent no workflow for (for example an export from an older page) get the same graph built server-side. To have the graph in every image from the start, turn on *Embed ComfyUI Nodes Workflow* in Run Settings.
 * **Cleaned Favorites Manifest:** Export only favorited items in the manifest — non-favorited entries are excluded from the copied manifest.json.
 * **Delete All Non-Favorited Items:** One-click cleanup to permanently delete all non-favorited images from a session and update the manifest. Includes a confirmation dialog to prevent accidents.
 * **Export Positive Prompt as .txt:** Save the positive prompt alongside each exported image as a plain text file — useful for training datasets.
@@ -548,6 +560,7 @@ All configuration data is automatically synchronized with the Ultimate Sampler G
 
 The Run Settings section of the Builder holds options that apply to the whole run rather than to one config array (overwrite/resume, flush batch size, VAE batch size, model cache, trigger-word mode, ...). One of them:
 
+* **Embed ComfyUI Nodes Workflow** (`pack_nodes_metadata`, off by default): write the Revise "copy as nodes" graph (checkpoint, LoRAs, both prompts, empty latent, KSampler, VAE Decode, Preview) into every saved PNG and WebP, plus the API `prompt`, so dragging the image onto the ComfyUI canvas loads it. Covers Generator images, upscales (a Note node describes the upscale), remote-VAE images, dashboard upscales and distributed worker images (stamped by the master after collection). JPG cannot carry a ComfyUI workflow; diffusion-model / GGUF / LTX video / Workflow Sweep items are skipped. The graph is rebuilt from the image's own config, so it reproduces the checkpoint + LoRA + sampler setup, not regional (COUPLE) masks or upscale chains.
 * **Additional Random Seeds** (`add_random_seeds_to_gens`, 0-100): render this many extra images per config using extra seeds on top of the base seed. Handy for telling "the base model did that" from "the LoRA did that" by checking whether a quirk survives across seeds. The extra seeds are derived from the base seed, so the same base seed always gives the same extras (and resuming an interrupted run works). Contributed by DRuggeri (PR #21).
 
 Covered in their own sections: [Job Order & Preview Pass](#job-order--preview-pass-run-settings), [Image Metrics](#image-metrics-optional), Text Encoder Batch Size ([`te_batch_size`](#performance-settings)).
@@ -1826,6 +1839,11 @@ After modifying backend Python files, restart ComfyUI. After modifying `web/` JS
 ---
 
 ## 📝 Changelog
+
+### Update 11/4/26 (upscale + workflow embedding): Dashboard Upscale phase 2, nodes workflow in every image
+* 🖼️ **Embed ComfyUI Nodes Workflow:** new Run Setting. Every saved PNG/WebP carries the pure-nodes graph, so dropping the image on ComfyUI rebuilds the checkpoint + LoRA + prompt + KSampler setup. Works for upscales, dashboard upscales and distributed worker images too; JPG is not supported.
+* 🔍 **Dashboard Upscale, phase 2:** reorder steps and pipelines, red-field validation (server checks too), preset Update / Save as / Revert / Delete, Run once without saving, an output counter, a phone-sized layout, and a real Cancel that stops inside the sampler. Closing the modal no longer loses a running job.
+* 🐞 **Dashboard upscale fixes:** new cards were taken from the oldest end of the manifest, the progress bar never finished (it now shows Complete / cancelled), finished jobs were never forgotten, and two jobs on one session could overwrite each other's manifest (now a 409).
 
 ### Update 11/4/26 (fixes): Distributed upscales, latent-input size
 * 🌐 **Distributed upscales work:** the post-run upscale phase on the master used to crash on every distributed run with upscaling on. It now upscales this run's images (master and worker made), per model/LoRA/VAE group, with HiRes-prompt adjustment encoded per model.

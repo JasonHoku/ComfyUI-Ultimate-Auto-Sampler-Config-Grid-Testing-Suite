@@ -1030,9 +1030,13 @@ async def export_favorites(request):
                 try:
                     # Determine which workflow to embed
                     item_workflow = None
-                    if pack_nodes_workflow and nodes_workflows:
-                        # Per-image nodes workflow takes priority
-                        item_workflow = nodes_workflows.get(item.get("file", ""))
+                    if pack_nodes_workflow:
+                        # Per-image nodes workflow (built by the dashboard) takes priority; fall back to the
+                        # Python port of the same builder when the client did not send one for this image.
+                        item_workflow = (nodes_workflows or {}).get(item.get("file", ""))
+                        if not item_workflow:
+                            from .comfy_nodes_workflow import build_nodes_workflow
+                            item_workflow = build_nodes_workflow(item)
                     elif pack_workflow and workflow_data:
                         # Full ComfyUI graph workflow
                         item_workflow = workflow_data
@@ -1404,11 +1408,16 @@ async def upscale_images(request):
         if not upscale_config or not upscale_config.get("pipelines"):
             return web.json_response({"error": "Missing upscale_config with pipelines"}, status=400)
 
-        from .upscale_runner import start_upscale_job
+        from .upscale_runner import start_upscale_job, validate_upscale_config
+        problems = validate_upscale_config(upscale_config)
+        if problems:
+            return web.json_response({"error": "Invalid upscale config", "errors": problems}, status=400)
+
         job_id, error = start_upscale_job(session_name, image_ids, upscale_config, all_favorited=all_favorited)
 
         if error:
-            return web.json_response({"error": error}, status=400)
+            # one job per session: a second start is a conflict, not a bad request
+            return web.json_response({"error": error}, status=409 if "already running" in error else 400)
 
         from .upscale_runner import get_upscale_status
         status = get_upscale_status(job_id)
@@ -1427,6 +1436,12 @@ async def upscale_status(request):
     from .upscale_runner import get_upscale_status
     return web.json_response(get_upscale_status(job_id))
 
+@server.PromptServer.instance.routes.get("/config_tester/upscale_jobs")
+async def upscale_jobs(request):
+    """Known dashboard upscale jobs (optionally one session): lets a reopened modal re-attach to a running job."""
+    from .upscale_runner import list_upscale_jobs
+    return web.json_response({"jobs": list_upscale_jobs(request.query.get("session_name", ""))})
+
 @server.PromptServer.instance.routes.post("/config_tester/cancel_upscale")
 async def cancel_upscale(request):
     """Cancel a running upscale job."""
@@ -1434,8 +1449,7 @@ async def cancel_upscale(request):
         data = await request.json()
         job_id = data.get("job_id", "")
         from .upscale_runner import cancel_upscale_job
-        cancelled = cancel_upscale_job(job_id)
-        return web.json_response({"cancelled": cancelled})
+        return web.json_response(cancel_upscale_job(job_id))
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 

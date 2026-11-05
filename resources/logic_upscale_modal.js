@@ -9,112 +9,19 @@ var upscaleModalState = {
     imageData: null,
     presets: [],
     currentConfig: null,
+    loadedPresetName: null,       // preset the working config was loaded from / last saved as
+    loadedPresetSnapshot: null,   // normalized copy of that preset (what "modified" is measured against)
+    validation: null,             // last validateUpscaleConfig() result
+    serverErrors: [],             // validation errors the server returned for the last Run
+    running: false,
+    lastStatus: null,
     jobId: null,
     pollInterval: null,
     availableModels: [],  // Upscale model list from server
 };
 
-// Default Florence2 Hi-Res Fix options — mirrors createDefaultFlorence2Options()
-// in conf-builder-config-management.js. Keep these two in sync if you change either.
-function _defaultFlorence2Options() {
-    return {
-        model: "microsoft/Florence-2-base",
-        text_input: "face",
-        output_mask_select: "",
-        max_new_tokens: 1024,
-        florence2_input_mp: 0.5,
-        target_megapixels: 1.0,
-        crop_padding: 64,
-        min_crop_resolution: 0,       // No floor — Florence2's polygon decides
-        max_crop_resolution: 99999,   // No ceiling — paste-back natural cap is the image itself
-        grow_expand: 32,
-        feather_left: 128,
-        feather_top: 128,
-        feather_right: 128,
-        feather_bottom: 128,
-        model_source: "from_manifest",
-        on_no_detection: "skip"
-    };
-}
-
-// Default SeedVR2 options — matches SeedVR2 node defaults
-function _defaultSeedVR2Options() {
-    return {
-        dit_model: "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
-        resolution: 1080,
-        max_resolution: 0,
-        seed: 42,
-        color_correction: "lab",
-        batch_size: 1,
-        input_noise_scale: 0.0,
-        latent_noise_scale: 0.0,
-        blocks_to_swap: 0,
-        attention_mode: "sdpa",
-        offload_device: "cpu",
-        cache_model: false,
-        encode_tiled: false,
-        encode_tile_size: 1024,
-        encode_tile_overlap: 128,
-        decode_tiled: false,
-        decode_tile_size: 1024,
-        decode_tile_overlap: 128,
-        vae_offload_device: "none",
-        vae_cache_model: false
-    };
-}
-
-// Default upscale step config — ALL fields matching the Builder UI's createDefaultStep()
-function _defaultUpscaleStep() {
-    return {
-        active: true,
-        mode: "hires_only",
-        repeat: 1,
-        upscale_models: [],
-        upscale_ratios: "1.5",
-        upscale_size: "2.0",
-        hires_denoise: "0.3",
-        hires_steps: 0,
-        tiled_vae: false,
-        tile_size: 512,
-        tile_overlap: 64,
-        temporal_size: 512,
-        temporal_overlap: 64,
-        resize_method: "bilinear",
-        hires_tiled_sampling: false,
-        hires_tile_width: 512,
-        hires_tile_height: 512,
-        hires_mask_blur: 8,
-        hires_tile_padding: 32,
-        hires_force_uniform_tiles: false,
-        seedvr2: _defaultSeedVR2Options(),
-        florence2: _defaultFlorence2Options()
-    };
-}
-
-// Ensure a step has all required fields (migration/defaults) — mirrors Builder's ensureStepFields()
-function _ensureUpscaleStepFields(step) {
-    if (step.active === undefined) step.active = true;
-    if (!step.repeat || step.repeat < 1) step.repeat = 1;
-    if (!step.upscale_models) step.upscale_models = [];
-    if (!step.upscale_ratios) step.upscale_ratios = "1.5";
-    if (!step.upscale_size) step.upscale_size = "2.0";
-    if (!step.hires_denoise) step.hires_denoise = "0.3";
-    if (step.hires_steps === undefined) step.hires_steps = 0;
-    if (step.tiled_vae === undefined) step.tiled_vae = false;
-    if (!step.tile_size) step.tile_size = 512;
-    if (!step.tile_overlap) step.tile_overlap = 64;
-    if (!step.temporal_size) step.temporal_size = 512;
-    if (!step.temporal_overlap) step.temporal_overlap = 64;
-    if (!step.resize_method) step.resize_method = "bilinear";
-    if (step.hires_tiled_sampling === undefined) step.hires_tiled_sampling = false;
-    if (!step.hires_tile_width) step.hires_tile_width = 512;
-    if (!step.hires_tile_height) step.hires_tile_height = 512;
-    if (step.hires_mask_blur === undefined) step.hires_mask_blur = 8;
-    if (!step.hires_tile_padding) step.hires_tile_padding = 32;
-    if (step.hires_force_uniform_tiles === undefined) step.hires_force_uniform_tiles = false;
-    if (!step.seedvr2) step.seedvr2 = _defaultSeedVR2Options();
-    if (!step.florence2) step.florence2 = _defaultFlorence2Options();
-}
+// Step defaults, normalisation, validation, moveItem, configsEqual, presetFromConfig and
+// countUpscaleOutputs live in logic_upscale_edit.js (loaded right before this file).
 
 // Default config
 function _defaultUpscaleConfig() {
@@ -134,31 +41,74 @@ function openUpscaleModal(imageId) {
     upscaleModalState.open = true;
     upscaleModalState.imageId = imageId;
     upscaleModalState.imageData = item;
-    upscaleModalState.jobId = null;
+    // NOTE: jobId / pollInterval are kept: a job started earlier keeps running while the modal is closed,
+    // and reopening shows it again (the poll never depended on the modal being open).
 
-    // Initialize with default config if none set
+    // Initialize with the last used config (survives a page reload), else the default
     if (!upscaleModalState.currentConfig) {
-        upscaleModalState.currentConfig = _defaultUpscaleConfig();
+        _restoreUpscaleCfg();
+        if (!upscaleModalState.currentConfig) upscaleModalState.currentConfig = _defaultUpscaleConfig();
     }
 
-    // Fetch presets and model list in parallel, then render
+    // Fetch presets, model list and any running job for this session in parallel, then render
     Promise.all([
         fetchUpscalePresets(),
-        fetchUpscaleModels()
-    ]).then(function() { renderUpscaleModal(); });
+        fetchUpscaleModels(),
+        _reattachUpscaleJob()
+    ]).then(function() {
+        _syncLoadedPreset();
+        renderUpscaleModal();
+    });
 }
 
 /**
- * Close the upscale modal
+ * Close the upscale modal. A running job is NOT stopped (use Cancel for that) and keeps being polled.
  */
 function closeUpscaleModal() {
     upscaleModalState.open = false;
-    if (upscaleModalState.pollInterval) {
-        clearInterval(upscaleModalState.pollInterval);
-        upscaleModalState.pollInterval = null;
-    }
     var modal = document.getElementById('upscale-modal-overlay');
     if (modal) modal.style.display = 'none';
+}
+
+/**
+ * Persist the working config + which preset it came from (per browser; try/catch: storage can be blocked)
+ */
+function _persistUpscaleCfg() {
+    try {
+        localStorage.setItem('uscg_upscale_modal_cfg', JSON.stringify({
+            config: upscaleModalState.currentConfig,
+            loadedPresetName: upscaleModalState.loadedPresetName
+        }));
+    } catch (e) { /* storage blocked: the modal still works */ }
+}
+
+function _restoreUpscaleCfg() {
+    try {
+        var raw = localStorage.getItem('uscg_upscale_modal_cfg');
+        if (!raw) return;
+        var saved = JSON.parse(raw);
+        if (saved && saved.config && Array.isArray(saved.config.pipelines)) {
+            upscaleModalState.currentConfig = normalizeUpscaleConfig(saved.config);
+            upscaleModalState.loadedPresetName = saved.loadedPresetName || null;
+        }
+    } catch (e) { /* ignore a corrupt entry */ }
+}
+
+/**
+ * After presets are fetched: the loaded preset's snapshot is whatever the server has NOW
+ * (a preset that was deleted elsewhere turns the config into an unsaved one).
+ */
+function _syncLoadedPreset() {
+    var name = upscaleModalState.loadedPresetName;
+    if (!name) { upscaleModalState.loadedPresetSnapshot = null; return; }
+    var p = null;
+    upscaleModalState.presets.forEach(function(x) { if (x.name === name) p = x; });
+    if (p) {
+        upscaleModalState.loadedPresetSnapshot = normalizeUpscaleConfig(p);
+    } else {
+        upscaleModalState.loadedPresetName = null;
+        upscaleModalState.loadedPresetSnapshot = null;
+    }
 }
 
 /**
@@ -188,78 +138,120 @@ async function fetchUpscaleModels() {
 }
 
 /**
- * Save current config as a new preset
+ * Current session name (same source the old Start button used)
+ */
+function _upscaleSessionName() {
+    var el = document.getElementById('session-input');
+    return (el && el.value) || 'default';
+}
+
+/**
+ * After a reload there is no jobId in memory: ask the server whether a job is still running for this session
+ */
+async function _reattachUpscaleJob() {
+    if (upscaleModalState.jobId) return;
+    try {
+        var resp = await fetch('/config_tester/upscale_jobs?session_name=' + encodeURIComponent(_upscaleSessionName()));
+        if (!resp.ok) return;
+        var data = await resp.json();
+        var jobs = (data && data.jobs) || [];
+        for (var i = 0; i < jobs.length; i++) {
+            if (jobs[i].status === 'running' || jobs[i].status === 'cancelling') {
+                upscaleModalState.jobId = jobs[i].job_id;
+                upscaleModalState.running = true;
+                _startUpscalePoll(jobs[i].job_id);
+                return;
+            }
+        }
+    } catch (e) { /* older server without the route: nothing to reattach */ }
+}
+
+/**
+ * Read-modify-write on the shared presets file: the POST replaces the WHOLE file, so always re-read first
+ * (another tab or the Builder may have changed it since this modal loaded its copy).
+ */
+async function _updateUpscalePresets(mutator) {
+    var resp = await fetch('/configbuilder/upscale_presets');
+    if (!resp.ok) throw new Error('could not read the presets file (HTTP ' + resp.status + ')');
+    var data = await resp.json();
+    var list = mutator((data && data.presets) || []);
+    var post = await fetch('/configbuilder/upscale_presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presets: list })
+    });
+    if (!post.ok) throw new Error('could not save the presets file (HTTP ' + post.status + ')');
+    upscaleModalState.presets = list;
+    return list;
+}
+
+/**
+ * Save the current config under `name` (replaces a preset with that name, else appends) and make it the loaded preset
  */
 async function saveUpscalePreset(name) {
+    name = (name || '').trim();
     if (!name || !upscaleModalState.currentConfig) return;
-    // Check for duplicate name and replace if exists
-    var existingIdx = -1;
-    for (var i = 0; i < upscaleModalState.presets.length; i++) {
-        if (upscaleModalState.presets[i].name === name) { existingIdx = i; break; }
-    }
-    var preset = {
-        name: name,
-        pipelines: JSON.parse(JSON.stringify(upscaleModalState.currentConfig.pipelines)),
-        hires_prompt_adjust: upscaleModalState.currentConfig.hires_prompt_adjust || false,
-        hires_prompt_behavior: upscaleModalState.currentConfig.hires_prompt_behavior || "append_end",
-        hires_prompt_text: upscaleModalState.currentConfig.hires_prompt_text || "",
-    };
-    if (existingIdx >= 0) {
-        upscaleModalState.presets[existingIdx] = preset;
-    } else {
-        upscaleModalState.presets.push(preset);
-    }
+    var preset = presetFromConfig(name, upscaleModalState.currentConfig);
     try {
-        await fetch('/configbuilder/upscale_presets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ presets: upscaleModalState.presets })
+        await _updateUpscalePresets(function(list) {
+            var idx = -1;
+            list.forEach(function(p, i) { if (p.name === name) idx = i; });
+            if (idx >= 0) list[idx] = preset; else list.push(preset);
+            return list;
         });
-    } catch (e) { console.error('Failed to save preset:', e); }
+    } catch (e) { alert('Failed to save preset: ' + e.message); return; }
+    upscaleModalState.loadedPresetName = name;
+    upscaleModalState.loadedPresetSnapshot = normalizeUpscaleConfig(preset);
+    _persistUpscaleCfg();
     renderUpscaleModal();
 }
 
 /**
- * Delete a preset by index
+ * Delete a preset by name. The working config stays as it is (it becomes "Unsaved config").
  */
-async function deleteUpscalePreset(index) {
-    upscaleModalState.presets.splice(index, 1);
+async function deleteUpscalePreset(name) {
     try {
-        await fetch('/configbuilder/upscale_presets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ presets: upscaleModalState.presets })
-        });
-    } catch (e) { console.error('Failed to delete preset:', e); }
+        await _updateUpscalePresets(function(list) { return list.filter(function(p) { return p.name !== name; }); });
+    } catch (e) { alert('Failed to delete preset: ' + e.message); return; }
+    if (upscaleModalState.loadedPresetName === name) {
+        upscaleModalState.loadedPresetName = null;
+        upscaleModalState.loadedPresetSnapshot = null;
+    }
+    _persistUpscaleCfg();
     renderUpscaleModal();
 }
 
 /**
- * Load a preset into the current config
+ * Load a preset (by index into upscaleModalState.presets) into the working config
  */
 function loadUpscalePreset(index) {
     var preset = upscaleModalState.presets[index];
     if (!preset) return;
-    upscaleModalState.currentConfig = {
-        pipelines: JSON.parse(JSON.stringify(preset.pipelines)),
-        hires_prompt_adjust: preset.hires_prompt_adjust || false,
-        hires_prompt_behavior: preset.hires_prompt_behavior || "append_end",
-        hires_prompt_text: preset.hires_prompt_text || "",
-    };
-    // Ensure all loaded steps have required fields
-    upscaleModalState.currentConfig.pipelines.forEach(function(p) {
-        if (p.active === undefined) p.active = true;
-        if (!p.name) p.name = "Pipeline";
+    var cfg = normalizeUpscaleConfig(preset);
+    cfg.pipelines.forEach(function(p) {
         if (!p.steps || p.steps.length === 0) p.steps = [_defaultUpscaleStep()];
-        p.steps.forEach(_ensureUpscaleStepFields);
     });
+    upscaleModalState.currentConfig = cfg;
+    upscaleModalState.loadedPresetName = preset.name;
+    upscaleModalState.loadedPresetSnapshot = normalizeUpscaleConfig(preset);
+    _persistUpscaleCfg();
+    renderUpscaleModal();
+}
+
+/**
+ * Throw away the edits: back to the loaded preset
+ */
+function revertUpscaleConfig() {
+    if (!upscaleModalState.loadedPresetSnapshot) return;
+    upscaleModalState.currentConfig = JSON.parse(JSON.stringify(upscaleModalState.loadedPresetSnapshot));
+    _persistUpscaleCfg();
     renderUpscaleModal();
 }
 
 /**
  * Helper: create a labeled select
  */
-function _makeSelect(label, options, currentVal, onChange) {
+function _makeSelect(label, options, currentVal, onChange, key) {
     var row = document.createElement('div');
     row.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-bottom: 6px;';
     var lbl = document.createElement('span');
@@ -274,6 +266,7 @@ function _makeSelect(label, options, currentVal, onChange) {
         if (opt.value === String(currentVal)) opt.selected = true;
         sel.appendChild(opt);
     });
+    if (key) sel.setAttribute('data-field', key);
     sel.onchange = function() { onChange(sel.value); };
     row.appendChild(lbl);
     row.appendChild(sel);
@@ -283,7 +276,7 @@ function _makeSelect(label, options, currentVal, onChange) {
 /**
  * Helper: create a labeled text input
  */
-function _makeInput(label, currentVal, placeholder, onChange) {
+function _makeInput(label, currentVal, placeholder, onChange, key) {
     var row = document.createElement('div');
     row.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-bottom: 6px;';
     var lbl = document.createElement('span');
@@ -294,6 +287,7 @@ function _makeInput(label, currentVal, placeholder, onChange) {
     inp.value = currentVal || '';
     inp.placeholder = placeholder || '';
     inp.style.cssText = 'flex: 1; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; font-size: 11px;';
+    if (key) inp.setAttribute('data-field', key);
     inp.onchange = function() { onChange(inp.value); };
     row.appendChild(lbl);
     row.appendChild(inp);
@@ -303,7 +297,7 @@ function _makeInput(label, currentVal, placeholder, onChange) {
 /**
  * Helper: create a labeled number input
  */
-function _makeNumber(label, currentVal, min, max, step, onChange) {
+function _makeNumber(label, currentVal, min, max, step, onChange, key) {
     var row = document.createElement('div');
     row.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-bottom: 6px;';
     var lbl = document.createElement('span');
@@ -316,6 +310,7 @@ function _makeNumber(label, currentVal, min, max, step, onChange) {
     inp.max = max;
     inp.step = step;
     inp.style.cssText = 'flex: 1; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; font-size: 11px; max-width: 80px;';
+    if (key) inp.setAttribute('data-field', key);
     inp.onchange = function() { var v = parseFloat(inp.value); onChange(isNaN(v) ? min : Math.max(min, Math.min(max, v))); };
     row.appendChild(lbl);
     row.appendChild(inp);
@@ -345,6 +340,23 @@ function _makeCheckbox(label, checked, onChange) {
 // PIPELINE EDITOR — Full pipeline/step UI, reusable component
 // Mirrors the Builder UI's renderPipelines() in conf-builder-config-management.js
 // ============================================================================
+
+/**
+ * Small square icon button (reorder arrows). Class + data-act let tests and CSS find it; the phone
+ * stylesheet raises it to a 44px touch target.
+ */
+function _upmIconBtn(text, act, title, disabled, onclick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'upm-icon-btn';
+    b.setAttribute('data-act', act);
+    b.textContent = text;
+    b.title = title;
+    b.disabled = !!disabled;
+    b.style.cssText = 'background: #333; color: #cc99ff; border: 1px solid #665599; border-radius: 3px; padding: 2px 7px; font-size: 11px; cursor: pointer;' + (disabled ? ' opacity: 0.35;' : '');
+    b.onclick = function(e) { e.stopPropagation(); onclick(); };
+    return b;
+}
 
 /**
  * Render the full pipeline editor into a container.
@@ -411,6 +423,7 @@ function renderPipelineEditor(container, config, modelList, callbacks) {
 
     function reRender() {
         renderPipelineEditor(container, config, modelList, callbacks);
+        if (callbacks.onRender) callbacks.onRender();   // marks / validation must be re-applied to the NEW DOM
     }
 
     config.pipelines.forEach(function(pipeline, pipeIdx) {
@@ -457,6 +470,16 @@ function renderPipelineEditor(container, config, modelList, callbacks) {
         pipeRight.style.cssText = 'display: flex; align-items: center; gap: 6px;';
 
         if (config.pipelines.length > 1) {
+            pipeRight.appendChild(_upmIconBtn('▲', 'pipe-up', 'Move pipeline up', pipeIdx === 0, function() {
+                moveItem(config.pipelines, pipeIdx, pipeIdx - 1);
+                callbacks.onUpdate();
+                reRender();
+            }));
+            pipeRight.appendChild(_upmIconBtn('▼', 'pipe-down', 'Move pipeline down', pipeIdx === config.pipelines.length - 1, function() {
+                moveItem(config.pipelines, pipeIdx, pipeIdx + 1);
+                callbacks.onUpdate();
+                reRender();
+            }));
             var pipeDelBtn = document.createElement('button');
             pipeDelBtn.textContent = '\u2715';
             pipeDelBtn.style.cssText = 'background: #cc3333; color: #fff; border: none; border-radius: 3px; padding: 2px 8px; font-size: 12px; cursor: pointer;';
@@ -531,6 +554,8 @@ function renderPipelineEditor(container, config, modelList, callbacks) {
  */
 function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callbacks, reRender) {
     var card = document.createElement('div');
+    card.setAttribute('data-pipe', String(config.pipelines.indexOf(pipeline)));
+    card.setAttribute('data-step', String(stepIdx));
     card.style.cssText = 'border: 1px solid #444; border-radius: 6px; margin-bottom: 6px; padding: 8px;' + (ucfg.active === false ? ' opacity: 0.5;' : '');
 
     // Card header
@@ -564,9 +589,10 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
     var repeatInput = document.createElement('input');
     repeatInput.type = 'number';
     repeatInput.value = ucfg.repeat || 1;
-    repeatInput.min = 0; repeatInput.max = 20; repeatInput.step = "any";
+    repeatInput.min = 1; repeatInput.max = 20; repeatInput.step = 1;
+    repeatInput.setAttribute('data-field', 'repeat');
     repeatInput.style.cssText = 'width: 44px; padding: 1px 3px; font-size: 10px; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 3px;';
-    repeatInput.onchange = function() { ucfg.repeat = Math.max(1, parseFloat(repeatInput.value) || 1); callbacks.onUpdate(); reRender(); };
+    repeatInput.onchange = function() { ucfg.repeat = Math.max(1, Math.min(20, parseInt(repeatInput.value, 10) || 1)); callbacks.onUpdate(); reRender(); };
     cardLeft.appendChild(repeatInput);
 
     if (ucfg.repeat > 1) {
@@ -579,15 +605,30 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
     cardHeader.appendChild(cardLeft);
 
     if (pipeline.steps.length > 1) {
+        var cardRight = document.createElement('div');
+        cardRight.style.cssText = 'display: flex; align-items: center; gap: 4px;';
+        cardRight.appendChild(_upmIconBtn('▲', 'step-up', 'Move step up', stepIdx === 0, function() {
+            moveItem(pipeline.steps, stepIdx, stepIdx - 1);
+            callbacks.onUpdate();
+            reRender();
+        }));
+        cardRight.appendChild(_upmIconBtn('▼', 'step-down', 'Move step down', stepIdx === pipeline.steps.length - 1, function() {
+            moveItem(pipeline.steps, stepIdx, stepIdx + 1);
+            callbacks.onUpdate();
+            reRender();
+        }));
         var delBtn = document.createElement('button');
-        delBtn.textContent = '\u2715';
+        delBtn.type = 'button';
+        delBtn.setAttribute('data-act', 'step-del');
+        delBtn.textContent = '✕';
         delBtn.style.cssText = 'background: #cc3333; color: #fff; border: none; border-radius: 3px; padding: 2px 8px; font-size: 11px; cursor: pointer;';
         delBtn.onclick = function() {
             pipeline.steps.splice(stepIdx, 1);
             callbacks.onUpdate();
             reRender();
         };
-        cardHeader.appendChild(delBtn);
+        cardRight.appendChild(delBtn);
+        cardHeader.appendChild(cardRight);
     }
     card.appendChild(cardHeader);
 
@@ -606,7 +647,7 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
         ucfg.mode = v;
         callbacks.onUpdate();
         reRender();
-    }));
+    }, 'mode'));
 
     // Resize method
     grid.appendChild(_makeSelect('Resize:', [
@@ -628,14 +669,14 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
         if (!showFlorence2) {
             grid.appendChild(_makeInput('Ratios:', ucfg.upscale_ratios || '1.5', '1.2, 1.5, 2.0', function(v) {
                 ucfg.upscale_ratios = v; callbacks.onUpdate();
-            }));
+            }, 'upscale_ratios'));
         }
         grid.appendChild(_makeInput('Denoise:', ucfg.hires_denoise || '0.3', '0.2, 0.3, 0.5', function(v) {
             ucfg.hires_denoise = v; callbacks.onUpdate();
-        }));
+        }, 'hires_denoise'));
         grid.appendChild(_makeNumber('HiRes Steps:', ucfg.hires_steps || 0, 0, 150, 1, function(v) {
             ucfg.hires_steps = v; callbacks.onUpdate();
-        }));
+        }, 'hires_steps'));
 
         // Tiled sampling — hidden for florence2_hires (crops are too small to need tiling).
         if (!showFlorence2) {
@@ -647,10 +688,10 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
         if (ucfg.hires_tiled_sampling && !showFlorence2) {
             grid.appendChild(_makeNumber('Tile Width:', ucfg.hires_tile_width || 512, 128, 2048, 64, function(v) {
                 ucfg.hires_tile_width = v; callbacks.onUpdate();
-            }));
+            }, 'hires_tile_width'));
             grid.appendChild(_makeNumber('Tile Height:', ucfg.hires_tile_height || 512, 128, 2048, 64, function(v) {
                 ucfg.hires_tile_height = v; callbacks.onUpdate();
-            }));
+            }, 'hires_tile_height'));
             grid.appendChild(_makeNumber('Mask Blur:', ucfg.hires_mask_blur || 8, 0, 64, 1, function(v) {
                 ucfg.hires_mask_blur = v; callbacks.onUpdate();
             }));
@@ -672,7 +713,7 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
         if (ucfg.tiled_vae && !showFlorence2) {
             grid.appendChild(_makeNumber('Tile Size:', ucfg.tile_size || 512, 128, 1024, 64, function(v) {
                 ucfg.tile_size = v; callbacks.onUpdate();
-            }));
+            }, 'tile_size'));
             grid.appendChild(_makeNumber('Tile Overlap:', ucfg.tile_overlap || 64, 0, 512, 8, function(v) {
                 ucfg.tile_overlap = v; callbacks.onUpdate();
             }));
@@ -691,13 +732,14 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
         if (ucfg.mode === 'model_only') {
             grid.appendChild(_makeInput('Size Mult:', ucfg.upscale_size || '2.0', '2.0', function(v) {
                 ucfg.upscale_size = v; callbacks.onUpdate();
-            }));
+            }, 'upscale_size'));
         }
 
         // Model multi-select: chips + searchable dropdown
         var modelsWrap = document.createElement('div');
         modelsWrap.style.cssText = 'width: 100%; margin-bottom: 6px;';
 
+        modelsWrap.setAttribute('data-field', 'upscale_models');
         var noModels = !ucfg.upscale_models || ucfg.upscale_models.length === 0;
         if (noModels) {
             modelsWrap.style.border = '2px solid #ff3333';
@@ -800,7 +842,7 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
             return { value: m, label: m.replace('.safetensors', '').replace('.gguf', ' (GGUF)') };
         }), sv.dit_model, function(v) { sv.dit_model = v; callbacks.onUpdate(); }));
 
-        grid.appendChild(_makeNumber('Resolution:', sv.resolution || 1080, 16, 16384, 2, function(v) { sv.resolution = v; callbacks.onUpdate(); }));
+        grid.appendChild(_makeNumber('Resolution:', sv.resolution || 1080, 16, 16384, 2, function(v) { sv.resolution = v; callbacks.onUpdate(); }, 'resolution'));
         grid.appendChild(_makeNumber('Max Res (0=none):', sv.max_resolution || 0, 0, 16384, 2, function(v) { sv.max_resolution = v; callbacks.onUpdate(); }));
         grid.appendChild(_makeNumber('Seed:', sv.seed || 42, 0, 4294967295, 1, function(v) { sv.seed = v; callbacks.onUpdate(); }));
 
@@ -845,7 +887,7 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
 
         grid.appendChild(_makeInput('Detect What?', f2.text_input || 'face', 'face, head, hands, eyes...', function(v) {
             f2.text_input = v; callbacks.onUpdate();
-        }));
+        }, 'text_input'));
 
         grid.appendChild(_makeInput('Mask Select:', f2.output_mask_select || '', '(empty = all)', function(v) {
             f2.output_mask_select = v; callbacks.onUpdate();
@@ -923,6 +965,177 @@ function _renderStep(pipeBody, config, pipeline, ucfg, stepIdx, modelList, callb
 // ============================================================================
 
 /**
+ * Small DOM helper: <button> with id/text/style/handler
+ */
+function _upmButton(id, text, css, onclick) {
+    var b = document.createElement('button');
+    if (id) b.id = id;
+    b.type = 'button';
+    b.textContent = text;
+    b.style.cssText = css;
+    if (onclick) b.onclick = onclick;
+    return b;
+}
+
+var _UPM_BTN = 'border: none; border-radius: 3px; padding: 3px 8px; font-size: 11px; cursor: pointer;';
+
+/**
+ * Number of images the current scope will process
+ */
+function _upscaleScopeCount() {
+    var scopeEl = document.querySelector('input[name="upscale-scope"]:checked');
+    var favs = activeData ? activeData.filter(function(d) { return d.favorited; }).length : 0;
+    return (scopeEl && scopeEl.value === 'favorites') ? favs : 1;
+}
+
+/**
+ * Recompute everything that depends on the working config: validation marks + list, preset badge and
+ * buttons, Run label, output summary. Safe to call at any time (finds elements by id every call).
+ */
+function _refreshUpscaleModalState() {
+    var modal = document.getElementById('upscale-modal-content');
+    if (!modal) return;
+    var st = upscaleModalState;
+    var cfg = st.currentConfig;
+    if (!cfg) return;
+    _persistUpscaleCfg();
+
+    // --- validation ---
+    var res = validateUpscaleConfig(cfg, { availableModels: st.availableModels });
+    st.validation = res;
+    Array.prototype.forEach.call(modal.querySelectorAll('.upm-invalid'), function(el) { el.classList.remove('upm-invalid'); });
+    res.errors.forEach(function(e) {
+        var m = /^p(\d+)\.s(\d+)$/.exec(e.path);
+        if (!m) return;
+        var card = modal.querySelector('[data-pipe="' + m[1] + '"][data-step="' + m[2] + '"]');
+        var el = card ? card.querySelector('[data-field="' + e.field + '"]') : null;
+        if (el) el.classList.add('upm-invalid');
+    });
+    var list = document.getElementById('upscale-validation');
+    if (list) {
+        list.textContent = '';
+        var serverErrs = st.serverErrors || [];
+        var rows = [];
+        res.errors.forEach(function(e) { rows.push({ cls: 'upm-err', text: (e.path ? e.path + ': ' : '') + e.msg }); });
+        res.warnings.forEach(function(w) { rows.push({ cls: 'upm-warn', text: (w.path ? w.path + ': ' : '') + w.msg }); });
+        serverErrs.forEach(function(t) { rows.push({ cls: 'upm-err', text: 'Server: ' + t }); });
+        rows.forEach(function(r) {
+            var d = document.createElement('div');
+            d.className = r.cls;
+            d.textContent = r.text;
+            list.appendChild(d);
+        });
+        list.style.display = rows.length ? 'block' : 'none';
+    }
+
+    // --- preset badge / buttons ---
+    var loaded = st.loadedPresetName;
+    var modified = !!(loaded && st.loadedPresetSnapshot && !configsEqual(cfg, st.loadedPresetSnapshot));
+    var badge = document.getElementById('upscale-preset-state');
+    if (badge) {
+        badge.textContent = loaded ? ('Preset: ' + loaded + (modified ? ' (modified)' : '')) : 'Unsaved config';
+        badge.style.color = modified || !loaded ? '#ffcc55' : '#8fdc8f';
+    }
+    var running = !!st.running;
+    var upd = document.getElementById('upscale-preset-update');
+    if (upd) upd.disabled = running || !(loaded && modified);
+    var rev = document.getElementById('upscale-preset-revert');
+    if (rev) rev.disabled = running || !(loaded && modified);
+    var del = document.getElementById('upscale-preset-delete');
+    if (del) del.disabled = running || !loaded;
+
+    // --- Run button ---
+    var startBtn = document.getElementById('upscale-start-btn');
+    if (startBtn && !running) {
+        startBtn.textContent = (loaded && !modified) ? 'Run' : 'Run once (unsaved)';
+        startBtn.disabled = !res.ok;
+        startBtn.style.opacity = res.ok ? '1' : '0.5';
+        startBtn.title = res.ok ? '' : 'Fix the highlighted fields first';
+    }
+
+    // --- output summary ---
+    var sum = document.getElementById('upscale-output-summary');
+    if (sum) {
+        var n = _upscaleScopeCount();
+        var counts = countUpscaleOutputs(cfg);
+        sum.textContent = n + ' image(s) × ' + counts.perImage + ' output(s) = ' + (n * counts.perImage) + ' new images';
+    }
+}
+
+/**
+ * Lock/unlock the editor and flip the action buttons for a running job
+ */
+function _applyUpscaleRunningState() {
+    var running = !!upscaleModalState.running;
+    var fs = document.getElementById('upscale-editor-fieldset');
+    if (fs) fs.disabled = running;
+    var cancelBtn = document.getElementById('upscale-cancel-job-btn');
+    if (cancelBtn) cancelBtn.style.display = running ? '' : 'none';
+    var startBtn = document.getElementById('upscale-start-btn');
+    if (startBtn && running) {
+        startBtn.disabled = true;
+        startBtn.style.opacity = '0.5';
+        startBtn.textContent = 'Upscaling...';
+    }
+    var progressDiv = document.getElementById('upscale-modal-progress');
+    if (progressDiv && (running || upscaleModalState.lastStatus)) progressDiv.style.display = 'block';
+    _refreshUpscaleModalState();
+}
+
+/**
+ * Status line for a job status object
+ */
+function _upscaleStatusText(status) {
+    var s = status.status;
+    var base = (status.completed || 0) + '/' + (status.total || 0);
+    if (s === 'running') {
+        return 'Upscaling ' + base + (status.current_step ? ' · ' + status.current_step : '') + '...';
+    }
+    if (s === 'cancelling') return 'Cancelling after the current sampler step…';
+    if (s === 'cancelled') return 'Cancelled: ' + base + ' images done, ' + (status.outputs || 0) + ' new images kept';
+    if (s === 'complete') return 'Complete! ' + base + ' images upscaled, ' + (status.outputs || 0) + ' new images.';
+    if (s === 'not_found') return 'This job is no longer known to the server (it was restarted or the record expired).';
+    return 'Error: ' + (status.error || 'Unknown error');
+}
+
+/**
+ * Poll one job by id until it ends. Never holds DOM references: every tick looks the elements up by id,
+ * so a re-render (preset load, reopen) cannot leave it talking to detached nodes.
+ */
+function _startUpscalePoll(jobId) {
+    if (upscaleModalState.pollInterval) clearInterval(upscaleModalState.pollInterval);
+    upscaleModalState.jobId = jobId;
+    upscaleModalState.running = true;
+    var tick = async function() {
+        try {
+            var resp = await fetch('/config_tester/upscale_status?job_id=' + encodeURIComponent(jobId));
+            var status = await resp.json();
+            if (upscaleModalState.jobId !== jobId) return;      // superseded
+            upscaleModalState.lastStatus = status;
+            var fill = document.getElementById('upscale-modal-progress-fill');
+            var text = document.getElementById('upscale-modal-progress-text');
+            var progressDiv = document.getElementById('upscale-modal-progress');
+            if (progressDiv) progressDiv.style.display = 'block';
+            if (fill && status.total > 0) fill.style.width = Math.round((status.completed / status.total) * 100) + '%';
+            if (text) text.textContent = _upscaleStatusText(status);
+            var terminal = ['complete', 'cancelled', 'error', 'not_found'].indexOf(status.status) >= 0;
+            var cancelBtn = document.getElementById('upscale-cancel-job-btn');
+            if (cancelBtn && status.status === 'cancelling') { cancelBtn.disabled = true; cancelBtn.textContent = 'Cancelling...'; }
+            if (terminal) {
+                clearInterval(upscaleModalState.pollInterval);
+                upscaleModalState.pollInterval = null;
+                upscaleModalState.jobId = null;
+                upscaleModalState.running = false;
+                if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = 'Cancel job'; }
+                _applyUpscaleRunningState();
+            }
+        } catch (e) { /* ignore a failed poll; the next tick retries */ }
+    };
+    upscaleModalState.pollInterval = setInterval(tick, 1500);
+    tick();
+}
+
+/**
  * Render the upscale modal
  */
 function renderUpscaleModal() {
@@ -930,9 +1143,9 @@ function renderUpscaleModal() {
     if (!overlay) return;
     overlay.style.display = 'flex';
 
-    var item = upscaleModalState.imageData;
+    var st = upscaleModalState;
     var favCount = activeData ? activeData.filter(function(d) { return d.favorited; }).length : 0;
-    var cfg = upscaleModalState.currentConfig;
+    var cfg = st.currentConfig;
 
     var modal = document.getElementById('upscale-modal-content');
     if (!modal) return;
@@ -944,13 +1157,17 @@ function renderUpscaleModal() {
     var title = document.createElement('h3');
     title.style.cssText = 'margin: 0; color: #fff; font-size: 16px;';
     title.textContent = 'Upscale Image';
-    var closeBtn = document.createElement('button');
-    closeBtn.textContent = '\u2715';
-    closeBtn.style.cssText = 'background: none; border: none; color: #999; font-size: 18px; cursor: pointer;';
-    closeBtn.onclick = closeUpscaleModal;
+    var closeX = _upmButton('upscale-header-close', '✕', 'background: none; border: none; color: #999; font-size: 18px; cursor: pointer;', closeUpscaleModal);
+    closeX.title = 'Close (a running job keeps going)';
     header.appendChild(title);
-    header.appendChild(closeBtn);
+    header.appendChild(closeX);
     modal.appendChild(header);
+
+    // Everything the user can edit lives in one fieldset so a running job locks it in one go
+    var fieldset = document.createElement('fieldset');
+    fieldset.id = 'upscale-editor-fieldset';
+    fieldset.style.cssText = 'border: none; margin: 0; padding: 0; min-width: 0;';
+    modal.appendChild(fieldset);
 
     // Scope toggle
     var scopeDiv = document.createElement('div');
@@ -969,12 +1186,83 @@ function renderUpscaleModal() {
     labelAll.htmlFor = 'upscale-scope-favorites';
     labelAll.style.cssText = 'color: #ccc; font-size: 12px; cursor: pointer;';
     labelAll.textContent = ' Upscale All Favorited (' + favCount + ' images)';
+    radioThis.onchange = radioAll.onchange = _refreshUpscaleModalState;
     scopeDiv.appendChild(radioThis); scopeDiv.appendChild(labelThis);
     scopeDiv.appendChild(radioAll); scopeDiv.appendChild(labelAll);
-    modal.appendChild(scopeDiv);
+    fieldset.appendChild(scopeDiv);
+
+    // === PRESET BAR ===
+    var presetDiv = document.createElement('div');
+    presetDiv.id = 'upscale-preset-bar';
+    presetDiv.style.cssText = 'margin-bottom: 10px; padding: 8px; background: #1e1e1e; border-radius: 4px; border: 1px solid #333;';
+    var presetRow = document.createElement('div');
+    presetRow.style.cssText = 'display: flex; gap: 4px; align-items: center; flex-wrap: wrap;';
+    var presetSelect = document.createElement('select');
+    presetSelect.id = 'upscale-preset-select';
+    presetSelect.style.cssText = 'flex: 1; min-width: 120px; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; font-size: 11px;';
+    var defaultOpt = document.createElement('option');
+    defaultOpt.value = ''; defaultOpt.textContent = '-- Presets --';
+    presetSelect.appendChild(defaultOpt);
+    st.presets.forEach(function(p, i) {
+        var opt = document.createElement('option');
+        opt.value = String(i); opt.textContent = p.name;
+        if (p.name === st.loadedPresetName) opt.selected = true;
+        presetSelect.appendChild(opt);
+    });
+    presetSelect.onchange = function() {
+        var idx = parseInt(presetSelect.value, 10);
+        if (!isNaN(idx)) loadUpscalePreset(idx);
+    };
+    var badge = document.createElement('span');
+    badge.id = 'upscale-preset-state';
+    badge.style.cssText = 'font-size: 11px; font-weight: bold; white-space: nowrap;';
+    presetRow.appendChild(presetSelect);
+    presetRow.appendChild(badge);
+    presetDiv.appendChild(presetRow);
+
+    var presetBtns = document.createElement('div');
+    presetBtns.style.cssText = 'display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap;';
+    var updBtn = _upmButton('upscale-preset-update', 'Update preset', _UPM_BTN + 'background: var(--accent); color: #000; font-weight: bold;', function() {
+        if (st.loadedPresetName) saveUpscalePreset(st.loadedPresetName);
+    });
+    var saveAsBtn = _upmButton('upscale-preset-saveas', 'Save as…', _UPM_BTN + 'background: #555; color: #fff;', function() {
+        var row = document.getElementById('upscale-saveas-row');
+        if (row) {
+            row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+            var inp = document.getElementById('upscale-preset-name');
+            if (inp && row.style.display !== 'none') inp.focus();
+        }
+    });
+    var revBtn = _upmButton('upscale-preset-revert', 'Revert', _UPM_BTN + 'background: #555; color: #fff;', revertUpscaleConfig);
+    var delBtn = _upmButton('upscale-preset-delete', 'Delete', _UPM_BTN + 'background: var(--danger); color: #fff;', function() {
+        if (st.loadedPresetName && confirm('Delete preset "' + st.loadedPresetName + '"?')) deleteUpscalePreset(st.loadedPresetName);
+    });
+    presetBtns.appendChild(updBtn); presetBtns.appendChild(saveAsBtn);
+    presetBtns.appendChild(revBtn); presetBtns.appendChild(delBtn);
+    presetDiv.appendChild(presetBtns);
+
+    var saveAsRow = document.createElement('div');
+    saveAsRow.id = 'upscale-saveas-row';
+    saveAsRow.style.cssText = 'display: none; gap: 4px; margin-top: 6px; align-items: center;';
+    var nameInp = document.createElement('input');
+    nameInp.type = 'text'; nameInp.id = 'upscale-preset-name'; nameInp.placeholder = 'New preset name';
+    nameInp.style.cssText = 'flex: 1; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; font-size: 11px;';
+    var doSave = function() {
+        var n = nameInp.value.trim();
+        if (!n) return;
+        var exists = st.presets.some(function(p) { return p.name === n; });
+        if (exists && n !== st.loadedPresetName && !confirm('A preset named "' + n + '" exists. Replace it?')) return;
+        saveUpscalePreset(n);
+    };
+    nameInp.onkeydown = function(e) { if (e.key === 'Enter') doSave(); };
+    var okBtn = _upmButton('upscale-preset-saveas-ok', 'OK', _UPM_BTN + 'background: var(--accent); color: #000; font-weight: bold;', doSave);
+    saveAsRow.appendChild(nameInp); saveAsRow.appendChild(okBtn);
+    presetDiv.appendChild(saveAsRow);
+    fieldset.appendChild(presetDiv);
 
     // === FULL PIPELINE EDITOR ===
     var configDiv = document.createElement('div');
+    configDiv.id = 'upscale-config-box';
     configDiv.style.cssText = 'margin-bottom: 10px; padding: 8px; background: #252525; border-radius: 4px; max-height: 55vh; overflow-y: auto;';
 
     var configTitle = document.createElement('div');
@@ -983,65 +1271,36 @@ function renderUpscaleModal() {
     configDiv.appendChild(configTitle);
 
     // Ensure config exists
-    if (!cfg) { cfg = _defaultUpscaleConfig(); upscaleModalState.currentConfig = cfg; }
+    if (!cfg) { cfg = _defaultUpscaleConfig(); st.currentConfig = cfg; }
 
     // Pipeline editor container (separate from configDiv title so reRender only clears this)
     var editorContainer = document.createElement('div');
+    editorContainer.id = 'upscale-editor';
     configDiv.appendChild(editorContainer);
 
-    renderPipelineEditor(editorContainer, cfg, upscaleModalState.availableModels, {
-        onUpdate: function() { /* config is mutated in-place, nothing to persist */ },
-        onRender: function() { /* no-op — renderPipelineEditor self-re-renders via reRender() */ }
-    });
-
-    modal.appendChild(configDiv);
-
-    // === PRESET SELECTOR ===
-    var presetDiv = document.createElement('div');
-    presetDiv.style.cssText = 'margin-bottom: 10px; padding: 8px; background: #1e1e1e; border-radius: 4px; border: 1px solid #333;';
-    var presetRow = document.createElement('div');
-    presetRow.style.cssText = 'display: flex; gap: 4px; align-items: center;';
-    var presetLbl = document.createElement('span');
-    presetLbl.textContent = 'Presets:';
-    presetLbl.style.cssText = 'font-size: 10px; color: #666; white-space: nowrap;';
-    var presetSelect = document.createElement('select');
-    presetSelect.style.cssText = 'flex: 1; background: #1a1a1a; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; font-size: 10px;';
-    var defaultOpt = document.createElement('option');
-    defaultOpt.value = ''; defaultOpt.textContent = '-- Presets --';
-    presetSelect.appendChild(defaultOpt);
-    upscaleModalState.presets.forEach(function(p, i) {
-        var opt = document.createElement('option');
-        opt.value = i; opt.textContent = p.name;
-        presetSelect.appendChild(opt);
-    });
-
-    var pLoadBtn = document.createElement('button');
-    pLoadBtn.textContent = 'Load';
-    pLoadBtn.style.cssText = 'background: var(--accent); color: #000; border: none; border-radius: 3px; padding: 2px 6px; font-size: 10px; cursor: pointer; font-weight: bold;';
-    pLoadBtn.onclick = function() { var idx = parseInt(presetSelect.value); if (!isNaN(idx)) loadUpscalePreset(idx); };
-
-    var pSaveBtn = document.createElement('button');
-    pSaveBtn.textContent = 'Save';
-    pSaveBtn.style.cssText = 'background: #555; color: #fff; border: none; border-radius: 3px; padding: 2px 6px; font-size: 10px; cursor: pointer;';
-    pSaveBtn.onclick = function() { var n = prompt('Preset name:'); if (n) saveUpscalePreset(n); };
-
-    var pDelBtn = document.createElement('button');
-    pDelBtn.textContent = 'Del';
-    pDelBtn.style.cssText = 'background: var(--danger); color: #fff; border: none; border-radius: 3px; padding: 2px 6px; font-size: 10px; cursor: pointer;';
-    pDelBtn.onclick = function() {
-        var idx = parseInt(presetSelect.value);
-        if (!isNaN(idx) && idx >= 0 && idx < upscaleModalState.presets.length) {
-            if (confirm('Delete "' + upscaleModalState.presets[idx].name + '"?')) deleteUpscalePreset(idx);
-        }
+    var editorCallbacks = {
+        onUpdate: function() { st.serverErrors = []; _refreshUpscaleModalState(); },
+        onRender: function() { _refreshUpscaleModalState(); }
     };
+    renderPipelineEditor(editorContainer, cfg, st.availableModels, editorCallbacks);
+    fieldset.appendChild(configDiv);
 
-    presetRow.appendChild(presetLbl);
-    presetRow.appendChild(presetSelect);
-    presetRow.appendChild(pLoadBtn);
-    presetRow.appendChild(pSaveBtn);
-    presetRow.appendChild(pDelBtn);
-    presetDiv.appendChild(presetRow);
-    modal.appendChild(presetDiv);
+    // Validation list + what this run will produce
+    var valDiv = document.createElement('div');
+    valDiv.id = 'upscale-validation';
+    valDiv.style.display = 'none';
+    modal.appendChild(valDiv);
+
+    var summary = document.createElement('div');
+    summary.id = 'upscale-output-summary';
+    summary.style.cssText = 'font-size: 12px; color: #00cc00; font-family: monospace; margin-bottom: 8px;';
+    modal.appendChild(summary);
+
+    var note = document.createElement('div');
+    note.style.cssText = 'font-size: 10px; color: #777; margin-bottom: 8px;';
+    var packOn = fullManifest && fullManifest.meta && fullManifest.meta.session_settings && fullManifest.meta.session_settings.pack_nodes_metadata;
+    note.textContent = 'Saved with the session’s image format. ComfyUI workflow embedding follows the session setting' + (packOn ? ' (on).' : ' (off).');
+    modal.appendChild(note);
 
     // Progress area (hidden until upscale starts)
     var progressDiv = document.createElement('div');
@@ -1059,105 +1318,88 @@ function renderUpscaleModal() {
     progressText.style.cssText = 'font-size: 11px; color: #999; margin-top: 4px;';
     progressDiv.appendChild(progressText);
     modal.appendChild(progressDiv);
+    if (st.lastStatus) {
+        progressText.textContent = _upscaleStatusText(st.lastStatus);
+        if (st.lastStatus.total > 0) progressFill.style.width = Math.round((st.lastStatus.completed / st.lastStatus.total) * 100) + '%';
+    }
 
-    // Action buttons
+    // Action buttons: Cancel job (only while running), Close, Run
     var actionsDiv = document.createElement('div');
-    actionsDiv.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
-    var cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.style.cssText = 'background: #444; color: #fff; border: none; border-radius: 4px; padding: 6px 16px; font-size: 12px; cursor: pointer;';
-    cancelBtn.onclick = function() {
-        if (upscaleModalState.jobId && upscaleModalState.pollInterval) {
-            // Active upscale — send cancel and let the poll detect "cancelled" status
+    actionsDiv.id = 'upscale-actions';
+    actionsDiv.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;';
+    var cancelJobBtn = _upmButton('upscale-cancel-job-btn', 'Cancel job',
+        'background: #aa3333; color: #fff; border: none; border-radius: 4px; padding: 6px 16px; font-size: 12px; cursor: pointer; display: none;',
+        function() {
+            if (!st.jobId) return;
+            cancelJobBtn.disabled = true;
+            cancelJobBtn.textContent = 'Cancelling...';
             fetch('/config_tester/cancel_upscale', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: upscaleModalState.jobId })
-            });
-            cancelBtn.disabled = true;
-            cancelBtn.textContent = 'Cancelling...';
-            cancelBtn.style.opacity = '0.5';
-        } else {
-            // No active upscale — just close
-            closeUpscaleModal();
-        }
-    };
-    var startBtn = document.createElement('button');
-    startBtn.textContent = 'Start Upscale';
-    startBtn.id = 'upscale-start-btn';
-    startBtn.style.cssText = 'background: var(--accent); color: #000; border: none; border-radius: 4px; padding: 6px 16px; font-size: 12px; cursor: pointer; font-weight: bold;';
-    startBtn.onclick = startUpscaleFromModal;
-    actionsDiv.appendChild(cancelBtn);
+                body: JSON.stringify({ job_id: st.jobId })
+            }).catch(function() { /* the poll shows the truth */ });
+        });
+    var closeBtn = _upmButton('upscale-close-btn', 'Close',
+        'background: #444; color: #fff; border: none; border-radius: 4px; padding: 6px 16px; font-size: 12px; cursor: pointer;',
+        closeUpscaleModal);
+    var startBtn = _upmButton('upscale-start-btn', 'Run',
+        'background: var(--accent); color: #000; border: none; border-radius: 4px; padding: 6px 16px; font-size: 12px; cursor: pointer; font-weight: bold;',
+        startUpscaleFromModal);
+    actionsDiv.appendChild(cancelJobBtn);
+    actionsDiv.appendChild(closeBtn);
     actionsDiv.appendChild(startBtn);
     modal.appendChild(actionsDiv);
+
+    _applyUpscaleRunningState();
+    _refreshUpscaleModalState();
 }
 
 /**
- * Start the upscale job from the modal
+ * Start the upscale job from the modal (sends the working config as it is; nothing is saved to a preset)
  */
 async function startUpscaleFromModal() {
-    var cfg = upscaleModalState.currentConfig;
-    if (!cfg) return;
+    var st = upscaleModalState;
+    var cfg = st.currentConfig;
+    if (!cfg || st.running) return;
+
+    var check = validateUpscaleConfig(cfg, { availableModels: st.availableModels });
+    if (!check.ok) { _refreshUpscaleModalState(); return; }
 
     var scopeEl = document.querySelector('input[name="upscale-scope"]:checked');
     var scope = scopeEl ? scopeEl.value : 'single';
     var allFavorited = scope === 'favorites';
-    var imageIds = allFavorited ? [] : [upscaleModalState.imageId];
+    var imageIds = allFavorited ? [] : [st.imageId];
 
     var startBtn = document.getElementById('upscale-start-btn');
     if (startBtn) { startBtn.disabled = true; startBtn.style.opacity = '0.5'; startBtn.textContent = 'Starting...'; }
-    var progressDiv = document.getElementById('upscale-modal-progress');
-    if (progressDiv) progressDiv.style.display = 'block';
 
     try {
         var resp = await fetch('/config_tester/upscale_images', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                session_name: document.getElementById('session-input')?.value || "default",
+                session_name: _upscaleSessionName(),
                 image_ids: imageIds,
                 upscale_config: cfg,
                 all_favorited: allFavorited,
             })
         });
         var result = await resp.json();
-        if (result.error) {
-            alert('Upscale failed: ' + result.error);
-            if (startBtn) { startBtn.disabled = false; startBtn.style.opacity = '1'; startBtn.textContent = 'Start Upscale'; }
+        if (!resp.ok || result.error) {
+            // 400 {errors:[...]} = the server's own validation; 409 = a job already runs for this session
+            st.serverErrors = result.errors && result.errors.length ? result.errors : [result.error || ('HTTP ' + resp.status)];
+            _refreshUpscaleModalState();
             return;
         }
-        upscaleModalState.jobId = result.job_id;
-        if (startBtn) startBtn.textContent = 'Upscaling...';
-
-        // Poll for progress
-        upscaleModalState.pollInterval = setInterval(async function() {
-            try {
-                var statusResp = await fetch('/config_tester/upscale_status?job_id=' + upscaleModalState.jobId);
-                var status = await statusResp.json();
-                var fill = document.getElementById('upscale-modal-progress-fill');
-                var text = document.getElementById('upscale-modal-progress-text');
-                if (fill && status.total > 0) fill.style.width = Math.round((status.completed / status.total) * 100) + '%';
-                if (text) text.textContent = 'Upscaling ' + status.completed + '/' + status.total + '...';
-                if (status.status === 'complete' || status.status === 'error' || status.status === 'cancelled') {
-                    clearInterval(upscaleModalState.pollInterval);
-                    upscaleModalState.pollInterval = null;
-                    upscaleModalState.jobId = null;
-                    if (text) {
-                        if (status.status === 'complete') text.textContent = 'Complete! ' + status.completed + ' images upscaled.';
-                        else if (status.status === 'cancelled') text.textContent = 'Cancelled. ' + status.completed + '/' + status.total + ' completed.';
-                        else text.textContent = 'Error: ' + (status.error || 'Unknown error');
-                    }
-                    if (startBtn) { startBtn.disabled = false; startBtn.style.opacity = '1'; startBtn.textContent = 'Start Upscale'; }
-                    // Reset cancel button to Close
-                    var cBtn = document.querySelector('#upscale-modal-content button');
-                    if (cBtn && (cBtn.textContent === 'Cancelling...' || cBtn.textContent === 'Cancel')) {
-                        cBtn.disabled = false; cBtn.style.opacity = '1'; cBtn.textContent = 'Close';
-                    }
-                }
-            } catch (e) { /* ignore poll errors */ }
-        }, 2000);
-
+        st.serverErrors = [];
+        st.lastStatus = null;
+        var text = document.getElementById('upscale-modal-progress-text');
+        if (text) text.textContent = 'Starting...';
+        var fill = document.getElementById('upscale-modal-progress-fill');
+        if (fill) fill.style.width = '0%';
+        _startUpscalePoll(result.job_id);
+        _applyUpscaleRunningState();
     } catch (e) {
-        alert('Failed to start upscale: ' + e);
-        if (startBtn) { startBtn.disabled = false; startBtn.style.opacity = '1'; startBtn.textContent = 'Start Upscale'; }
+        st.serverErrors = ['Failed to start upscale: ' + e];
+        _refreshUpscaleModalState();
     }
 }

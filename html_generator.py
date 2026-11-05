@@ -35,7 +35,9 @@ def get_html_template(title, manifest_data, node_id, standalone=False, inline_ma
         "logic_ratings.js",  # Pairwise review: pure logic (normalisers, Bradley-Terry, pairing, scoreboard)
         "logic_wfparams.js",  # Workflow Sweep: wf_params helpers (pure; must load before logic_ui/logic_pipeline)
         "logic_dragdrop.js", # Revise-modal image drag/send helpers (issue #22; pure, node-testable)
+        "logic_comfynodes.js",  # buildComfyNodesWorkflow (pure; node-testable, parity-pinned to comfy_nodes_workflow.py)
         "logic_ui.js",       # DOM Creation, Modals, JSON Bars
+        "logic_upscale_edit.js",   # Upscale modal: pure helpers (step defaults, validation, moveItem, preset shape; node-testable)
         "logic_upscale_modal.js",  # Upscale Modal (preset management, async upscale)
         "logic_virtual.js",  # The Virtual Scroll Engine & Viewport
         "logic_pipeline.js", # Sorting & Filtering Logic

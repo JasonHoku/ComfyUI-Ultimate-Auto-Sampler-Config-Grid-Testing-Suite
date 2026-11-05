@@ -110,6 +110,7 @@ class Dashboard:
         self.known_sessions = None    # None: every session name exists (like the old /view); else a set
         self.hold_manifest = False    # True: park manifest requests until release_manifest()
         self.held = []
+        self.routes = {}              # path -> callable(route, req, body, query); checked before the {} fallback
 
     def release_manifest(self):
         self.hold_manifest = False
@@ -182,6 +183,8 @@ class Dashboard:
             return route.fulfill(status=200, content_type="application/json",
                                  body=json.dumps({"comparisons": self.comparisons,
                                                   "total": len(self.comparisons)}))
+        if path in self.routes:
+            return self.routes[path](route, req, body, query)
         return route.fulfill(status=200, content_type="application/json", body="{}")
 
 

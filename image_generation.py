@@ -54,6 +54,7 @@ import numpy as np
 from PIL import Image
 
 from . import image_metrics
+from . import comfy_nodes_workflow
 from .image_metrics import _CURRENT as _METRICS_RUN
 from .regional_prompt import apply_regional_masks
 
@@ -1135,6 +1136,7 @@ def flush_batch_with_vae(pending_batch, vae, img_dir, existing_data, session_nam
             image.save(filepath, format="JPEG", quality=95)
         else:
             image.save(filepath, quality=80)
+        comfy_nodes_workflow.stamp_file(filepath, meta)
         
         # Normalize denoise to int if it's 1.0 (like remote_vae)
         if meta.get("denoise") == 1.0:

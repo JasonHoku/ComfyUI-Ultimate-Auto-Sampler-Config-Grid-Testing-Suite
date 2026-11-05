@@ -1,0 +1,1200 @@
+[
+ {
+  "name": "valid default hires_only",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "valid model_then_hires multi values",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "model_then_hires",
+       "repeat": 1,
+       "upscale_models": [
+        "4x-UltraSharpV2_Lite.safetensors"
+       ],
+       "upscale_ratios": "1.5, 2",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3,0.4",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "valid model_only",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "model_only",
+       "repeat": 1,
+       "upscale_models": [
+        "4x-UltraSharpV2_Lite.safetensors"
+       ],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "valid seedvr2",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "seedvr2",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "seedvr2": {
+        "dit_model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+        "resolution": 1080
+       }
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "valid florence2 with several denoise values (warning only)",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "florence2_hires",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.4,0.5",
+       "hires_steps": 20,
+       "florence2": {
+        "text_input": "face"
+       }
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "minimal step with defaults only",
+  "cfg": {
+   "pipelines": [
+    {
+     "steps": [
+      {}
+     ]
+    }
+   ]
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "bad ratio string",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5,x",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_ratios"
+  ]
+ },
+ {
+  "name": "ratio zero",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "0",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_ratios"
+  ]
+ },
+ {
+  "name": "ratio too large",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "9",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_ratios"
+  ]
+ },
+ {
+  "name": "ratio only commas",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": " , ,",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_ratios"
+  ]
+ },
+ {
+  "name": "denoise above 1",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "1.5",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_denoise"
+  ]
+ },
+ {
+  "name": "denoise typo",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3,x",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_denoise"
+  ]
+ },
+ {
+  "name": "denoise negative",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "-0.1",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_denoise"
+  ]
+ },
+ {
+  "name": "ratio and denoise both bad",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "a",
+       "upscale_size": "2.0",
+       "hires_denoise": "b",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_ratios",
+   "hires_denoise"
+  ]
+ },
+ {
+  "name": "hires steps too many",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 200
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_steps"
+  ]
+ },
+ {
+  "name": "hires steps fractional",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 1.5
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_steps"
+  ]
+ },
+ {
+  "name": "repeat too large",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 25,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "repeat"
+  ]
+ },
+ {
+  "name": "repeat fractional",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1.5,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "repeat"
+  ]
+ },
+ {
+  "name": "repeat zero is clamped to 1",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 0,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "model_only with no models",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "model_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_models"
+  ]
+ },
+ {
+  "name": "model_then_hires with no models",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "model_then_hires",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_models"
+  ]
+ },
+ {
+  "name": "model_only size zero",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "model_only",
+       "repeat": 1,
+       "upscale_models": [
+        "4x-UltraSharpV2_Lite.safetensors"
+       ],
+       "upscale_ratios": "1.5",
+       "upscale_size": "0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_size"
+  ]
+ },
+ {
+  "name": "model_only size text",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "model_only",
+       "repeat": 1,
+       "upscale_models": [
+        "4x-UltraSharpV2_Lite.safetensors"
+       ],
+       "upscale_ratios": "1.5",
+       "upscale_size": "big",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "upscale_size"
+  ]
+ },
+ {
+  "name": "tiled sampling width not multiple of 8",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "hires_tiled_sampling": true,
+       "hires_tile_width": 100,
+       "hires_tile_height": 512
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_tile_width"
+  ]
+ },
+ {
+  "name": "tiled sampling height too small",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "hires_tiled_sampling": true,
+       "hires_tile_width": 512,
+       "hires_tile_height": 32
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_tile_height"
+  ]
+ },
+ {
+  "name": "tiled sampling valid",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "hires_tiled_sampling": true,
+       "hires_tile_width": 512,
+       "hires_tile_height": 640
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "tiled vae tile too small",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "tiled_vae": true,
+       "tile_size": 64
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "tile_size"
+  ]
+ },
+ {
+  "name": "seedvr2 without dit model",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "seedvr2",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "seedvr2": {
+        "dit_model": "",
+        "resolution": 1080
+       }
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "dit_model"
+  ]
+ },
+ {
+  "name": "seedvr2 resolution too small",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "seedvr2",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "seedvr2": {
+        "dit_model": "m.safetensors",
+        "resolution": 8
+       }
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "resolution"
+  ]
+ },
+ {
+  "name": "florence2 empty text",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "florence2_hires",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "florence2": {
+        "text_input": "   "
+       }
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "text_input"
+  ]
+ },
+ {
+  "name": "florence2 ignores ratios",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "florence2_hires",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "junk",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20,
+       "florence2": {
+        "text_input": "face"
+       }
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "unknown mode",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "warp",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "mode"
+  ]
+ },
+ {
+  "name": "no pipelines",
+  "cfg": {
+   "pipelines": []
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "pipelines"
+  ]
+ },
+ {
+  "name": "not a config",
+  "cfg": {},
+  "expect_ok": false,
+  "error_fields": [
+   "pipelines"
+  ]
+ },
+ {
+  "name": "only inactive pipeline",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": false,
+     "name": "x",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ]
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "pipelines"
+  ]
+ },
+ {
+  "name": "pipeline whose steps are all inactive",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": false,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "pipelines"
+  ]
+ },
+ {
+  "name": "inactive pipeline with junk is ignored",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    },
+    {
+     "active": false,
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "zz",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ]
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "inactive step with junk is ignored",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      },
+      {
+       "active": false,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "zz",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": false,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "hires prompt adjust without text is only a warning",
+  "cfg": {
+   "pipelines": [
+    {
+     "active": true,
+     "name": "Pipeline 1",
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ],
+   "hires_prompt_adjust": true,
+   "hires_prompt_behavior": "append_end",
+   "hires_prompt_text": ""
+  },
+  "expect_ok": true,
+  "error_fields": []
+ },
+ {
+  "name": "error in second pipeline second step",
+  "cfg": {
+   "pipelines": [
+    {
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      }
+     ]
+    },
+    {
+     "steps": [
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "0.3",
+       "hires_steps": 20
+      },
+      {
+       "active": true,
+       "mode": "hires_only",
+       "repeat": 1,
+       "upscale_models": [],
+       "upscale_ratios": "1.5",
+       "upscale_size": "2.0",
+       "hires_denoise": "2",
+       "hires_steps": 20
+      }
+     ]
+    }
+   ]
+  },
+  "expect_ok": false,
+  "error_fields": [
+   "hires_denoise"
+  ]
+ }
+]

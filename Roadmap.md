@@ -68,7 +68,7 @@ ProjectStructure.md has notes to assist AI in developing this project
 
 ## ~~The Dashboard Session Load Option in the cog settings topbar modal needs sort by most recent and session search feature like how the Builder UI Session Load has.~~ DONE
 
-## Feature: Add builder UI option to pack pure nodes like REVISE copy as comfy nodes into every image always.
+## ~~Feature: Add builder UI option to pack pure nodes like REVISE copy as comfy nodes into every image always.~~ DONE (11/4/26) — Run Settings "Embed ComfyUI Nodes Workflow": every saved PNG/WebP (Generator, remote VAE, upscales, dashboard upscales, distributed worker images) carries the pure-nodes graph (`workflow` + `prompt`), so dragging the image onto ComfyUI loads it. JPG cannot carry a workflow; diffusion-model/GGUF/video/sweep items are skipped.
 
 ## Issue: Distributed Worker bug with save models to worker, not working
 
@@ -90,7 +90,7 @@ ProjectStructure.md has notes to assist AI in developing this project
 
 ## bug fix, the Builder UI is very slow to update when first starting, adding models, adding loras, a few other things, we need to check it and optimize it to load and respond faster. (Needs more improvement)
 
-## NEW: Dashboard Upscale Feature — Upscale single images or all favorites directly from the dashboard with preset management. Phase 1 DONE. Phase 2 (inline pipeline editing, cancel) TODO.
+## ~~NEW: Dashboard Upscale Feature — Upscale single images or all favorites directly from the dashboard with preset management.~~ DONE (Phase 1 + Phase 2, 11/4/26): inline pipeline editing (reorder, validation, preset Update / Save as / Revert / Delete, Run once without saving), real cancel (between images, pipelines, steps, combos and between sampler steps) and a modal that survives close/reopen while a job runs.
 
 
 

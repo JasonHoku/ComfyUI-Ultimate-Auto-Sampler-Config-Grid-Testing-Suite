@@ -57,7 +57,8 @@ ComfyUI-Ultimate-Sampler-Grid/
 ├── directory_scanner.py         # External Directory Session Scanner (609 lines)
 ├── metadata_packer.py           # PNG/WebP Metadata Embedding for Exports (561 lines)
 ├── manifest_utils.py            # Manifest Read/Write/Merge Helpers, comparisons (316 lines)
-├── upscale_runner.py            # Dashboard async upscaling background thread (642 lines)
+├── upscale_runner.py            # Dashboard async upscaling: config validation, cancel-aware job thread (`_drive_upscale_items`, `_upscale_one_item`, `_cancellable_model`), job registry (~730 lines)
+├── comfy_nodes_workflow.py      # Roadmap 71: pure-Python port of the Revise nodes-workflow builder + PNG/WebP embed/read + run context (`begin_run`/`stamp_file`) (~520 lines)
 ├── civitai.py                   # Facade for the ComfyUI-USCG-CivitAI companion, no network code here (40 lines)
 ├── distribution.py              # Facade for the ComfyUI-USCG-Distributed companion, no network code here (107 lines)
 ├── workflow_sweep.py            # Workflow Sweep core: parse API workflow, bindings -> jobs, prompt substitution, fingerprints (pure, no torch/server) (1106 lines)
@@ -89,8 +90,10 @@ ComfyUI-Ultimate-Sampler-Grid/
 │   ├── logic_ratings.js         # Pairwise review pure logic: axis normalisers, Bradley-Terry, pairing, scoreboard (no DOM, node-testable) (538 lines)
 │   ├── logic_wfparams.js        # Workflow Sweep wf_params helpers (keys, numeric detection, match, short labels); Quick/Logic Filter + label overlay use them (pure, node-testable)
 │   ├── logic_dragdrop.js        # Revise-modal image drag/send helpers (issue #22): uscgImageRef, asset-info + uri-list + DownloadURL carriers, annotated `[output]` path (no DOM, node-testable)
-│   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (2907 lines)
-│   ├── logic_upscale_modal.js   # Dashboard upscale modal (inline config, presets, async upscale) (1163 lines)
+│   ├── logic_comfynodes.js      # buildComfyNodesWorkflow(d) moved out of logic_ui.js (pure; parity-tested against comfy_nodes_workflow.py via tests/fixtures/nodes_workflow_golden.json)
+│   ├── logic_ui.js              # UI Renderer (DOM creation, Modal handling) (~2620 lines)
+│   ├── logic_upscale_edit.js    # Upscale modal pure helpers: step defaults, normalizeUpscaleConfig, validateUpscaleConfig, moveItem, configsEqual, presetFromConfig, countUpscaleOutputs (node-testable)
+│   ├── logic_upscale_modal.js   # Dashboard upscale modal (pipeline editor with reorder, validation, preset bar, run once, cancel, reattach) (~1400 lines)
 │   ├── logic_virtual.js         # Virtual DOM / Infinite Scroller Engine (1092 lines)
 │   ├── logic_pipeline.js        # Data Processing (Filter -> Sort -> Layout) (831 lines)
 │   ├── logic_compare.js         # Pairwise review DOM glue: compare overlay, vote queue, scoreboard modal, rating getters (824 lines)
@@ -251,9 +254,10 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 | POST | `/config_tester/delete_non_favorites` | `__init__.py` | `{session_name}` | Delete all non-favorited images from a session |
 | POST | `/config_tester/delete_rejected` | `__init__.py` | `{session_name}` | Delete all rejected images from a session (rejected preview fingerprints are remembered in `meta.rejected_preview_fps`) |
 | POST | `/config_tester/scan_directory` | `__init__.py` | `{directory_path, session_name}` | Scan an external dir, create symlinks, generate a manifest |
-| POST | `/config_tester/upscale_images` | `__init__.py` | `{session_name, image_ids, upscale_config: {pipelines: [...]}, all_favorited?}` | Start an async dashboard upscale job; returns `{job_id, total_images}` |
-| GET | `/config_tester/upscale_status` | `__init__.py` | `?job_id=` | Progress of an upscale job |
-| POST | `/config_tester/cancel_upscale` | `__init__.py` | `{job_id}` | Cancel an upscale job; returns `{cancelled}` |
+| POST | `/config_tester/upscale_images` | `__init__.py` | `{session_name, image_ids, upscale_config: {pipelines: [...]}, all_favorited?}` | Start an async dashboard upscale job; `400 {error, errors:[...]}` when `validate_upscale_config` rejects the config, `409` when a job already runs for the session; returns `{job_id, total_images}` |
+| GET | `/config_tester/upscale_status` | `__init__.py` | `?job_id=` | `{status (running/cancelling/complete/cancelled/error/not_found), completed, total, outputs, current_image, current_step, error}` |
+| GET | `/config_tester/upscale_jobs` | `__init__.py` | `?session_name=` (optional) | `{jobs:[{job_id, status, completed, total}]}`, newest first; lets a reopened modal re-attach to a running job |
+| POST | `/config_tester/cancel_upscale` | `__init__.py` | `{job_id}` | Cancel an upscale job (checked between images / pipelines / steps / combos and inside sampling); returns `{cancelled, status}` |
 | POST | `/config_tester/compute_metrics` | `__init__.py` | `{session_name, overwrite?}` | Start the background metrics job for a session; returns `{job_id, total_images}` |
 | GET | `/config_tester/metrics_status` | `__init__.py` | `?job_id=` | Metrics job progress |
 | POST | `/config_tester/cancel_metrics` | `__init__.py` | `{job_id}` | Cancel a metrics job; returns `{cancelled}` |
@@ -332,7 +336,7 @@ All routes registered via `PromptServer.instance.routes`. One row per route this
 
 * **`html_generator.py`** (57 lines)
   * `get_html_template(title, manifest_data, node_id, standalone=False, inline_manifest=False)` — reads all `/resources/` files, inlines them into `template.html`. By default the page is a **lazy shell**: `fullManifest` is empty and flagged `__uscg_lazy__`, `manifest_data` is ignored, and the SPA fetches `GET /config_tester/manifest?session=<title>` itself (`inline_manifest=True` restores the old inlined data; used by tests)
-  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_dragdrop.js` → `logic_ui.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
+  * **JS Load Order:** `logic_state.js` → `logic_utils.js` → `logic_ratings.js` → `logic_wfparams.js` → `logic_dragdrop.js` → `logic_comfynodes.js` → `logic_ui.js` → `logic_upscale_edit.js` → `logic_upscale_modal.js` → `logic_virtual.js` → `logic_pipeline.js` → `logic_compare.js` → `logic_events.js` → `logic_init.js` → `logic_standalone.js` (all files share ONE inlined script: top-level names must be unique across them)
   * Replaces placeholders: `__CSS_CONTENT__`, `__JS_CONTENT__`, `__TITLE__`, `__NODE_ID__`
   * Zero external HTTP requests for code (JS/CSS inlined); the manifest comes from `/config_tester/manifest`
 
@@ -907,6 +911,9 @@ __init__.py
 
 - **Item id ranges:** generated ids are `int(time.time()*100000)+rand` (below 2^52 until the year ~3400); scanned ids are `manifest_utils.stable_item_id("scan:<relpath>")` in `[2^52, 2^53)` (JS-safe integers). A re-scan of an existing session reuses old ids (legacy random ids included) via `merge_rescan`/`write_rescan_manifest` and carries favorited/rejected/note/notes/metrics/comparisons.
 - **Compare "ctx keys" must exclude per-image fields:** `CMP_EXCLUDED_KEYS` in `logic_ratings.js` is a deny list, so any new per-image manifest field (fingerprints, metrics, detection results) must be added there or it blocks matched/one-axis pairing.
+- **Nodes workflow embedding (Roadmap 71):** `comfy_nodes_workflow.stamp_file(path, item)` follows the run context opened in `sampler_node.py` (`begin_run(session_settings.pack_nodes_metadata)`); the dashboard upscale thread passes `enabled=` explicitly from `manifest.meta.session_settings` and never reads run state. Every image `.save(` in `image_generation.py`, `remote_vae.py`, `generation_orchestrator.py` and `upscale_runner.py` must have a `stamp_file(` within 25 lines (`tests/test_pack_nodes_setting.py`). PNG = tEXt `workflow` + `prompt`; WEBP = RIFF EXIF chunk with IFD0 tags 0x010F `workflow:<json>` and 0x0110 `prompt:<json>` (the layout ComfyUI's own writer and the frontend reader use); lossless byte-level writers, no piexif. Distributed worker files are stamped by the master (`_distributed_pack_nodes_pass`). The Python builder is an exact port of `buildComfyNodesWorkflow`; change both and regenerate `nodes_workflow_golden.json` from the JS.
+- **Dashboard upscale cancel (Roadmap 93):** never call `comfy.model_management.interrupt_current_processing()` (process-wide: it would abort a Generator run and the next queued prompt). Cancel = `job["cancel"]` Event checked at every loop level plus `_cancellable_model()` (clone with a unet-function wrapper that raises `UpscaleCancelled`). One job per session (`start_upscale_job` -> 409 text "already running"); finished jobs are pruned after an hour. `produced` entries (inserted at index 0) are what gets sent to the dashboard, never a tail slice.
+- **Known quirk (not changed):** in the last step of an upscale pipeline only the LAST ratio/denoise/model combination is saved (earlier combinations feed it); `countUpscaleOutputs` and a validation warning reflect that. The README promise of a Cartesian fan-out is not what `upscale_runner.py` / `generation_orchestrator.py` do at this commit.
 - **Upscaled items record `base_width/base_height`** at every write site (`tests/test_upscaled_base_dims.py` guards new ones; dashboard upscales use `manifest_utils.base_dims_of`).
 
 ### **Testing Changes**
@@ -942,6 +949,8 @@ __init__.py
 | `run_api.py` | `build_run_prompt()`, `normalize_configs_payload()`, `resolve_saved_config()`, `summarize_history()`, `RunTracker` | |
 | `image_metrics.py` | `compute_metrics_numpy()`, `compute_metrics_torch()`, `begin_run()`, `end_run()`, `finalize()`, `adapter_status()` | |
 | `metrics_runner.py` | `start_metrics_job()`, `get_metrics_status()`, `cancel_metrics_job()` | |
+| `upscale_runner.py` | `start_upscale_job()`, `get_upscale_status()`, `list_upscale_jobs()`, `cancel_upscale_job()`, `validate_upscale_config()`, `UpscaleCancelled`, `_check_cancel()`, `_cancellable_model()`, `_drive_upscale_items()`, `_upscale_one_item()`, `_prune_jobs()` | |
+| `comfy_nodes_workflow.py` | `build_nodes_workflow()`, `workflow_to_api_prompt()`, `nodes_metadata_for_item()`, `embed_png_text()`, `embed_webp_exif()`, `embed_comfy_workflow()`, `read_comfy_metadata()`, `begin_run()`, `end_run()`, `enabled()`, `stamp_file()`, `upscaled_item()` | |
 | `workflow_sweep.py` | `parse_api_workflow()`, `suggest_bindings()`, `parse_for_ui()` (pure; no torch or server imports) | |
 | `workflow_sweep_runner.py` | `dry_run()`, `api_start()`, `start_sweep()`, `get_status()`, `pause()`, `resume()`, `cancel()`, `ComfyBridge` | |
 
@@ -961,6 +970,8 @@ __init__.py
 | `logic_pipeline.js` | `updateDataPipeline()`, `executePipeline()`, `processNewData()`, `incrementalFilter()` |
 | `logic_wfparams.js` | `wfParamKeys()`, `wfParamValue/Number()`, `wfParamMatches()`, `wfShortLabel()`, `wfDisplay()` (pure; tests in `tests/js/wfparams.test.js`) |
 | `logic_ratings.js` | `computeBradleyTerry()`, `buildPairSource()`, `nextPair()`, `axisDiff()`, `computeScoreboard()` (pure; tests in `tests/js/ratings.test.js`, run `node --test tests/js/*.test.js`) |
+| `logic_comfynodes.js` | `buildComfyNodesWorkflow()` (pure; `tests/js/comfynodes_parity.test.js` pins `comfy_nodes_workflow.build_nodes_workflow` to it through `tests/fixtures/nodes_workflow_golden.json`; regenerate the golden from the JS if the builder changes) |
+| `logic_upscale_edit.js` | `normalizeUpscaleConfig()`, `validateUpscaleConfig()`, `moveItem()`, `configsEqual()`, `presetFromConfig()`, `countUpscaleOutputs()`, plus the step-default helpers (`_defaultUpscaleStep()` etc.; pure; tests in `tests/js/upscale_edit.test.js`, validation shared with `upscale_runner.validate_upscale_config` through `tests/fixtures/upscale_validation_cases.json`) |
 | `logic_dragdrop.js` | `uscgImageRef()`, `uscgImageAssetInfo()`, `uscgAnnotatedPath()`, `uscgFillDragData()`, `USCG_DRAG_UPLOAD` (pure; tests in `tests/js/dragdrop.test.js`). Used by `logic_ui.js` (`dragstart` on `#m-img`, `sendModalToLoadImage()`). Parent bridge: iframe posts `uscg_send_to_load_image` {url, filename, subfolder, imageType, upload, node_id}, `web/dashboard.js` fills the selected/only/new LoadImage and answers `uscg_send_to_load_image_result` {ok, message} |
 | `logic_compare.js` | `openCompareMode()`, `cmpVoteSide()`, `cmpUndo()`, `openScoreboard()`, `getItemRating()`, `compareRatings()`, `onComparisonsReplaced()` |
 | `logic_events.js` | Message handler for `progress_update`, `update_data`, `distribution_status` |
