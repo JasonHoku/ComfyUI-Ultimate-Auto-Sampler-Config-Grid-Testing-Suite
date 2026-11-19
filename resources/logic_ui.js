@@ -121,10 +121,9 @@ function buildLabelOverlay(d) {
                 const shortName = name.replace(/\\/g, '/').split('/').pop().replace(/\.[^.]+$/, '');
                 // Skip loras that are on every card when unique-only is on
                 if (uniqueOnly && labelGlobalValues && labelGlobalValues._loraGlobalNames && labelGlobalValues._loraGlobalNames.has(name)) continue;
-                // Show model_str:clip_str like in config_json (e.g. "loraName:1.0:0.8")
-                const strength = components.length >= 3 ? `:${components[1]}:${components[2]}` :
-                                 components.length === 2 ? `:${components[1]}` : '';
-                tags.push(`<span class="label-tag label-lora" title="${part}">${shortName}${strength}</span>`);
+                // Each strength (model, then clip) is its own box, so a long LoRA name is what gets clipped, never the strength.
+                const strengthBoxes = components.slice(1, 3).map(s => `<span class="label-lora-str">${s}</span>`).join('');
+                tags.push(`<span class="label-tag label-lora" title="${part}"><span class="label-lora-name">${shortName}</span>${strengthBoxes}</span>`);
             }
         }
     }
