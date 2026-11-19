@@ -654,6 +654,10 @@ body {
 
 .label-tag.label-model { background: rgba(80, 20, 100, 0.6); }
 .label-tag.label-lora { background: rgba(90, 60, 10, 0.6); }
+/* LoRA strengths as their own boxes: the name shrinks, the boxes never do. */
+.label-tag.label-lora { display: flex; align-items: center; gap: 3px; }
+.label-lora-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.label-lora-str { flex: none; background: rgba(255, 200, 80, 0.95); color: #000; padding: 0 4px; border-radius: 2px; text-shadow: none; }
 .label-tag.label-prompt { background: rgba(15, 70, 50, 0.6); }
 .label-tag.label-sampler { background: rgba(20, 55, 100, 0.6); }
 .label-tag.label-scheduler { background: rgba(20, 55, 100, 0.6); }
